@@ -4,8 +4,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod commands;
-mod io;
+use karnaproteome::commands;
 
 #[derive(Parser, Debug)]
 #[command(name = "karnaproteome", version, about = "Proteomics engine (Olink Explore NGS, v0.1)")]
