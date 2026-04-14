@@ -229,14 +229,66 @@ None of those Hallmark hits survive the universe correction at FDR < 0.10. The m
 3. **Three of four comparisons have no pathway signal after correction.** Don't narrate biology from absences.
 4. **PT2−PR2 down is a 3/5 hit on one specific pathway.** Striking but based on 3 proteins. Verify before citing.
 
+## Phenotype regression — a null result
+
+Added after the pathway correction. Dube's deposit contains two additional items we hadn't used:
+1. `Physiological_data.xlsx` — per-subject body temps (Tcore, Tskin, Tbody), sweat rate (LSR), skin blood flow (LDF), cutaneous vascular conductance (CVC), heart rate, BP, skin sympathetic nerve activity (SSNA) at normothermic and hyperthermic states, on both day 1 (pre-acclimation) and day 7 (post-acclimation).
+2. `delta_npx/dNPX_{hd1,hd7,accpre,accpost}.csv` — Dube's own per-subject delta NPX files, one per contrast. Their `analysis.py` regresses phenotype endpoints against these.
+
+### Calibration first: our paired-t mean matches Dube's per-subject deltas exactly
+
+For 6 proteins across 5 panels (PT1−PR1, ACAN, HSPB1, HSPA1A, DNAJB1, CALCA, PRL), our `mean_diff` agrees with the mean of Dube's deposited per-subject deltas to ≤1e-6 in every case. This is an independent cross-check on the full ingest → QC → effective-abundance → subject-pairing chain — we compute the same numbers Dube did, not just byte-equivalent reproductions of their filtered outputs.
+
+### Per-protein OLS: 3 hits, all suspect
+
+`scripts/phenotype_regression.py` reproduces Dube's `analysis.py` approach: for each of 33 physiological endpoints (ΔTcore, ΔTskin, ΔLSR, …), regress across 10 subjects against each of ~2,940 proteins' delta NPX values. Total ≈ 97,000 tests. BH-FDR within endpoint.
+
+Result: **3 hits at q<0.10**, all of which fail robustness inspection:
+
+| Endpoint | Protein | n | β | R² | BH-q |
+|---|---|---|---|---|---|
+| acc_dDBP (DBP change with acclimation) | PLA2G1B | 8 | 39.4 | 0.96 | 0.049 |
+| d1_dDBP (DBP change during pre-accl heat) | CKMT1A_CKMT1B | 10 | 31.0 | 0.90 | 0.095 |
+| d7_dHR (HR change during post-accl heat) | SH3BGRL2 | 7 | 13.5 | 0.99 | 0.027 |
+
+R² of 0.96, 0.90, 0.99 on n=7–10 is overfitting on 1–2 leverage points, not a biological correlation. Drop any one subject and they almost certainly disappear. And note that **none** of the physiologically meaningful endpoints (temperature rise, sweat rate, cutaneous blood flow) produce any protein hits at q<0.10.
+
+### Per-pathway OLS: null result on real endpoints, pathological on degenerate ones
+
+`scripts/phenotype_pathway_regression.py` aggregates per-subject delta NPX to pathway scores (mean over the pathway's genes in the Olink universe) and regresses against the same 33 endpoints, for 4,223 pathways across Hallmark / KEGG / GO-BP (restricted to ≥5 Olink genes per set). Result:
+
+| Endpoint | Collection | q<0.05 | q<0.10 |
+|---|---|---|---|
+| d1_dTcore, d7_dTcore, d1_dTbody, d7_dTbody, d1_dTskin, d7_dTskin | all 3 | 0 | 0 |
+| d1_dLSR, d7_dLSR, d1_dLDF, d7_dLDF, d1_dCVC, d7_dCVC | all 3 | 0 | 0 |
+| d1_d{HR,SBP,DBP,MAP,SSNA}, d7_d{HR,SBP,DBP,MAP,SSNA} | all 3 | 0 | 0 |
+| **acc_dLSR (near-zero outcome)** | all 3 | 0 | **2,500** |
+
+The `acc_dLSR` blow-up is diagnostic of statistical failure, not biology. `acc_dLSR` has 8 finite values ranging -0.019 to +0.067 (essentially zero mean, near-zero spread). When the outcome is tiny and n=8, pathway-aggregated scores — which smooth over hundreds of near-zero proteins — correlate with it spuriously at roughly equivalent strength. All 50 Hallmark pathways return q ≈ 0.053 for `acc_dLSR`. When every hypothesis "passes" at the same q-value, the pipeline is telling you the test is degenerate.
+
+### The conclusion
+
+At n=10, **phenotype regression against genomewide protein data is a dead end for this dataset**, at any level of aggregation we tried:
+
+- Per-protein OLS: 3 hits, all overfit. Zero on meaningful physiological endpoints.
+- Per-pathway OLS: zero hits on meaningful endpoints, 2,500 false hits on a degenerate near-zero endpoint.
+
+Dube's own `analysis.py` runs the same regression against a larger endpoint bundle (20+ derived endpoints in their configuration.yaml); their descriptor paper reports no significant results from this analysis either. We've now independently confirmed why: the ceiling isn't methods, it's n=10 × genomewide.
+
+**The one thing this phenotype pass did deliver** was the external cross-check against Dube's per-subject deltas — our paired-t infrastructure produces numerically identical deltas to what Dube themselves deposited. The reproduction chain is verified beyond byte-match on their published output files, it's also verified against their internal per-subject representation.
+
+**What would work at this n:** hypothesis-specific analyses, not genomewide. E.g., "does HSPB1 protein delta correlate with ΔTcore?" is a 10-point, df=8, one-test question — and for that specific protein (already known to be heat-induced from our earlier paired-t) the regression is legitimate. But you commit to the hypothesis before looking; you don't get it for free from a 2940-protein scan.
+
 ## Handoff
 
 **Inputs to downstream analysis:**
 ```
-out/de_results.tsv            # per-protein paired-t results
-out/de_report.tsv             # per (comparison, panel) summary
-docs/findings/pathway_results/<cmp>_<dir>_<coll>.json
-                              # 21 pathway JSON files from ORA
+out/de_results.tsv                                          # per-protein paired-t
+out/de_report.tsv                                            # per (comparison, panel)
+docs/findings/pathway_results/*.json                         # pass-1 ORA (inflated universe)
+docs/findings/pathway_results_restricted/*.tsv               # pass-2 ORA (Olink universe)
+docs/findings/phenotype_results/phenotype_regression_results.tsv         # per-protein OLS
+docs/findings/phenotype_results/phenotype_pathway_regression.tsv         # per-pathway OLS
 ```
 
 ## Reproduction
