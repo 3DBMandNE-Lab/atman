@@ -22,3 +22,6 @@ pub use errors::IngestError;
 pub use ingest::{IngestOutput, ProteomeIngest};
 pub use matrix::{DubeWidePanel, DubeWideRow};
 pub use sample_id::{DubeSampleIdParser, ParsedSampleId, SampleIdParser};
+pub use fold_change::{
+    compute_log2_fc, Comparison, FoldChangeInput, FoldChangeOutput, FoldChangePanel,
+};
