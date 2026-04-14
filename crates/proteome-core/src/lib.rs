@@ -19,3 +19,4 @@ pub use types::{
     QcFlag, Sample,
 };
 pub use errors::IngestError;
+pub use sample_id::{DubeSampleIdParser, ParsedSampleId, SampleIdParser};
