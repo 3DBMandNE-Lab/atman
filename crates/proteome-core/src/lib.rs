@@ -13,3 +13,8 @@ pub mod matrix;
 pub mod qc;
 pub mod sample_id;
 pub mod types;
+
+pub use types::{
+    Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, ProteinIdentity,
+    QcFlag, Sample,
+};
