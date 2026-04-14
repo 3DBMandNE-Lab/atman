@@ -20,4 +20,5 @@ pub use types::{
 };
 pub use errors::IngestError;
 pub use ingest::{IngestOutput, ProteomeIngest};
+pub use matrix::{DubeWidePanel, DubeWideRow};
 pub use sample_id::{DubeSampleIdParser, ParsedSampleId, SampleIdParser};
