@@ -8,6 +8,7 @@ license.workspace = true
 csv = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
+statrs = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

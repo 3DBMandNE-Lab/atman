@@ -220,6 +220,33 @@ pub fn read_samples(path: &Path) -> Result<Vec<Sample>> {
     Ok(out)
 }
 
+/// proteins.tsv reader, returning `ProteinIdentity` rows. Header-indexed.
+pub fn read_proteins(path: &Path) -> Result<Vec<ProteinIdentity>> {
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(path)
+        .with_context(|| format!("opening {:?}", path))?;
+    let mut out = Vec::new();
+    for row in reader.records() {
+        let row = row?;
+        let uniprot: Vec<String> = if row[2].is_empty() {
+            vec![]
+        } else {
+            row[2].split(',').map(|s| s.to_string()).collect()
+        };
+        out.push(ProteinIdentity {
+            platform: Platform::OlinkExploreNgs,
+            assay_id: AssayId(row[1].to_string()),
+            uniprot,
+            gene_symbol: empty_to_none(&row[3]),
+            panel: empty_to_none(&row[4]),
+            panel_lot: empty_to_none(&row[5]),
+        });
+    }
+    Ok(out)
+}
+
 /// proteins.tsv writer.
 pub fn write_proteins(path: &Path, proteins: &[ProteinIdentity]) -> Result<()> {
     let mut buf = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
@@ -368,6 +395,107 @@ fn format_f64(v: f64) -> String {
 
 fn format_f64_fc(v: f64) -> String {
     format!("{}", v)
+}
+
+/// One row of `de_results.tsv`. Every field that can be missing for a
+/// skipped test is `Option<f64>`.
+pub struct DeResultRow {
+    pub panel: String,
+    pub assay_id: String,
+    pub gene_symbol: String,
+    pub uniprot: String,
+    pub comparison: String,
+    pub n_pairs: usize,
+    pub mean_a: Option<f64>,
+    pub mean_b: Option<f64>,
+    pub mean_diff: Option<f64>,
+    pub t: Option<f64>,
+    pub df: Option<f64>,
+    pub p_value: Option<f64>,
+    pub bh_q: Option<f64>,
+    /// Non-empty when the test was skipped.
+    pub skip_reason: String,
+}
+
+pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
+    let mut buf = String::from(
+        "panel\tassay_id\tgene_symbol\tuniprot\tcomparison\tn_pairs\t\
+         mean_a\tmean_b\tmean_diff\tt\tdf\tp_value\tbh_q\tskip_reason\n",
+    );
+    for r in rows {
+        buf.push_str(&r.panel);
+        buf.push('\t');
+        buf.push_str(&r.assay_id);
+        buf.push('\t');
+        buf.push_str(&r.gene_symbol);
+        buf.push('\t');
+        buf.push_str(&r.uniprot);
+        buf.push('\t');
+        buf.push_str(&r.comparison);
+        buf.push('\t');
+        buf.push_str(&r.n_pairs.to_string());
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.mean_a);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.mean_b);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.mean_diff);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.t);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.df);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.p_value);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.bh_q);
+        buf.push('\t');
+        buf.push_str(&r.skip_reason);
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+/// One row of `de_report.tsv`. Per-panel, per-comparison summary.
+pub struct DeReportRow {
+    pub comparison: String,
+    pub panel: String,
+    pub n_tests: usize,
+    pub n_skipped: usize,
+    pub n_q_lt_05: usize,
+    pub n_q_lt_10: usize,
+    pub min_q: Option<f64>,
+    pub max_abs_effect: Option<f64>,
+}
+
+pub fn write_de_report(path: &Path, rows: &[DeReportRow]) -> Result<()> {
+    let mut buf = String::from(
+        "comparison\tpanel\tn_tests\tn_skipped\tn_q_lt_05\tn_q_lt_10\tmin_q\tmax_abs_effect\n",
+    );
+    for r in rows {
+        buf.push_str(&r.comparison);
+        buf.push('\t');
+        buf.push_str(&r.panel);
+        buf.push('\t');
+        buf.push_str(&r.n_tests.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_skipped.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_q_lt_05.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_q_lt_10.to_string());
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.min_q);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.max_abs_effect);
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+fn push_opt_f64(buf: &mut String, v: Option<f64>) {
+    if let Some(x) = v {
+        buf.push_str(&format!("{}", x));
+    }
 }
 
 #[cfg(test)]

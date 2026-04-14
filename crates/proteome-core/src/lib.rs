@@ -6,6 +6,7 @@
 //! `docs/superpowers/specs/2026-04-14-karnaproteome-olink-reproduction-design.md`
 //! for the full design.
 
+pub mod de;
 pub mod errors;
 pub mod fold_change;
 pub mod ingest;
@@ -14,6 +15,7 @@ pub mod qc;
 pub mod sample_id;
 pub mod types;
 
+pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};
 pub use errors::IngestError;
 pub use fold_change::{
     compute_log2_fc, Comparison, FoldChangeInput, FoldChangeOutput, FoldChangePanel,

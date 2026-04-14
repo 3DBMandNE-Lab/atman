@@ -27,6 +27,8 @@ enum Command {
     Matrix(commands::matrix::Args),
     /// Compute log2 fold change per panel for the given comparisons.
     FoldChange(commands::fold_change::Args),
+    /// Paired Student's t-test at subject level with BH-FDR per comparison.
+    De(commands::de::Args),
 }
 
 fn main() -> Result<()> {
@@ -36,5 +38,6 @@ fn main() -> Result<()> {
         Command::Qc(args) => commands::qc::run(args),
         Command::Matrix(args) => commands::matrix::run(args),
         Command::FoldChange(args) => commands::fold_change::run(args),
+        Command::De(args) => commands::de::run(args),
     }
 }
