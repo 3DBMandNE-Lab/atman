@@ -55,6 +55,7 @@ impl FoldChangeInput {
             .entry((panel.to_string(), assay.to_string()))
             .or_default();
     }
+
 }
 
 pub struct FoldChangePanel {
@@ -121,9 +122,26 @@ fn compute_one_fc(
     Some((mean_a / mean_b).log2())
 }
 
+/// Compute the mean of `2^v` using Neumaier-compensated summation, matching
+/// Python's `sum()` and R's default (which is ultimately the algorithm Dube
+/// used). Naive left-to-right f64 accumulation drifts by ~1 ULP per ~10
+/// additions, which is enough to change the last bit of the final fold
+/// change. Neumaier gives a single last-digit result stable across
+/// iteration orders.
 fn mean_linear(values: &[(String, f64)]) -> f64 {
-    let sum: f64 = values.iter().map(|(_, v)| 2.0_f64.powf(*v)).sum();
-    sum / (values.len() as f64)
+    let mut sum = 0.0_f64;
+    let mut c = 0.0_f64; // running compensation for lost low bits
+    for (_, v) in values {
+        let input = 2.0_f64.powf(*v);
+        let t = sum + input;
+        if sum.abs() >= input.abs() {
+            c += (sum - t) + input;
+        } else {
+            c += (input - t) + sum;
+        }
+        sum = t;
+    }
+    (sum + c) / (values.len() as f64)
 }
 
 #[cfg(test)]
