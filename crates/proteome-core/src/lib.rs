@@ -19,4 +19,5 @@ pub use types::{
     QcFlag, Sample,
 };
 pub use errors::IngestError;
+pub use ingest::{IngestOutput, ProteomeIngest};
 pub use sample_id::{DubeSampleIdParser, ParsedSampleId, SampleIdParser};
