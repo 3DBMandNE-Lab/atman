@@ -17,6 +17,11 @@ impl FoldChangeInput {
     /// Construct from a sequence of cells. `S1..S4: AsRef<str>` so both
     /// `&str` literals (tests) and owned `String` (CLI) compile.
     /// Missing values (`None`) are dropped silently.
+    ///
+    /// Note: if an (assay, panel) pair has zero non-missing cells it will
+    /// NOT appear in the output. Use `ensure_assay` to force an assay into
+    /// the output universe even if no cells are contributed — this matches
+    /// Dube's behavior of emitting a row per assay regardless of data.
     pub fn from_cells<I, S1, S2, S3, S4>(cells: I) -> Self
     where
         I: IntoIterator<Item = (S1, S2, S3, S4, Option<f64>)>,
@@ -38,6 +43,17 @@ impl FoldChangeInput {
             }
         }
         Self { panels }
+    }
+
+    /// Ensure an `(panel, assay)` pair appears in the output universe even
+    /// if no cells are contributed. The resulting fold-change will be `None`
+    /// for every comparison on such pairs. Matches Dube's behavior of
+    /// emitting a row per assay in the panel regardless of whether the
+    /// underlying data can produce a fold change.
+    pub fn ensure_assay(&mut self, panel: &str, assay: &str) {
+        self.panels
+            .entry((panel.to_string(), assay.to_string()))
+            .or_default();
     }
 }
 
