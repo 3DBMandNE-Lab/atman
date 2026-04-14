@@ -18,3 +18,4 @@ pub use types::{
     Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, ProteinIdentity,
     QcFlag, Sample,
 };
+pub use errors::IngestError;
