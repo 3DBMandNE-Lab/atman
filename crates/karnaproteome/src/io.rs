@@ -225,8 +225,10 @@ pub fn write_proteins(path: &Path, proteins: &[ProteinIdentity]) -> Result<()> {
     atomic_write(path, buf.as_bytes())
 }
 
-/// Dube-wide panel CSV writer. Writes source strings verbatim — no f64
-/// round-trip — so reproduction against Dube's published files is byte-exact.
+/// Dube-wide panel CSV writer. Starts from the source NPX string (no f64
+/// round-trip) and applies Dube's trailing-zero trim: `0.0980` → `0.098`,
+/// `1.4200` → `1.42`, `0.4000` → `0.4`. This matches the formatting rule
+/// observed empirically in the published filtered NPX files.
 pub fn write_dube_wide_panel(
     out_dir: &Path,
     panel: &DubeWidePanel,
@@ -249,13 +251,61 @@ pub fn write_dube_wide_panel(
         for v in &row.values {
             buf.push(',');
             if let Some(s) = v {
-                buf.push_str(s);
+                buf.push_str(&trim_npx_string(s));
             }
         }
         buf.push('\n');
     }
     atomic_write(&path, buf.as_bytes())?;
     Ok(path)
+}
+
+/// Dube's trailing-zero trim: strips trailing `0` characters from the
+/// fractional part, but always leaves **at least one digit after the decimal
+/// point**. Examples (verified against Dube's published filtered NPX):
+///   `0.0980` → `0.098`
+///   `0.4000` → `0.4`
+///   `1.4200` → `1.42`
+///   `0.0000` → `0.0`   (NOT `0`)
+///   `-0.0000` → `-0.0`
+fn trim_npx_string(s: &str) -> String {
+    let dot_pos = match s.find('.') {
+        Some(p) => p,
+        None => return s.to_string(),
+    };
+    let mut end = s.len();
+    while end > dot_pos + 2 && s.as_bytes()[end - 1] == b'0' {
+        end -= 1;
+    }
+    s[..end].to_string()
+}
+
+#[cfg(test)]
+mod trim_tests {
+    use super::trim_npx_string;
+    #[test]
+    fn trims_trailing_zero_keeping_nonzero_fractional() {
+        assert_eq!(trim_npx_string("0.0980"), "0.098");
+        assert_eq!(trim_npx_string("0.4000"), "0.4");
+        assert_eq!(trim_npx_string("1.4200"), "1.42");
+    }
+    #[test]
+    fn preserves_one_fractional_digit_for_all_zeros() {
+        assert_eq!(trim_npx_string("0.0000"), "0.0");
+        assert_eq!(trim_npx_string("-0.0000"), "-0.0");
+        assert_eq!(trim_npx_string("7.0000"), "7.0");
+    }
+    #[test]
+    fn leaves_values_without_trailing_zeros_unchanged() {
+        assert_eq!(trim_npx_string("0.5777"), "0.5777");
+        assert_eq!(trim_npx_string("-0.1219"), "-0.1219");
+        assert_eq!(trim_npx_string("7.4289"), "7.4289");
+    }
+    #[test]
+    fn integer_strings_pass_through() {
+        assert_eq!(trim_npx_string("42"), "42");
+        assert_eq!(trim_npx_string("-0"), "-0");
+    }
 }
 
 /// Fold-change panel CSV writer.
