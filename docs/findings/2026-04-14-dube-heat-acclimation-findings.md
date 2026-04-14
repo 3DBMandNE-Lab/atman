@@ -140,86 +140,94 @@ This is not what the naive "acclimation dampens stress response" model predicts.
 
 ## Pathway enrichment
 
-Handoff: `de_results.tsv` → `scripts/run_enrichment.sh` → per-`(comparison, direction, collection)` Fisher's exact ORA via the sibling `genesets` Rust CLI (MSigDB Hallmark / KEGG_MEDICUS / GO-BP, already bundled in the genesets binary at `~/Cursor/Rust_bioinfo_cli/genesets/`).
+**Two passes.** Pass 1 used `genesets enrich` directly with the default full MSigDB background. Pass 2 (this section's headline results) corrected the background to the Olink Explore measurable universe. **The two passes give materially different answers. Pass 2 is the honest version; Pass 1 is shown afterward for comparison and as a cautionary tale.**
 
-**Methodology:**
+Methodology (both passes):
 - Foreground: top-100 genes at `bh_q < 0.10` per comparison × direction, ranked by `|mean_diff|`.
-- Background: full MSigDB gene universe. **Caveat:** not restricted to the Olink Explore measurable universe, so pathways with high Olink coverage may be over-represented in hits. This is a known ORA-with-restricted-platform bias; acknowledge it, don't trust single-pathway claims.
-- Fisher's exact test per pathway, BH-FDR across pathways within each comparison × direction × collection.
-- JSON results: `docs/findings/pathway_results/<comparison>_<direction>_<collection>.json`.
-- Reproduce: `scripts/run_enrichment.sh out/de_results.tsv docs/findings/pathway_results/`.
+- Fisher's exact test per pathway, BH-FDR within each (comparison × direction × collection) triple.
+- Collections: MSigDB Hallmark (50 sets), KEGG_MEDICUS (658 sets), GO-BP (7,608 sets).
+- Pass 1 reproduction: `scripts/run_enrichment.sh out/de_results.tsv docs/findings/pathway_results/`
+- Pass 2 reproduction: `scripts/enrich_restricted_universe.py out/de_results.tsv docs/findings/pathway_results_restricted/`
 
-### The biological contrast at pathway level
+### Pass 2: the honest results (Olink-restricted universe)
 
-The headline per-protein observation (post-acclimation heat response produces ~4× more hits than pre-acclimation) sharpens at the pathway level into a **qualitatively different biology** between the two heat exposures:
+The 2,943 proteins on Olink Explore are **not** a random sample of the human proteome. Many Hallmark pathways — EMT in particular — have majority coverage on the panel:
 
-**PT1−PR1 (acute heat stress, pre-acclimation) — inflammatory / stress-signaling signature**
-
-Top up-regulated pathways:
-
-| Collection | Pathway | Overlap | FDR |
+| Hallmark pathway | Genes in set | Genes in Olink universe | Coverage |
 |---|---|---|---|
-| Hallmark | **EPITHELIAL_MESENCHYMAL_TRANSITION** | 6/53 | **4.45e-4** |
-| Hallmark | KRAS_SIGNALING_UP | 4/53 | 0.027 |
-| Hallmark | TNFA_SIGNALING_VIA_NFKB | 3/53 | 0.046 |
-| Hallmark | ADIPOGENESIS / ALLOGRAFT_REJECTION / ESTROGEN_RESPONSE / MYOGENESIS | 3/53 each | 0.046 |
-| GO-BP | CELL_CELL_SIGNALING | 16/53 | 5.65e-4 |
-| GO-BP | CELL_MOTILITY | 18/53 | 0.0012 |
-| GO-BP | RESPONSE_TO_GROWTH_FACTOR | 11/53 | 0.0036 |
-| KEGG | PRL_JAK_STAT_SIGNALING / FIBRINOLYTIC_PAI | 1/53 | 0.12 |
+| **EPITHELIAL_MESENCHYMAL_TRANSITION** | 200 | **105** | **53%** |
+| PI3K_AKT_MTOR_SIGNALING | 105 | 29 | 28% |
+| MITOTIC_SPINDLE | 199 | 45 | 23% |
+| DNA_REPAIR | 150 | 33 | 22% |
 
-Down-regulated (n=9 tiny list): Hallmark IL2_STAT5_SIGNALING (FDR 0.013), GO-BP PI3K_AKT signaling (FDR 0.061).
+When the background is the full MSigDB universe (~40,000 genes), an Olink-heavy pathway looks enriched for almost any interesting hit list because its coverage alone is doing the work. The *correct* background is the 2,920 unique gene symbols actually present in `de_results.tsv` — the measurable universe.
 
-**PT2−PR2 (acute heat stress, post-acclimation) — cellular repair / growth / metabolism signature**
+After correction, the pathway picture is much narrower:
 
-Top up-regulated pathways:
+**PT1−PR1 (acute heat, pre-acclimation): zero pathway hits** at FDR < 0.20 across Hallmark, KEGG, or GO-BP. The per-protein hits (PRL, CALCA, CLEC1B, OBP2B, STXBP1, …) don't aggregate into any coherent pathway when the universe is restricted. **The previous headline "EMT / KRAS / TNF-α-NF-κB in pre-acclimation heat" was a universe artifact.** Individual proteins are still real hits; they just don't point to a pathway-level theme that the panel's bias doesn't already account for.
 
-| Collection | Pathway | Overlap | FDR |
+**PR2−PR1 and PT2−PT1: zero pathway hits**. Underpowered.
+
+**PT2−PR2 (acute heat, post-acclimation) — up-regulated:**
+
+| Collection | Pathway | Hits / Set (universe-restricted) | FDR |
 |---|---|---|---|
-| Hallmark | **MITOTIC_SPINDLE** | 6/100 | **0.020** |
-| Hallmark | **DNA_REPAIR** | 5/100 | **0.020** |
-| Hallmark | **PI3K_AKT_MTOR_SIGNALING** | 4/100 | **0.026** |
-| Hallmark | PROTEIN_SECRETION | 3/100 | 0.12 |
-| Hallmark | INTERFERON_GAMMA_RESPONSE | 4/100 | 0.14 |
-| GO-BP | INTRACELLULAR_SIGNALING_CASSETTE | 30/100 | 6.02e-5 |
-| GO-BP | SMALL_GTPASE_MEDIATED_SIGNAL_TRANSDUCTION | 15/100 | 6.02e-5 |
-| GO-BP | VESICLE_MEDIATED_TRANSPORT | 24/100 | 8.07e-4 |
-| KEGG | AUTOPHAGOSOME_LYSOSOME_FUSION | 2/100 | 0.020 |
-| KEGG | BCR_ABL_PI3K / METALS_NFKB / JAK_STAT | 2/100 | 0.053 |
+| GO-BP | **SMALL_GTPASE_MEDIATED_SIGNAL_TRANSDUCTION** | 15/98 | **0.003** |
+| GO-BP | PROTEIN_CONTAINING_COMPLEX_ASSEMBLY | 24/280 | 0.033 |
+| GO-BP | **LAMELLIPODIUM_MORPHOGENESIS** | **4/6** | **0.033** |
+| GO-BP | IMMUNE_RESPONSE_REGULATING_CELL_SURFACE_RECEPTOR_SIGNALING_IN_PHAGOCYTOSIS | 4/7 | 0.056 |
+| GO-BP | INTRACELLULAR_RECEPTOR_SIGNALING_PATHWAY | 10/67 | 0.074 |
+| GO-BP | FC_RECEPTOR_MEDIATED_STIMULATORY_SIGNALING_PATHWAY | 4/9 | 0.109 |
+| GO-BP | WNT_SIGNALING_PATHWAY_PLANAR_CELL_POLARITY | 4/9 | 0.109 |
+| Hallmark | MITOTIC_SPINDLE | 6/45 | 0.118 (NOT significant) |
+| Hallmark | DNA_REPAIR | 5/33 | 0.118 (NOT significant) |
+| KEGG | — | — | nothing at FDR < 0.20 |
 
-Down-regulated: **GO-BP NEURONAL_ION_CHANNEL_CLUSTERING (FDR 0.001)**, NEURON_MATURATION (0.029), AXON_LOCALIZATION (0.029), Hallmark IL2_STAT5 (0.067).
+Genes driving the small-GTPase / cytoskeletal signal: **ABL1, SRC, YES1, VAV3, RHOC, WASF1, MYO9B, ARHGEF12, CRKL, GIT1, DOK1, DBNL, STAMBP, USP8, DNMBP, RAB33A**. These are tyrosine-kinase + Rho-family GTPase regulators + actin-rearrangement proteins. Classic Src-family / Rho-GTPase-mediated cytoskeletal remodeling.
 
-### The observation
+**PT2−PR2 down-regulated:**
 
-The two heat exposures look like **different biological responses**, not scaled versions of the same response:
+| Collection | Pathway | Hits / Set (universe-restricted) | FDR |
+|---|---|---|---|
+| GO-BP | **NEURONAL_ION_CHANNEL_CLUSTERING** | **3/5** | **0.076** |
 
-- **Before acclimation**, the measurable proteomic response to acute heat is dominated by **EMT / KRAS / TNF-α-NF-κB / cell motility** — an inflammatory stress-signaling pattern. Classic acute-stress secretome.
-- **After 7 days of acclimation**, the response to acute heat shifts to **mitotic spindle / DNA repair / PI3K/AKT/mTOR / vesicle transport / small GTPase signaling** — a cell-repair, protein-trafficking, growth-adaptation pattern. And it simultaneously **down-regulates neuronal signaling pathways** (ion channel clustering, neuron maturation, axon localization).
+3 of 5 genes in the pathway (CNTN2, CNTNAP2, MYOC) are in the 34-gene down list. Very specific but a small set.
 
-If this holds at larger n, the interpretation is: **acclimation doesn't dampen the heat stress response — it rewires it** from an acute-inflammatory mode into a cellular-maintenance / adaptive-growth mode, with concurrent dampening of neural excitability signals.
+### The honest observation
 
-### PR2−PR1 (acclimation effect at rest, weak signal)
+After universe correction, the only defensible pathway-level story is:
 
-The 7-protein list gives only suggestive pathway-level hits:
+**Post-acclimation acute heat stress specifically mobilizes Src-family kinase / Rho-GTPase / lamellipodium-morphogenesis machinery** — the tyrosine-kinase-driven cytoskeletal rearrangement apparatus. Concurrently down-regulates neuronal contactin / ion-channel clustering proteins (3 of 5 in a very specific pathway).
 
-| Collection | Pathway | FDR |
-|---|---|---|
-| GO-BP | ANTIBACTERIAL_HUMORAL_RESPONSE | 0.063 |
-| GO-BP | ANTIMICROBIAL_HUMORAL_RESPONSE | 0.079 |
-| KEGG | OKAZAKI_FRAGMENT_MATURATION / LONG_PATCH_BER | 0.009 |
+This is consistent with **vascular endothelial remodeling** under heat — tyrosine-kinase signaling drives endothelial cell shape changes for vasodilation/vasoconstriction control. It is **not** the sweeping "acclimation rewires heat response from inflammatory to cellular-repair mode" story that the uncorrected analysis suggested. That story was largely an artifact of the Olink panel's built-in EMT / PI3K / mitotic-spindle bias.
 
-Possibly suggests innate-immune and DNA-repair priming at rest after 7 days of acclimation, but too small to commit to.
+**What this does not say:**
+- Nothing about PT1−PR1 at the pathway level. The per-protein signal is there but doesn't aggregate.
+- Nothing about pre-vs-post acclimation contrast at the pathway level. Only PT2−PR2 has pathway-level signal in the corrected analysis.
+- Nothing about down-regulation in PT1−PR1 (9-gene list, zero hits after correction).
 
-### PT2−PT1 (acclimation × heat interaction, narrow signal)
+---
 
-The 6-up / 2-down list is almost too small to meaningfully enrich. Weak Hallmark signals on COAGULATION / FATTY_ACID_METABOLISM. The ONE striking GO-BP signal comes from the down-regulated side: **INSULIN_SECRETION / NEUROTRANSMITTER_SECRETION / INTRACELLULAR_GLUCOSE_HOMEOSTASIS** (FDR 0.046 on a 2-gene list — driven by one protein that happens to be annotated in multiple glucose-secretion sets, probably not real).
+### Pass 1: what the original (wrong-background) analysis said
 
-### Pathway-level caveats (separate from the per-protein caveats above)
+Kept here as a diagnostic record, not as a finding. The uncorrected Pass 1 claimed:
 
-1. **ORA background is wrong.** We use the full MSigDB universe as background, but our measurement universe is only ~2,943 proteins on Olink Explore. This inflates enrichment of pathways with high Olink coverage (secreted / inflammatory / EMT-adjacent proteins are over-represented on the Explore panel relative to, say, nuclear transcription factors). To fix this properly, rebuild the test with a restricted universe — requires extending `genesets` with a `--universe` flag.
-2. **Large sets dominate Fisher's exact.** HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION has 200 genes — the largest Hallmark set. A 6/53 overlap against a 200-gene set is not as specific as a 6/53 overlap against a 30-gene set would be. Weight by set size when interpreting.
-3. **FDR correction is within each (comparison × direction × collection) triple**, not pooled across all 18 slices. Reporting a pathway as "significant across multiple collections" stacks the deck; weight cross-collection agreement as a consistency check, not as an independent signal.
-4. **Two of the four comparisons have too few hits for ORA to be meaningful.** PR2−PR1 (7 genes) and PT2−PT1 (6/2 genes) should be treated as descriptive, not inferential.
+> *"Pre-acclimation heat stress up-regulates EMT / KRAS / TNF-α-NF-κB (inflammatory signature); post-acclimation heat stress up-regulates MITOTIC_SPINDLE / DNA_REPAIR / PI3K_AKT_mTOR (cellular repair). Acclimation rewires heat response from inflammatory to growth/repair mode."*
+
+None of those Hallmark hits survive the universe correction at FDR < 0.10. The mechanism:
+
+- EMT's 53% Olink coverage means any moderately active secretome list hits it — you can't not hit EMT with an Olink panel.
+- MITOTIC_SPINDLE and DNA_REPAIR both went from FDR 0.020 (uncorrected) → FDR 0.118 (corrected). Still suggestive, not significant.
+- The "cellular repair" narrative was a story told on top of three hits that all turn out to be under-powered when you set up the test correctly.
+
+**Lesson:** ORA against a custom platform universe needs the right background. Don't trust pathway results from a proteomics panel against the full MSigDB universe without this correction.
+
+### Pathway-level caveats
+
+1. **Background correction matters a lot.** We show the difference above. Pass 1 is preserved for transparency; Pass 2 is the honest analysis.
+2. **FDR within each (comparison × direction × collection) triple only.** Not pooled across 18 slices.
+3. **Three of four comparisons have no pathway signal after correction.** Don't narrate biology from absences.
+4. **PT2−PR2 down is a 3/5 hit on one specific pathway.** Striking but based on 3 proteins. Verify before citing.
 
 ## Handoff
 
