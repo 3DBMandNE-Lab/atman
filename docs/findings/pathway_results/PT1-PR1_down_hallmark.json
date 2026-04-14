@@ -1,0 +1,46 @@
+[
+  {
+    "collection": "hallmark",
+    "fdr": 0.012927057117023466,
+    "input_size": 9,
+    "name": "HALLMARK_IL2_STAT5_SIGNALING",
+    "overlap": 2,
+    "pct_of_input": 22.2,
+    "pct_of_set": 1.0,
+    "pvalue": 0.0032317642792558665,
+    "set_size": 199
+  },
+  {
+    "collection": "hallmark",
+    "fdr": 0.08516898453305377,
+    "input_size": 9,
+    "name": "HALLMARK_COAGULATION",
+    "overlap": 1,
+    "pct_of_input": 11.1,
+    "pct_of_set": 0.7,
+    "pvalue": 0.05947297829839937,
+    "set_size": 138
+  },
+  {
+    "collection": "hallmark",
+    "fdr": 0.08516898453305377,
+    "input_size": 9,
+    "name": "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION",
+    "overlap": 1,
+    "pct_of_input": 11.1,
+    "pct_of_set": 0.5,
+    "pvalue": 0.08516898453305377,
+    "set_size": 200
+  },
+  {
+    "collection": "hallmark",
+    "fdr": 0.08516898453305377,
+    "input_size": 9,
+    "name": "HALLMARK_MYOGENESIS",
+    "overlap": 1,
+    "pct_of_input": 11.1,
+    "pct_of_set": 0.5,
+    "pvalue": 0.08516898453305377,
+    "set_size": 200
+  }
+]

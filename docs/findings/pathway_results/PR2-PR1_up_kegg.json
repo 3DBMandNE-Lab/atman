@@ -1,0 +1,46 @@
+[
+  {
+    "collection": "kegg",
+    "fdr": 0.007739079990976894,
+    "input_size": 7,
+    "name": "KEGG_MEDICUS_PATHOGEN_HTLV_1_TAX_TO_TNF_JNK_SIGNALING_PATHWAY",
+    "overlap": 1,
+    "pct_of_input": 14.3,
+    "pct_of_set": 20.0,
+    "pvalue": 0.0019347699977442234,
+    "set_size": 5
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.008504515884256492,
+    "input_size": 7,
+    "name": "KEGG_MEDICUS_REFERENCE_OKAZAKI_FRAGMENT_MATURATION",
+    "overlap": 1,
+    "pct_of_input": 14.3,
+    "pct_of_set": 9.1,
+    "pvalue": 0.004252257942128246,
+    "set_size": 11
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.008753509233615878,
+    "input_size": 7,
+    "name": "KEGG_MEDICUS_REFERENCE_LONG_PATCH_BER",
+    "overlap": 1,
+    "pct_of_input": 14.3,
+    "pct_of_set": 5.9,
+    "pvalue": 0.006565131925211909,
+    "set_size": 17
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.008873399615121347,
+    "input_size": 7,
+    "name": "KEGG_MEDICUS_REFERENCE_MICROTUBULE_DEPOLYMERIZATION",
+    "overlap": 1,
+    "pct_of_input": 14.3,
+    "pct_of_set": 4.3,
+    "pvalue": 0.008873399615121347,
+    "set_size": 23
+  }
+]

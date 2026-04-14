@@ -1,0 +1,167 @@
+[
+  {
+    "collection": "kegg",
+    "fdr": 0.049190925011976944,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_ANXA2_S100A10_REGULATED_ACTIN_CYTOSKELETON",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 20.0,
+    "pvalue": 0.008820231543863022,
+    "set_size": 5
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.049190925011976944,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_VARIANT_TMPRSS2_ERG_FUSION_TO_TRANSCRIPTIONAL_ACTIVATION",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 14.3,
+    "pvalue": 0.012327181018750633,
+    "set_size": 7
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.049190925011976944,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_MYOSTATIN_SIGNALING_PATHWAY",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 12.5,
+    "pvalue": 0.014076145077931201,
+    "set_size": 8
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.049190925011976944,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_TGF_BETA_SIGNALING_PATHWAY",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 12.5,
+    "pvalue": 0.014076145077931201,
+    "set_size": 8
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.049190925011976944,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_REGULATION_OF_GF_RTK_RAS_ERK_SIGNALING_PATHWAY_ADAPTOR_PROTEINS",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 10.0,
+    "pvalue": 0.01756507696401377,
+    "set_size": 10
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.049190925011976944,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_PATHOGEN_SARS_COV_2_S_TO_ANGII_AT1R_NOX2_SIGNALING_PATHWAY",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 7.1,
+    "pvalue": 0.02450709462614109,
+    "set_size": 14
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.049190925011976944,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_FLT3LG_FLT3_RAS_ERK_SIGNALING_PATHWAY",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 6.7,
+    "pvalue": 0.026235160006387703,
+    "set_size": 15
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.049190925011976944,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_FLT3LG_FLT3_RAS_PI3K_SIGNALING_PATHWAY",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 6.7,
+    "pvalue": 0.026235160006387703,
+    "set_size": 15
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.049829241783541395,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_REGULATION_OF_GF_RTK_RAS_ERK_SIGNALING_PTP",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 5.0,
+    "pvalue": 0.034831099284439615,
+    "set_size": 20
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.049829241783541395,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_CARDIAC_TYPE_VGCC_RYR_SIGNALING",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 4.8,
+    "pvalue": 0.03654144397459702,
+    "set_size": 21
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.049829241783541395,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_SKELETAL_TYPE_VGCC_RYR_SIGNALING",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 4.8,
+    "pvalue": 0.03654144397459702,
+    "set_size": 21
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.05419188582259385,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_CA2_ENTRY_VOLTAGE_GATED_CA2_CHANNEL",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 4.0,
+    "pvalue": 0.04335350865807508,
+    "set_size": 25
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.15075381564433535,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_GF_RTK_PI3K_SIGNALING_PATHWAY",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 1.2,
+    "pvalue": 0.13703738374614427,
+    "set_size": 83
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.15075381564433535,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_GF_RTK_RAS_PI3K_SIGNALING_PATHWAY",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 1.1,
+    "pvalue": 0.14620530742591398,
+    "set_size": 89
+  },
+  {
+    "collection": "kegg",
+    "fdr": 0.15075381564433535,
+    "input_size": 34,
+    "name": "KEGG_MEDICUS_REFERENCE_GF_RTK_RAS_ERK_SIGNALING_PATHWAY",
+    "overlap": 1,
+    "pct_of_input": 2.9,
+    "pct_of_set": 1.1,
+    "pvalue": 0.15075381564433532,
+    "set_size": 92
+  }
+]

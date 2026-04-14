@@ -1,0 +1,13 @@
+[
+  {
+    "collection": "kegg",
+    "fdr": 0.0013822844184296912,
+    "input_size": 6,
+    "name": "KEGG_MEDICUS_PATHOGEN_HTLV_1_TAX_TO_TNF_JNK_SIGNALING_PATHWAY",
+    "overlap": 1,
+    "pct_of_input": 16.7,
+    "pct_of_set": 20.0,
+    "pvalue": 0.0013822844184296912,
+    "set_size": 5
+  }
+]

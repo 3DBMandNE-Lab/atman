@@ -1,0 +1,24 @@
+[
+  {
+    "collection": "hallmark",
+    "fdr": 0.0429469803197855,
+    "input_size": 6,
+    "name": "HALLMARK_COAGULATION",
+    "overlap": 1,
+    "pct_of_input": 16.7,
+    "pct_of_set": 0.7,
+    "pvalue": 0.03759374934531978,
+    "set_size": 138
+  },
+  {
+    "collection": "hallmark",
+    "fdr": 0.0429469803197855,
+    "input_size": 6,
+    "name": "HALLMARK_FATTY_ACID_METABOLISM",
+    "overlap": 1,
+    "pct_of_input": 16.7,
+    "pct_of_set": 0.6,
+    "pvalue": 0.0429469803197855,
+    "set_size": 158
+  }
+]
