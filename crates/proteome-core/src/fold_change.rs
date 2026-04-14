@@ -8,9 +8,12 @@ pub struct Comparison {
     pub b: String,
 }
 
+/// Per-exposure list of `(participant, value)` cells for a single assay.
+type ExposureCells = BTreeMap<String, Vec<(String, f64)>>;
+
 pub struct FoldChangeInput {
     /// (panel, assay) -> (exposure -> Vec<(participant, value)>)
-    panels: BTreeMap<(String, String), BTreeMap<String, Vec<(String, f64)>>>,
+    panels: BTreeMap<(String, String), ExposureCells>,
 }
 
 impl FoldChangeInput {
@@ -30,8 +33,7 @@ impl FoldChangeInput {
         S3: AsRef<str>,
         S4: AsRef<str>,
     {
-        let mut panels: BTreeMap<(String, String), BTreeMap<String, Vec<(String, f64)>>> =
-            BTreeMap::new();
+        let mut panels: BTreeMap<(String, String), ExposureCells> = BTreeMap::new();
         for (panel, assay, participant, exposure, value) in cells {
             if let Some(v) = value {
                 panels
@@ -55,7 +57,6 @@ impl FoldChangeInput {
             .entry((panel.to_string(), assay.to_string()))
             .or_default();
     }
-
 }
 
 pub struct FoldChangePanel {
@@ -70,12 +71,12 @@ pub struct FoldChangeOutput {
     pub panels: Vec<FoldChangePanel>,
 }
 
-pub fn compute_log2_fc(
-    input: &FoldChangeInput,
-    comparisons: &[Comparison],
-) -> FoldChangeOutput {
-    let mut per_panel: BTreeMap<String, Vec<(String, &BTreeMap<String, Vec<(String, f64)>>)>> =
-        BTreeMap::new();
+/// For a given panel, a list of `(assay, by_exposure)` tuples borrowed from
+/// the input so we can sort and group them without cloning every cell.
+type PanelAssays<'a> = Vec<(String, &'a ExposureCells)>;
+
+pub fn compute_log2_fc(input: &FoldChangeInput, comparisons: &[Comparison]) -> FoldChangeOutput {
+    let mut per_panel: BTreeMap<String, PanelAssays<'_>> = BTreeMap::new();
     for ((panel, assay), by_exposure) in &input.panels {
         per_panel
             .entry(panel.clone())
@@ -104,11 +105,7 @@ pub fn compute_log2_fc(
     FoldChangeOutput { panels: out_panels }
 }
 
-fn compute_one_fc(
-    by_exposure: &BTreeMap<String, Vec<(String, f64)>>,
-    a: &str,
-    b: &str,
-) -> Option<f64> {
+fn compute_one_fc(by_exposure: &ExposureCells, a: &str, b: &str) -> Option<f64> {
     let va = by_exposure.get(a)?;
     let vb = by_exposure.get(b)?;
     if va.is_empty() || vb.is_empty() {

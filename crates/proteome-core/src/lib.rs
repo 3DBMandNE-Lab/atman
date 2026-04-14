@@ -14,14 +14,14 @@ pub mod qc;
 pub mod sample_id;
 pub mod types;
 
-pub use types::{
-    Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, ProteinIdentity,
-    QcFlag, Sample,
-};
 pub use errors::IngestError;
+pub use fold_change::{
+    compute_log2_fc, Comparison, FoldChangeInput, FoldChangeOutput, FoldChangePanel,
+};
 pub use ingest::{IngestOutput, ProteomeIngest};
 pub use matrix::{DubeWidePanel, DubeWideRow};
 pub use sample_id::{DubeSampleIdParser, ParsedSampleId, SampleIdParser};
-pub use fold_change::{
-    compute_log2_fc, Comparison, FoldChangeInput, FoldChangeOutput, FoldChangePanel,
+pub use types::{
+    Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, ProteinIdentity,
+    QcFlag, Sample,
 };

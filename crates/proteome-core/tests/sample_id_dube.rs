@@ -25,8 +25,14 @@ fn parses_dube_biological_sample_ids() {
 #[test]
 fn classifies_control_sample_as_control() {
     let p = DubeSampleIdParser;
-    assert_eq!(p.parse("CONTROL_SAMPLE_US_CS_AS_2-1").unwrap(), ParsedSampleId::Control);
-    assert_eq!(p.parse("CONTROL_SAMPLE_US_CS_AS_2-4").unwrap(), ParsedSampleId::Control);
+    assert_eq!(
+        p.parse("CONTROL_SAMPLE_US_CS_AS_2-1").unwrap(),
+        ParsedSampleId::Control
+    );
+    assert_eq!(
+        p.parse("CONTROL_SAMPLE_US_CS_AS_2-4").unwrap(),
+        ParsedSampleId::Control
+    );
 }
 
 #[test]

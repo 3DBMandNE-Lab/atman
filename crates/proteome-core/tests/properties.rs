@@ -1,9 +1,9 @@
+use proptest::prelude::*;
 use proteome_core::fold_change::{compute_log2_fc, Comparison, FoldChangeInput};
 use proteome_core::matrix::dube_wide_pivot;
 use proteome_core::{
     Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, QcFlag, Sample,
 };
-use proptest::prelude::*;
 
 fn arb_value() -> impl Strategy<Value = f64> {
     (-5.0_f64..5.0_f64).prop_filter("finite", |v| v.is_finite())
@@ -81,7 +81,11 @@ fn mk(sample: &str, assay: &str, panel: &str, val: f64, order: u64) -> Measureme
         qc_assay: QcFlag::Pass,
         detection_limit: DetectionLimit(None),
         below_lod: false,
-        batch: Batch { plate: None, lot: None, run: None },
+        batch: Batch {
+            plate: None,
+            lot: None,
+            run: None,
+        },
         dropped_by_qc: false,
         ingest_order: order,
         panel: Some(panel.into()),

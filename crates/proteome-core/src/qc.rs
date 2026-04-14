@@ -23,9 +23,7 @@ pub fn apply_dube_rule_all(records: &mut [MeasurementRecord]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, QcFlag,
-    };
+    use crate::{Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, QcFlag};
 
     #[test]
     fn rule_sets_dropped_by_qc_on_warn() {
@@ -41,7 +39,11 @@ mod tests {
             qc_assay: QcFlag::Pass,
             detection_limit: DetectionLimit(None),
             below_lod: false,
-            batch: Batch { plate: None, lot: None, run: None },
+            batch: Batch {
+                plate: None,
+                lot: None,
+                run: None,
+            },
             dropped_by_qc: false,
             ingest_order: 0,
             panel: None,

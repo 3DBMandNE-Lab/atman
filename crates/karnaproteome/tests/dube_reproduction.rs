@@ -62,9 +62,12 @@ fn dube_reproduction_end_to_end() {
     // Stage 1: ingest
     run_karnaproteome(&[
         "ingest",
-        "--platform", "olink-explore-ngs",
-        "--parser", "dube",
-        "--output-dir", tmp_path.to_str().unwrap(),
+        "--platform",
+        "olink-explore-ngs",
+        "--parser",
+        "dube",
+        "--output-dir",
+        tmp_path.to_str().unwrap(),
         raw1.to_str().unwrap(),
         raw2.to_str().unwrap(),
     ]);
@@ -72,26 +75,36 @@ fn dube_reproduction_end_to_end() {
     // Stage 2: qc
     run_karnaproteome(&[
         "qc",
-        "--input-dir", tmp_path.to_str().unwrap(),
-        "--output-dir", tmp_path.to_str().unwrap(),
-        "--rule", "dube",
+        "--input-dir",
+        tmp_path.to_str().unwrap(),
+        "--output-dir",
+        tmp_path.to_str().unwrap(),
+        "--rule",
+        "dube",
     ]);
 
     // Stage 3: matrix (Dube-wide per-panel CSVs)
     run_karnaproteome(&[
         "matrix",
-        "--input-dir", tmp_path.to_str().unwrap(),
-        "--output-dir", tmp_path.to_str().unwrap(),
-        "--format", "dube-wide",
-        "--split-by", "panel",
+        "--input-dir",
+        tmp_path.to_str().unwrap(),
+        "--output-dir",
+        tmp_path.to_str().unwrap(),
+        "--format",
+        "dube-wide",
+        "--split-by",
+        "panel",
     ]);
 
     // Stage 4: fold change
     run_karnaproteome(&[
         "fold-change",
-        "--input-dir", tmp_path.to_str().unwrap(),
-        "--output-dir", tmp_path.to_str().unwrap(),
-        "--groups", "PT2-PT1,PR2-PR1,PT2-PR2,PT1-PR1",
+        "--input-dir",
+        tmp_path.to_str().unwrap(),
+        "--output-dir",
+        tmp_path.to_str().unwrap(),
+        "--groups",
+        "PT2-PT1,PR2-PR1,PT2-PR2,PT1-PR1",
     ]);
 
     // Stage 5a: strict diff of filtered NPX files (byte-exact cell match)
@@ -108,10 +121,7 @@ fn dube_reproduction_end_to_end() {
     let mut worst_fc_delta = 0.0_f64;
     for panel in PANELS {
         let ours = tmp_path.join(format!("{}_log2_fc.csv", panel));
-        let reference = data.join(format!(
-            "fold_changes/fold_changes/{}_log2_fc.csv",
-            panel
-        ));
+        let reference = data.join(format!("fold_changes/fold_changes/{}_log2_fc.csv", panel));
         assert!(ours.exists(), "missing ours: {:?}", ours);
         assert!(reference.exists(), "missing reference: {:?}", reference);
         let report = diff_numeric(&ours, &reference, FC_TOLERANCE);

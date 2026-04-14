@@ -16,7 +16,11 @@ fn rec(qc_s: QcFlag, qc_a: QcFlag) -> MeasurementRecord {
         qc_assay: qc_a,
         detection_limit: DetectionLimit(Some(0.2)),
         below_lod: false,
-        batch: Batch { plate: None, lot: None, run: None },
+        batch: Batch {
+            plate: None,
+            lot: None,
+            run: None,
+        },
         dropped_by_qc: false,
         ingest_order: 0,
         panel: Some("Neurology".into()),

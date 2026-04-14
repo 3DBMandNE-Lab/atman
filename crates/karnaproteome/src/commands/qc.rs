@@ -34,10 +34,7 @@ pub fn run(args: Args) -> Result<()> {
     let after = records.iter().filter(|r| !r.dropped_by_qc).count();
     let masked = before - after;
 
-    write_measurements_long(
-        &args.output_dir.join("qc_measurements.tsv"),
-        &records,
-    )?;
+    write_measurements_long(&args.output_dir.join("qc_measurements.tsv"), &records)?;
     eprintln!(
         "qc: rule={} total={} masked={} passed={}",
         args.rule,

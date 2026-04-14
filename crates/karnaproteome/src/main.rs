@@ -7,7 +7,11 @@ use clap::{Parser, Subcommand};
 use karnaproteome::commands;
 
 #[derive(Parser, Debug)]
-#[command(name = "karnaproteome", version, about = "Proteomics engine (Olink Explore NGS, v0.1)")]
+#[command(
+    name = "karnaproteome",
+    version,
+    about = "Proteomics engine (Olink Explore NGS, v0.1)"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

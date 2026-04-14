@@ -3,6 +3,7 @@ use proteome_core::{
     Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, QcFlag, Sample,
 };
 
+#[allow(clippy::too_many_arguments)]
 fn m(
     sample: &str,
     assay_id: &str,
@@ -25,7 +26,11 @@ fn m(
         qc_assay: QcFlag::Pass,
         detection_limit: DetectionLimit(None),
         below_lod: false,
-        batch: Batch { plate: None, lot: None, run: None },
+        batch: Batch {
+            plate: None,
+            lot: None,
+            run: None,
+        },
         dropped_by_qc: dropped,
         ingest_order: order,
         panel: Some(panel.into()),
@@ -61,8 +66,26 @@ fn pivot_two_panels_bio_then_control_by_gene_symbol() {
         m("SSNA-001B-PR1", "OID1", "AAA", "P1", "2.0", 2.0, false, 1),
         m("SSNA-001B-PR2", "OID1", "AAA", "P1", "3.0", 3.0, false, 2),
         m("SSNA-001B-PR2", "OID2", "ZZZ", "P1", "4.0", 4.0, false, 3),
-        m("CONTROL_SAMPLE_X", "OID1", "AAA", "P1", "9.0", 9.0, false, 4),
-        m("CONTROL_SAMPLE_X", "OID2", "ZZZ", "P1", "8.0", 8.0, false, 5),
+        m(
+            "CONTROL_SAMPLE_X",
+            "OID1",
+            "AAA",
+            "P1",
+            "9.0",
+            9.0,
+            false,
+            4,
+        ),
+        m(
+            "CONTROL_SAMPLE_X",
+            "OID2",
+            "ZZZ",
+            "P1",
+            "8.0",
+            8.0,
+            false,
+            5,
+        ),
         m("SSNA-001B-PR1", "OID3", "BBB", "P2", "5.0", 5.0, false, 6),
     ];
     let samples = vec![
@@ -107,10 +130,7 @@ fn control_rows_preserve_ingest_order() {
         m("CONTROL_B", "OID1", "AAA", "P1", "1.0", 1.0, false, 0),
         m("CONTROL_A", "OID1", "AAA", "P1", "2.0", 2.0, false, 1),
     ];
-    let samples = vec![
-        sample_ctl("CONTROL_B", 0),
-        sample_ctl("CONTROL_A", 1),
-    ];
+    let samples = vec![sample_ctl("CONTROL_B", 0), sample_ctl("CONTROL_A", 1)];
     let panels = dube_wide_pivot(&measurements, &samples);
     assert_eq!(panels[0].rows[0].sample_id, "CONTROL_B"); // ingest order, not alpha
     assert_eq!(panels[0].rows[1].sample_id, "CONTROL_A");

@@ -47,7 +47,7 @@ pub fn dube_wide_pivot(
             Some(g) => g.clone(),
             None => continue,
         };
-        let entry = by_panel.entry(panel).or_insert_with(PanelBuilder::default);
+        let entry = by_panel.entry(panel).or_default();
         entry.note_assay(gene.clone());
         entry.set_value(&m.sample_id, &gene, m);
     }
@@ -82,11 +82,7 @@ impl PanelBuilder {
             .insert(gene.to_string(), value);
     }
 
-    fn finalize(
-        self,
-        panel: String,
-        sample_by_id: &HashMap<&str, &Sample>,
-    ) -> DubeWidePanel {
+    fn finalize(self, panel: String, sample_by_id: &HashMap<&str, &Sample>) -> DubeWidePanel {
         let assays: Vec<String> = self.assays.into_iter().collect();
 
         let mut bio: Vec<DubeWideRow> = Vec::new();

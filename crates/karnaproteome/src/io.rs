@@ -6,10 +6,8 @@
 
 use anyhow::{anyhow, Context, Result};
 use proteome_core::{
-    fold_change::FoldChangePanel,
-    matrix::DubeWidePanel,
-    Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, ProteinIdentity,
-    QcFlag, Sample,
+    fold_change::FoldChangePanel, matrix::DubeWidePanel, Abundance, AssayId, Batch, DetectionLimit,
+    MeasurementRecord, Platform, ProteinIdentity, QcFlag, Sample,
 };
 use std::{
     collections::HashMap,
@@ -68,21 +66,36 @@ pub fn write_measurements_long(path: &Path, records: &[MeasurementRecord]) -> Re
         let panel = r.panel.clone().unwrap_or_default();
         let lot = r.batch.lot.clone().unwrap_or_default();
         let gene = r.gene_symbol.clone().unwrap_or_default();
-        buf.push_str(&r.sample_id);             buf.push('\t');
-        buf.push_str(&r.assay_id.0);            buf.push('\t');
-        buf.push_str(&gene);                    buf.push('\t');
-        buf.push_str(&panel);                   buf.push('\t');
-        buf.push_str(&r.npx_source_str);        buf.push('\t');
-        buf.push_str(&abundance);               buf.push('\t');
-        buf.push_str(&abundance_raw);           buf.push('\t');
-        buf.push_str("log2_npx");               buf.push('\t');
-        buf.push_str(r.qc_sample.as_str());     buf.push('\t');
-        buf.push_str(r.qc_assay.as_str());      buf.push('\t');
-        buf.push_str(&lod);                     buf.push('\t');
-        buf.push_str(&(r.below_lod as u8).to_string());          buf.push('\t');
-        buf.push_str(&(r.dropped_by_qc as u8).to_string());      buf.push('\t');
-        buf.push_str(&plate);                   buf.push('\t');
-        buf.push_str(&lot);                     buf.push('\t');
+        buf.push_str(&r.sample_id);
+        buf.push('\t');
+        buf.push_str(&r.assay_id.0);
+        buf.push('\t');
+        buf.push_str(&gene);
+        buf.push('\t');
+        buf.push_str(&panel);
+        buf.push('\t');
+        buf.push_str(&r.npx_source_str);
+        buf.push('\t');
+        buf.push_str(&abundance);
+        buf.push('\t');
+        buf.push_str(&abundance_raw);
+        buf.push('\t');
+        buf.push_str("log2_npx");
+        buf.push('\t');
+        buf.push_str(r.qc_sample.as_str());
+        buf.push('\t');
+        buf.push_str(r.qc_assay.as_str());
+        buf.push('\t');
+        buf.push_str(&lod);
+        buf.push('\t');
+        buf.push_str(&(r.below_lod as u8).to_string());
+        buf.push('\t');
+        buf.push_str(&(r.dropped_by_qc as u8).to_string());
+        buf.push('\t');
+        buf.push_str(&plate);
+        buf.push('\t');
+        buf.push_str(&lot);
+        buf.push('\t');
         buf.push_str(&r.ingest_order.to_string());
         buf.push('\n');
     }
@@ -112,27 +125,25 @@ pub fn read_measurements_long(path: &Path) -> Result<Vec<MeasurementRecord>> {
             .ok_or_else(|| anyhow!("missing column {:?} in {:?}", name, path))
     };
     let c_sample = need("sample_id")?;
-    let c_assay  = need("assay_id")?;
-    let c_gene   = need("gene_symbol")?;
-    let c_panel  = need("panel")?;
-    let c_src    = need("npx_source_str")?;
-    let c_abund  = need("abundance")?;
+    let c_assay = need("assay_id")?;
+    let c_gene = need("gene_symbol")?;
+    let c_panel = need("panel")?;
+    let c_src = need("npx_source_str")?;
+    let c_abund = need("abundance")?;
     let c_abund_raw = need("abundance_raw")?;
-    let c_qcs    = need("qc_sample")?;
-    let c_qca    = need("qc_assay")?;
-    let c_lod    = need("detection_limit")?;
-    let c_below  = need("below_lod")?;
-    let c_drop   = need("dropped_by_qc")?;
-    let c_plate  = need("plate_id")?;
-    let c_lot    = need("panel_lot")?;
-    let c_order  = need("ingest_order")?;
+    let c_qcs = need("qc_sample")?;
+    let c_qca = need("qc_assay")?;
+    let c_lod = need("detection_limit")?;
+    let c_below = need("below_lod")?;
+    let c_drop = need("dropped_by_qc")?;
+    let c_plate = need("plate_id")?;
+    let c_lot = need("panel_lot")?;
+    let c_order = need("ingest_order")?;
 
     let mut out = Vec::new();
     for result in reader.records() {
         let row = result.with_context(|| format!("reading record from {:?}", path))?;
-        let abundance_raw: f64 = row[c_abund_raw]
-            .parse()
-            .context("abundance_raw parse")?;
+        let abundance_raw: f64 = row[c_abund_raw].parse().context("abundance_raw parse")?;
         let dropped_by_qc: bool = row[c_drop].parse::<u8>().map(|v| v != 0).unwrap_or(false);
         let abund_str = &row[c_abund];
         let abundance = if abund_str.is_empty() {
@@ -173,7 +184,8 @@ pub fn read_measurements_long(path: &Path) -> Result<Vec<MeasurementRecord>> {
 
 /// samples.tsv writer.
 pub fn write_samples(path: &Path, samples: &[Sample]) -> Result<()> {
-    let mut buf = String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
+    let mut buf =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
     for s in samples {
         buf.push_str(&format!(
             "{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -229,10 +241,7 @@ pub fn write_proteins(path: &Path, proteins: &[ProteinIdentity]) -> Result<()> {
 /// round-trip) and applies Dube's trailing-zero trim: `0.0980` → `0.098`,
 /// `1.4200` → `1.42`, `0.4000` → `0.4`. This matches the formatting rule
 /// observed empirically in the published filtered NPX files.
-pub fn write_dube_wide_panel(
-    out_dir: &Path,
-    panel: &DubeWidePanel,
-) -> Result<PathBuf> {
+pub fn write_dube_wide_panel(out_dir: &Path, panel: &DubeWidePanel) -> Result<PathBuf> {
     let filename = format!("{}_npx.csv", panel.panel.to_ascii_lowercase());
     let path = out_dir.join(filename);
     let mut buf = String::new();
@@ -346,7 +355,11 @@ fn parse_qc(s: &str) -> QcFlag {
 }
 
 fn empty_to_none(s: &str) -> Option<String> {
-    if s.is_empty() { None } else { Some(s.to_string()) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
 }
 
 fn format_f64(v: f64) -> String {

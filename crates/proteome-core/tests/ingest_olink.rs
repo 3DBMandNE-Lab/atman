@@ -16,7 +16,7 @@ const HEADER: &str =
 #[test]
 fn ingest_minimal_happy_path() {
     let dir = TempDir::new().unwrap();
-    let rows = vec![
+    let rows = [
         "SSNA-001B-PR1;1;OID20838;Q9UJY5;GGA1;0.1;Neurology;B04414;PLATE1;PASS;0.20;0.15;Plate control;PASS",
         "SSNA-001B-PR2;2;OID20838;Q9UJY5;GGA1;0.1;Neurology;B04414;PLATE1;WARN;0.20;0.10;Plate control;PASS",
         "CONTROL_SAMPLE_US_CS_AS_2-1;3;OID20838;Q9UJY5;GGA1;0.1;Neurology;B04414;PLATE1;PASS;0.20;0.05;Plate control;PASS",
@@ -31,7 +31,10 @@ fn ingest_minimal_happy_path() {
     assert_eq!(out.measurements.len(), 3);
     assert_eq!(out.proteins.len(), 1);
     assert_eq!(out.samples.len(), 3);
-    assert!(out.measurements.iter().all(|m| m.platform == Platform::OlinkExploreNgs));
+    assert!(out
+        .measurements
+        .iter()
+        .all(|m| m.platform == Platform::OlinkExploreNgs));
 
     // First row: biological sample, PASS/PASS, abundance preserved.
     let m = &out.measurements[0];
@@ -42,14 +45,22 @@ fn ingest_minimal_happy_path() {
     assert_eq!(m.panel.as_deref(), Some("Neurology"));
     assert!(matches!(m.abundance, Abundance::Log2Npx(v) if (v - 0.15).abs() < 1e-12));
     assert!(!m.dropped_by_qc);
-    assert_eq!(m.below_lod, true); // 0.15 < LOD 0.20
+    assert!(m.below_lod); // 0.15 < LOD 0.20
 
     // Sample sheet: controls classified.
-    let ctrl_sample = out.samples.iter().find(|s| s.sample_id.starts_with("CONTROL_SAMPLE_")).unwrap();
+    let ctrl_sample = out
+        .samples
+        .iter()
+        .find(|s| s.sample_id.starts_with("CONTROL_SAMPLE_"))
+        .unwrap();
     assert!(ctrl_sample.is_control);
     assert!(ctrl_sample.subject_id.is_none());
 
-    let bio_sample = out.samples.iter().find(|s| s.sample_id == "SSNA-001B-PR1").unwrap();
+    let bio_sample = out
+        .samples
+        .iter()
+        .find(|s| s.sample_id == "SSNA-001B-PR1")
+        .unwrap();
     assert!(!bio_sample.is_control);
     assert_eq!(bio_sample.subject_id.as_deref(), Some("001B"));
     assert_eq!(bio_sample.condition.as_deref(), Some("PR1"));
