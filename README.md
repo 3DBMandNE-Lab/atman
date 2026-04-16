@@ -6,7 +6,9 @@ A local-first Rust engine for proteomics data, extending the karna bioinformatic
 
 **v0.1 — reproduction base** (done): ingest, QC-filter, and reproduce the published Dube et al. *Scientific Data* 2023 Olink Explore NGS outputs byte-for-byte on filtered NPX files and within 1e-4 on log2 fold-change files. No normalization beyond what Olink already applied.
 
-**v0.2 analysis — pass 1** (done): paired Student's t-test at subject level with BH-FDR per comparison family (`karnaproteome de`). Heat-shock instrument sanity check. Findings doc on the Dube heat-acclimation dataset.
+**v0.2 analysis — pass 1** (done): paired Student's t-test at subject level with BH-FDR per comparison family (`karnaproteome de`). Optional moderated variance-shrinkage mode (`--test moderated`). Heat-shock instrument sanity check. Findings doc on the Dube heat-acclimation dataset.
+
+**v0.2 analysis — heterogeneity tooling** (done): provocation-contrast asymmetry metrics (`karnaproteome asymmetry`), standalone LOO/rank stability summaries (`karnaproteome robustness`), and module trajectory scoring from user-supplied module definitions (`karnaproteome module-trajectory`).
 
 **v0.2 analysis — pass 2** (done): pathway enrichment via Fisher's exact ORA against MSigDB Hallmark / KEGG / GO-BP, with universe correction to the Olink Explore measurable gene universe. Retracted the pass-1 headline after discovering the full MSigDB background inflated Olink-overlap-heavy pathways (EMT is 53% Olink-covered).
 
@@ -46,6 +48,30 @@ karnaproteome de --input-dir out/ --output-dir out/ \
     --test paired-t --paired-by participant \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" --min-pairs 5
 
+# Optional: moderated shrinkage model
+karnaproteome de --input-dir out/ --output-dir out_mod/ \
+    --test moderated --moderation-prior-df 4 \
+    --paired-by participant \
+    --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" --min-pairs 5
+
+# Provocation-contrast asymmetry (challenge-vs-rest style pairs)
+karnaproteome asymmetry --de-results out/de_results.tsv \
+    --pairs "PT2-PT1:PR2-PR1,PT2-PR2:PT1-PR1" \
+    --output out/asymmetry.tsv
+
+# LOO robustness summaries from baseline + rerun DE tables
+karnaproteome robustness \
+    --baseline out/de_results.tsv \
+    --loo "out_loo1/de_results.tsv,out_loo2/de_results.tsv" \
+    --top-k 20 \
+    --output-dir out/robustness
+
+# Module trajectory scoring with user-supplied modules.tsv
+karnaproteome module-trajectory \
+    --deltas-tsv docs/findings/heterogeneity/per_subject_gene_deltas.tsv \
+    --modules-tsv modules.tsv \
+    --output out/module_trajectory_scores.tsv
+
 # Stage 6: pathway enrichment (two passes)
 scripts/run_enrichment.sh out/de_results.tsv docs/findings/pathway_results/
 scripts/enrich_restricted_universe.py out/de_results.tsv \
@@ -83,6 +109,9 @@ crates/karnaproteome/       engine binary
       matrix.rs             karnaproteome matrix
       fold_change.rs        karnaproteome fold-change
       de.rs                 karnaproteome de
+      asymmetry.rs          karnaproteome asymmetry
+      robustness.rs         karnaproteome robustness
+      module_trajectory.rs  karnaproteome module-trajectory
   tests/
     dube_reproduction.rs    acceptance: strict diff 8 filtered NPX + numeric diff 8 FC
     dube_de_sanity.rs       acceptance: canonical HSPs up in heat comparisons

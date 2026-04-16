@@ -53,7 +53,7 @@ pub enum SkipReason {
 /// Python / R / SAS would produce on this scale.
 pub fn paired_t(pairs: &[(f64, f64)], min_pairs: usize) -> PairedTResult {
     let n = pairs.len();
-    if n < min_pairs {
+    if n < min_pairs || n < 2 {
         return PairedTResult::Skipped {
             reason: SkipReason::InsufficientPairs,
             n_pairs: n,
@@ -75,6 +75,12 @@ pub fn paired_t(pairs: &[(f64, f64)], min_pairs: usize) -> PairedTResult {
     // Sample variance with Bessel's correction (df = n-1).
     let var_diff: f64 = diffs.iter().map(|d| (d - mean_diff).powi(2)).sum::<f64>() / (n_f - 1.0);
     let sd_diff = var_diff.sqrt();
+    if !sd_diff.is_finite() {
+        return PairedTResult::Skipped {
+            reason: SkipReason::NonFiniteInput,
+            n_pairs: n,
+        };
+    }
     if sd_diff == 0.0 {
         return PairedTResult::Skipped {
             reason: SkipReason::ZeroVariance,
@@ -85,10 +91,23 @@ pub fn paired_t(pairs: &[(f64, f64)], min_pairs: usize) -> PairedTResult {
     let se = sd_diff / n_f.sqrt();
     let t = mean_diff / se;
     let df = n_f - 1.0;
+    if !t.is_finite() || !df.is_finite() || df <= 0.0 {
+        return PairedTResult::Skipped {
+            reason: SkipReason::InsufficientPairs,
+            n_pairs: n,
+        };
+    }
 
     // Two-sided p = 2 * P(T > |t|) on df degrees of freedom.
-    let t_dist =
-        StudentsT::new(0.0, 1.0, df).expect("StudentsT::new requires df > 0; n_pairs >= 5 ensures");
+    let t_dist = match StudentsT::new(0.0, 1.0, df) {
+        Ok(d) => d,
+        Err(_) => {
+            return PairedTResult::Skipped {
+                reason: SkipReason::InsufficientPairs,
+                n_pairs: n,
+            };
+        }
+    };
     let p_value = 2.0 * (1.0 - t_dist.cdf(t.abs()));
 
     PairedTResult::Computed {
@@ -206,6 +225,19 @@ mod tests {
             PairedTResult::Skipped {
                 reason: SkipReason::InsufficientPairs,
                 ..
+            }
+        ));
+    }
+
+    #[test]
+    fn paired_t_never_panics_when_min_pairs_is_too_small() {
+        // Caller bug: min_pairs=0. The function still must not panic.
+        let r = paired_t(&[(1.0, 0.5)], 0);
+        assert!(matches!(
+            r,
+            PairedTResult::Skipped {
+                reason: SkipReason::InsufficientPairs,
+                n_pairs: 1
             }
         ));
     }

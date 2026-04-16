@@ -312,6 +312,7 @@ dependencies = [
  "csv",
  "proteome-core",
  "serde",
+ "statrs",
  "tempfile",
 ]
 

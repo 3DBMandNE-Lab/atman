@@ -3,6 +3,7 @@ use clap::Args as ClapArgs;
 use proteome_core::fold_change::{compute_log2_fc, Comparison, FoldChangeInput};
 use std::path::PathBuf;
 
+use super::parse_comparisons;
 use crate::io::{read_measurements_long, read_samples, write_fold_change_panel};
 
 #[derive(ClapArgs, Debug)]
@@ -29,19 +30,10 @@ pub fn run(args: Args) -> Result<()> {
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
-    let comparisons: Vec<Comparison> = args
-        .groups
-        .split(',')
-        .map(|s| {
-            let mut it = s.splitn(2, '-');
-            let a = it.next().unwrap_or("").trim().to_string();
-            let b = it.next().unwrap_or("").trim().to_string();
-            Comparison { a, b }
-        })
+    let comparisons: Vec<Comparison> = parse_comparisons(&args.groups)?
+        .into_iter()
+        .map(|(a, b)| Comparison { a, b })
         .collect();
-    if comparisons.is_empty() {
-        anyhow::bail!("no comparisons given");
-    }
 
     let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;

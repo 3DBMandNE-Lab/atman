@@ -5,9 +5,11 @@
 use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
 use proteome_core::de::{bh_fdr, paired_t, PairedTResult, SkipReason};
+use statrs::distribution::{ContinuousCDF, StudentsT};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
+use super::parse_comparisons;
 use crate::io::{
     read_measurements_long, read_proteins, read_samples, write_de_report, write_de_results,
     DeReportRow, DeResultRow,
@@ -23,7 +25,7 @@ pub struct Args {
     #[arg(long)]
     output_dir: PathBuf,
 
-    /// Test kind. v0.1-analysis supports only `paired-t`.
+    /// Test kind: `paired-t` (default) or `moderated`.
     #[arg(long, default_value = "paired-t")]
     test: String,
 
@@ -41,11 +43,15 @@ pub struct Args {
     /// protein is emitted as Skipped(InsufficientPairs) with NaN p/q.
     #[arg(long, default_value_t = 5)]
     min_pairs: usize,
+
+    /// Prior degrees of freedom for `--test moderated` variance shrinkage.
+    #[arg(long, default_value_t = 4.0)]
+    moderation_prior_df: f64,
 }
 
 pub fn run(args: Args) -> Result<()> {
-    if args.test != "paired-t" {
-        anyhow::bail!("test {:?} not supported in v0.1-analysis", args.test);
+    if args.test != "paired-t" && args.test != "moderated" {
+        anyhow::bail!("test {:?} not supported; use paired-t or moderated", args.test);
     }
     if args.paired_by != "participant" {
         anyhow::bail!(
@@ -53,23 +59,19 @@ pub fn run(args: Args) -> Result<()> {
             args.paired_by
         );
     }
+    if args.min_pairs < 2 {
+        anyhow::bail!("min-pairs must be >= 2 for paired t-test");
+    }
+    if args.test == "moderated"
+        && (!args.moderation_prior_df.is_finite() || args.moderation_prior_df <= 0.0)
+    {
+        anyhow::bail!("moderation-prior-df must be > 0 for moderated test");
+    }
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
     // Parse comparisons.
-    let comparisons: Vec<(String, String)> = args
-        .groups
-        .split(',')
-        .map(|s| {
-            let mut it = s.splitn(2, '-');
-            let a = it.next().unwrap_or("").trim().to_string();
-            let b = it.next().unwrap_or("").trim().to_string();
-            (a, b)
-        })
-        .collect();
-    if comparisons.is_empty() {
-        anyhow::bail!("no comparisons given");
-    }
+    let comparisons = parse_comparisons(&args.groups)?;
 
     // Read inputs.
     let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
@@ -220,6 +222,11 @@ pub fn run(args: Args) -> Result<()> {
             family_rows.push(row);
         }
 
+        if args.test == "moderated" {
+            apply_moderated_shrinkage(&mut family_rows, args.moderation_prior_df)?;
+            family_p = family_rows.iter().map(|r| r.p_value).collect();
+        }
+
         // BH-FDR within this comparison family.
         let qs = bh_fdr(&family_p);
         for (row, q) in family_rows.iter_mut().zip(qs.into_iter()) {
@@ -293,13 +300,14 @@ pub fn run(args: Args) -> Result<()> {
     let computed = all_rows.iter().filter(|r| r.p_value.is_some()).count();
     let skipped = all_rows.len() - computed;
     eprintln!(
-        "de: test={} comparisons={} rows={} computed={} skipped={} min_pairs={}",
+        "de: test={} comparisons={} rows={} computed={} skipped={} min_pairs={} prior_df={}",
         args.test,
         comparisons.len(),
         all_rows.len(),
         computed,
         skipped,
         args.min_pairs,
+        args.moderation_prior_df,
     );
     Ok(())
 }
@@ -312,4 +320,69 @@ struct ReportAccumulator {
     n_q_lt_10: usize,
     min_q: Option<f64>,
     max_abs_effect: Option<f64>,
+}
+
+fn apply_moderated_shrinkage(rows: &mut [DeResultRow], prior_df: f64) -> Result<()> {
+    let mut vars: Vec<f64> = rows
+        .iter()
+        .filter_map(paired_variance_from_row)
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .collect();
+    if vars.is_empty() {
+        return Ok(());
+    }
+    vars.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let prior_var = if vars.len() % 2 == 1 {
+        vars[vars.len() / 2]
+    } else {
+        (vars[vars.len() / 2 - 1] + vars[vars.len() / 2]) / 2.0
+    };
+
+    for row in rows.iter_mut() {
+        let mean_diff = match row.mean_diff {
+            Some(v) => v,
+            None => continue,
+        };
+        let df_i = match row.df {
+            Some(v) if v > 0.0 => v,
+            _ => continue,
+        };
+        let n = row.n_pairs as f64;
+        if n < 2.0 {
+            continue;
+        }
+        let var_i = match paired_variance_from_row(row) {
+            Some(v) if v.is_finite() && v >= 0.0 => v,
+            _ => continue,
+        };
+        let post_var = (prior_df * prior_var + df_i * var_i) / (prior_df + df_i);
+        if !(post_var.is_finite() && post_var > 0.0) {
+            continue;
+        }
+        let t_mod = mean_diff / (post_var / n).sqrt();
+        let df_mod = prior_df + df_i;
+        let dist = StudentsT::new(0.0, 1.0, df_mod)
+            .with_context(|| format!("building t distribution with df={}", df_mod))?;
+        let p_mod = 2.0 * (1.0 - dist.cdf(t_mod.abs()));
+        if p_mod.is_finite() {
+            row.t = Some(t_mod);
+            row.df = Some(df_mod);
+            row.p_value = Some(p_mod);
+        }
+    }
+    Ok(())
+}
+
+fn paired_variance_from_row(row: &DeResultRow) -> Option<f64> {
+    let t = row.t?;
+    let mean = row.mean_diff?;
+    let n = row.n_pairs as f64;
+    if n < 2.0 {
+        return None;
+    }
+    if t == 0.0 {
+        return Some(0.0);
+    }
+    let se = mean / t;
+    Some((se * n.sqrt()).powi(2))
 }
