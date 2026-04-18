@@ -56,6 +56,9 @@ exposed by the Rust binary.
 - **Mixed-effects DE (`de --test mixed`).** Initial repeated-measures model
   with fixed-effect formulas and a REML-profiled random intercept for
   `subject_id`.
+- **Robust DE sidecars.** `de_results.tsv` now appends effect sizes,
+  confidence intervals, Wilcoxon p-values, median differences, and trimmed
+  mean differences while preserving the original leading columns.
 
 ### Fixed
 

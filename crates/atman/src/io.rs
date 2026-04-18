@@ -480,6 +480,14 @@ pub struct DeResultRow {
     pub df: Option<f64>,
     pub p_value: Option<f64>,
     pub bh_q: Option<f64>,
+    pub effect_size: Option<f64>,
+    pub effect_size_method: String,
+    pub ci_low: Option<f64>,
+    pub ci_high: Option<f64>,
+    pub wilcoxon_p: Option<f64>,
+    pub wilcoxon_method: String,
+    pub median_diff: Option<f64>,
+    pub trimmed_mean_diff: Option<f64>,
     /// Non-empty when the test was skipped.
     pub skip_reason: String,
 }
@@ -487,7 +495,9 @@ pub struct DeResultRow {
 pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
     let mut buf = String::from(
         "panel\tassay_id\tgene_symbol\tuniprot\tcomparison\tn_pairs\t\
-         mean_a\tmean_b\tmean_diff\tt\tdf\tp_value\tbh_q\tskip_reason\n",
+         mean_a\tmean_b\tmean_diff\tt\tdf\tp_value\tbh_q\tskip_reason\t\
+         effect_size\teffect_size_method\tci_low\tci_high\twilcoxon_p\twilcoxon_method\t\
+         median_diff\ttrimmed_mean_diff\n",
     );
     for r in rows {
         buf.push_str(&r.panel);
@@ -517,6 +527,22 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
         push_opt_f64(&mut buf, r.bh_q);
         buf.push('\t');
         buf.push_str(&r.skip_reason);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.effect_size);
+        buf.push('\t');
+        buf.push_str(&r.effect_size_method);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.ci_low);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.ci_high);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.wilcoxon_p);
+        buf.push('\t');
+        buf.push_str(&r.wilcoxon_method);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.median_diff);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.trimmed_mean_diff);
         buf.push('\n');
     }
     atomic_write(path, buf.as_bytes())

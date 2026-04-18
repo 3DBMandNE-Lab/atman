@@ -157,7 +157,15 @@ atman de --input-dir out --output-dir out \
 ```
 
 Output: `out/de_results.tsv` with columns
-`panel, assay_id, gene_symbol, uniprot, comparison, n_pairs, mean_a, mean_b, mean_diff, t, df, p_value, bh_q, skip_reason`.
+`panel, assay_id, gene_symbol, uniprot, comparison, n_pairs, mean_a, mean_b, mean_diff, t, df, p_value, bh_q, skip_reason`,
+followed by robust/statistical sidecar columns:
+`effect_size`, `effect_size_method`, `ci_low`, `ci_high`, `wilcoxon_p`,
+`wilcoxon_method`, `median_diff`, and `trimmed_mean_diff`.
+
+For paired tests, `effect_size` is Cohen's dz and `wilcoxon_p` is a
+signed-rank normal approximation. For unpaired Welch tests, `effect_size` is
+Hedges' g and `wilcoxon_p` is a rank-sum normal approximation. Confidence
+intervals are 95% intervals for the raw log2 effect.
 
 Expected hit counts at `q < 0.05`:
 | contrast | proteins at q<0.05 |

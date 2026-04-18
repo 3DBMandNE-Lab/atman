@@ -311,7 +311,7 @@ Acceptance:
 - Integration tests cover repeated-subject fitting and unrepeated-subject
   refusal.
 
-### 10. Robust Tests And Effect Sizes
+### 10. Robust Tests And Effect Sizes (implemented)
 
 Add effect-size-first outputs and robust alternatives.
 
@@ -328,6 +328,8 @@ Acceptance:
 
 - Existing `de_results.tsv` remains backward compatible, with extra columns
   appended or a versioned sidecar.
+- Integration tests cover paired Cohen's dz/signed-rank output and unpaired
+  Hedges' g/rank-sum output.
 
 ## Phase 5: Biological Summaries
 

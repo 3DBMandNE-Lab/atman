@@ -166,6 +166,8 @@ Common outputs:
 - `<panel>_log2_fc.csv`
 - `de_results.tsv`, `de_report.tsv`; OLS also writes `de_covariates.tsv` and
   `de_design.tsv`
+- `de_results.tsv` appends effect-size, confidence-interval, Wilcoxon, median,
+  and trimmed-mean columns after the original DE fields
 - `protein_bootstrap.tsv`, `module_bootstrap.tsv`
 - `null/null_summary.tsv`, `null/empirical_p.tsv`
 
