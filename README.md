@@ -121,6 +121,15 @@ atman de \
     --contrast conditionCase \
     --min-pairs 5
 
+# Repeated-measures random-intercept model.
+atman de \
+    --input-dir out --output-dir out_mixed \
+    --test mixed \
+    --groups "PT2-PT1" \
+    --fixed "condition + age + sex" \
+    --random "1|subject_id" \
+    --min-pairs 5
+
 atman bootstrap protein \
     --input-dir out \
     --groups "PT2-PT1" \

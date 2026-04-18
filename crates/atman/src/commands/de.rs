@@ -1,7 +1,9 @@
 //! Differential abundance command.
 
 use anyhow::{anyhow, Context, Result};
-use atman_core::de::{bh_fdr, ols, paired_t, welch_t, OlsOutcome, PairedTResult, SkipReason};
+use atman_core::de::{
+    bh_fdr, mixed_random_intercept, ols, paired_t, welch_t, OlsOutcome, PairedTResult, SkipReason,
+};
 use atman_core::Sample;
 use clap::Args as ClapArgs;
 use statrs::distribution::{ContinuousCDF, StudentsT};
@@ -57,6 +59,16 @@ pub struct Args {
     #[arg(long)]
     contrast: Option<String>,
 
+    /// Fixed-effect terms for `--test mixed`, for example
+    /// `condition + age + sex`. The intercept is included automatically.
+    #[arg(long)]
+    fixed: Option<String>,
+
+    /// Random-effect structure for `--test mixed`. Initial support is
+    /// random intercept by subject only: `1|subject_id`.
+    #[arg(long)]
+    random: Option<String>,
+
     /// Comma-separated comparisons in `A-B` form. Each is a separate
     /// hypothesis family for FDR. Example: "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2".
     #[arg(long)]
@@ -79,13 +91,14 @@ pub fn run(args: Args) -> Result<()> {
         && args.test != "moderated"
         && args.test != "welch-t"
         && args.test != "ols"
+        && args.test != "mixed"
     {
         anyhow::bail!(
-            "test {:?} not supported; use paired-t, moderated, welch-t, or ols",
+            "test {:?} not supported; use paired-t, moderated, welch-t, ols, or mixed",
             args.test
         );
     }
-    let is_unpaired = args.test == "welch-t" || args.test == "ols";
+    let is_unpaired = args.test == "welch-t" || args.test == "ols" || args.test == "mixed";
     if !is_unpaired && args.paired_by != "participant" {
         anyhow::bail!(
             "paired-by {:?} not supported for paired tests (expected `participant`)",
@@ -101,12 +114,32 @@ pub fn run(args: Args) -> Result<()> {
         anyhow::bail!("moderation-prior-df must be > 0 for moderated test");
     }
     if args.test != "ols"
-        && (args.covariates.is_some() || args.design.is_some() || args.contrast.is_some())
+        && args.test != "mixed"
+        && (args.covariates.is_some()
+            || args.design.is_some()
+            || args.contrast.is_some()
+            || args.fixed.is_some()
+            || args.random.is_some())
     {
-        anyhow::bail!("--covariates, --design, and --contrast are only valid with --test ols");
+        anyhow::bail!(
+            "--covariates, --design, --contrast, --fixed, and --random require --test ols or mixed"
+        );
     }
     if args.covariates.is_some() && args.design.is_some() {
         anyhow::bail!("use either --covariates or --design, not both");
+    }
+    if args.test == "mixed" {
+        if args.fixed.is_none() {
+            anyhow::bail!("--fixed is required with --test mixed");
+        }
+        if args.random.as_deref() != Some("1|subject_id") {
+            anyhow::bail!("--test mixed currently supports only --random '1|subject_id'");
+        }
+        if args.covariates.is_some() || args.design.is_some() {
+            anyhow::bail!("use --fixed with --test mixed; --covariates and --design are for ols");
+        }
+    } else if args.fixed.is_some() || args.random.is_some() {
+        anyhow::bail!("--fixed and --random are only valid with --test mixed");
     }
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
@@ -123,9 +156,12 @@ pub fn run(args: Args) -> Result<()> {
         args.groups.as_deref(),
         &samples,
         args.test.as_str(),
-        args.design.as_deref(),
+        args.design.as_deref().or(args.fixed.as_deref()),
         args.contrast.as_deref(),
     )?;
+    if args.test == "mixed" {
+        validate_random_intercept_design(&samples, &comparisons, args.min_pairs)?;
+    }
 
     // Lookup: sample_id → (subject, condition, is_control)
     let sample_by_id: HashMap<&str, &atman_core::Sample> =
@@ -184,7 +220,7 @@ pub fn run(args: Args) -> Result<()> {
             Some(g) => g.clone(),
             None => continue,
         };
-        if args.test == "ols" {
+        if args.test == "ols" || args.test == "mixed" {
             cells_by_sample.insert(
                 (panel.clone(), gene.clone(), m.sample_id.clone()),
                 abundance,
@@ -198,11 +234,20 @@ pub fn run(args: Args) -> Result<()> {
             .push((subject, abundance));
     }
 
-    let ols_setup = if args.test == "ols" {
+    let mixed_fixed_formula = args.fixed.as_ref().map(|fixed| format!("~ {fixed}"));
+    let model_setup = if args.test == "ols" || args.test == "mixed" {
         Some(build_ols_setup(
             &args.input_dir.join("samples.tsv"),
-            args.design.as_deref(),
-            args.covariates.as_deref(),
+            if args.test == "mixed" {
+                mixed_fixed_formula.as_deref()
+            } else {
+                args.design.as_deref()
+            },
+            if args.test == "ols" {
+                args.covariates.as_deref()
+            } else {
+                None
+            },
             args.contrast.as_deref(),
         )?)
     } else {
@@ -232,10 +277,10 @@ pub fn run(args: Args) -> Result<()> {
         // OLS mode: precompute the encoded design matrix (excluding y) for
         // this comparison so every per-protein fit reuses it, only swapping
         // the y vector (with complete-case filtering on non-finite abundance).
-        let ols_design: Option<OlsDesign> = if args.test == "ols" {
-            let setup = ols_setup
+        let model_design: Option<OlsDesign> = if args.test == "ols" || args.test == "mixed" {
+            let setup = model_setup
                 .as_ref()
-                .expect("ols_setup populated when test=ols");
+                .expect("model_setup populated when test=ols or mixed");
             let design = build_ols_design(&samples, comp_a, comp_b, setup)?;
             design_rows.extend(design.report_rows.clone());
             Some(design)
@@ -257,8 +302,39 @@ pub fn run(args: Args) -> Result<()> {
             let va = by_condition.get(comp_a).unwrap_or(&empty);
             let vb = by_condition.get(comp_b).unwrap_or(&empty);
 
-            let result = if args.test == "ols" {
-                let design = ols_design
+            let result = if args.test == "mixed" {
+                let design = model_design
+                    .as_ref()
+                    .expect("model_design populated when test=mixed");
+                let mut y: Vec<f64> = Vec::with_capacity(design.rows.len());
+                let mut rows: Vec<Vec<f64>> = Vec::with_capacity(design.rows.len());
+                let mut groups: Vec<String> = Vec::with_capacity(design.rows.len());
+                for (sid, row) in design.rows.iter() {
+                    if let Some(abundance) =
+                        cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone()))
+                    {
+                        let sample = sample_by_id
+                            .get(sid.as_str())
+                            .expect("design sample exists in sample_by_id");
+                        y.push(*abundance);
+                        rows.push(row.clone());
+                        groups.push(sample.subject_id.as_ref().unwrap_or(sid).clone());
+                    }
+                }
+                let fit = mixed_random_intercept(&rows, &y, &groups, args.min_pairs);
+                let (mean_a_raw, mean_b_raw) = raw_group_means(&y, &rows, design.group_col);
+                ols_to_paired_t_result(
+                    fit,
+                    design,
+                    mean_a_raw,
+                    mean_b_raw,
+                    panel,
+                    gene,
+                    &comparison_label,
+                    &mut covariate_rows,
+                )
+            } else if args.test == "ols" {
+                let design = model_design
                     .as_ref()
                     .expect("ols_design populated when test=ols");
                 // Look up per-sample abundance for this protein; drop
@@ -428,10 +504,10 @@ pub fn run(args: Args) -> Result<()> {
 
     write_de_results(&args.output_dir.join("de_results.tsv"), &all_rows)?;
     write_de_report(&args.output_dir.join("de_report.tsv"), &report_rows)?;
-    if args.test == "ols" && !covariate_rows.is_empty() {
+    if (args.test == "ols" || args.test == "mixed") && !covariate_rows.is_empty() {
         write_covariate_rows(&args.output_dir.join("de_covariates.tsv"), &covariate_rows)?;
     }
-    if args.test == "ols" {
+    if args.test == "ols" || args.test == "mixed" {
         write_design_rows(&args.output_dir.join("de_design.tsv"), &design_rows)?;
     }
 
@@ -446,7 +522,7 @@ pub fn run(args: Args) -> Result<()> {
         skipped,
         args.min_pairs,
         args.moderation_prior_df,
-        ols_setup
+        model_setup
             .as_ref()
             .map(|s| s.label.as_str())
             .unwrap_or(""),
@@ -656,7 +732,7 @@ fn resolve_comparisons(
     if let Some(groups) = groups {
         return parse_comparisons(groups);
     }
-    if test != "ols" || design.is_none() {
+    if (test != "ols" && test != "mixed") || design.is_none() {
         anyhow::bail!("--groups is required unless using --test ols --design with --contrast");
     }
     let contrast =
@@ -686,6 +762,38 @@ fn resolve_comparisons(
         );
     }
     Ok(vec![(comp_a.to_string(), others[0].clone())])
+}
+
+fn validate_random_intercept_design(
+    samples: &[Sample],
+    comparisons: &[(String, String)],
+    min_samples: usize,
+) -> Result<()> {
+    for (a, b) in comparisons {
+        let mut by_subject: BTreeMap<String, usize> = BTreeMap::new();
+        for sample in samples {
+            if sample.is_control {
+                continue;
+            }
+            let Some(condition) = &sample.condition else {
+                continue;
+            };
+            if condition != a && condition != b {
+                continue;
+            }
+            let subject = sample.subject_id.as_ref().unwrap_or(&sample.sample_id);
+            *by_subject.entry(subject.clone()).or_default() += 1;
+        }
+        let repeated_subjects = by_subject.values().filter(|n| **n >= 2).count();
+        let n_samples: usize = by_subject.values().sum();
+        if n_samples < min_samples || repeated_subjects < 2 {
+            anyhow::bail!(
+                "mixed model for {a}-{b} requires at least {} samples and at least two repeated subjects for --random '1|subject_id'",
+                min_samples
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Covariate kind determined at column-classification time. `Numeric`

@@ -287,7 +287,7 @@ Acceptance:
 - Integration tests cover formula/shortcut equivalence, inferred two-condition
   contrasts, and singular design refusal.
 
-### 9. Mixed-Effects Models
+### 9. Mixed-Effects Models (implemented)
 
 Add repeated-measures modeling after formula OLS is stable.
 
@@ -300,13 +300,16 @@ atman de --test mixed --fixed "condition + age + sex" --random "1|subject_id"
 Initial scope:
 
 - random intercept only
-- one grouping factor
-- maximum likelihood or restricted maximum likelihood, documented explicitly
+- one grouping factor: `subject_id`
+- restricted maximum likelihood profiled over the random-intercept variance
+  ratio, followed by GLS fixed-effect inference
 
 Acceptance:
 
 - Tiny fixture matches a reference implementation within tolerance.
 - Refuses underpowered or singular random-effects designs.
+- Integration tests cover repeated-subject fitting and unrepeated-subject
+  refusal.
 
 ### 10. Robust Tests And Effect Sizes
 

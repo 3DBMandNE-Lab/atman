@@ -501,6 +501,342 @@ pub fn ols(design: &[Vec<f64>], y: &[f64], min_samples: usize) -> OlsOutcome {
     })
 }
 
+/// Random-intercept linear mixed model with one grouping factor.
+///
+/// This fits `y = Xβ + u_group + ε`, with `u ~ N(0, σ_u²)` and
+/// `ε ~ N(0, σ_e²)`, by profiling the REML objective over
+/// `λ = σ_u² / σ_e²`. For a fixed `λ`, the marginal covariance is
+/// `V = σ_e² (I + λZZᵀ)`, and `β` is estimated by GLS. The reported
+/// coefficient standard errors use the profiled REML scale estimate and
+/// `(XᵀV⁻¹X)⁻¹`; p-values use a conservative residual df of `n - p`.
+///
+/// Initial scope is intentionally narrow: random intercept only, one grouping
+/// factor, and no random slopes.
+pub fn mixed_random_intercept(
+    design: &[Vec<f64>],
+    y: &[f64],
+    groups: &[String],
+    min_samples: usize,
+) -> OlsOutcome {
+    let n = design.len();
+    if n != y.len() || n != groups.len() || n == 0 {
+        return OlsOutcome::Skipped {
+            reason: SkipReason::InsufficientPairs,
+            n,
+        };
+    }
+    let p = design[0].len();
+    if p == 0 || n < min_samples || n <= p {
+        return OlsOutcome::Skipped {
+            reason: SkipReason::InsufficientPairs,
+            n,
+        };
+    }
+    for row in design {
+        if row.len() != p || row.iter().any(|v| !v.is_finite()) {
+            return OlsOutcome::Skipped {
+                reason: SkipReason::NonFiniteInput,
+                n,
+            };
+        }
+    }
+    if y.iter().any(|v| !v.is_finite()) {
+        return OlsOutcome::Skipped {
+            reason: SkipReason::NonFiniteInput,
+            n,
+        };
+    }
+
+    let group_index = group_indices(groups);
+    if group_index.len() < 2 || group_index.iter().all(|idx| idx.len() < 2) {
+        return OlsOutcome::Skipped {
+            reason: SkipReason::InsufficientPairs,
+            n,
+        };
+    }
+
+    let candidates: [f64; 8] = [-18.0, -12.0, -8.0, -4.0, 0.0, 4.0, 8.0, 12.0];
+    let mut best_t = candidates[0];
+    let mut best_obj = f64::INFINITY;
+    for t in candidates {
+        let obj = reml_objective(t.exp(), design, y, &group_index);
+        if obj < best_obj {
+            best_obj = obj;
+            best_t = t;
+        }
+    }
+    let mut left = best_t - 4.0;
+    let mut right = best_t + 4.0;
+    let gr = (5.0_f64.sqrt() - 1.0) / 2.0;
+    let mut c = right - gr * (right - left);
+    let mut d = left + gr * (right - left);
+    let mut fc = reml_objective(c.exp(), design, y, &group_index);
+    let mut fd = reml_objective(d.exp(), design, y, &group_index);
+    for _ in 0..60 {
+        if fc < fd {
+            right = d;
+            d = c;
+            fd = fc;
+            c = right - gr * (right - left);
+            fc = reml_objective(c.exp(), design, y, &group_index);
+        } else {
+            left = c;
+            c = d;
+            fc = fd;
+            d = left + gr * (right - left);
+            fd = reml_objective(d.exp(), design, y, &group_index);
+        }
+    }
+    let lambda = ((left + right) / 2.0).exp();
+    let Some(gls) = gls_fit(lambda, design, y, &group_index) else {
+        return OlsOutcome::Skipped {
+            reason: SkipReason::ZeroVariance,
+            n,
+        };
+    };
+    let df = (n - p) as f64;
+    if !(df.is_finite() && df > 0.0) {
+        return OlsOutcome::Skipped {
+            reason: SkipReason::InsufficientPairs,
+            n,
+        };
+    }
+    let sigma2 = gls.rss / df;
+    if !(sigma2.is_finite() && sigma2 >= 0.0) {
+        return OlsOutcome::Skipped {
+            reason: SkipReason::NonFiniteInput,
+            n,
+        };
+    }
+    let se: Vec<f64> = gls
+        .xtvix_inv_diag
+        .iter()
+        .map(|v| (sigma2 * v).sqrt())
+        .collect();
+    let t: Vec<f64> = gls
+        .beta
+        .iter()
+        .zip(se.iter())
+        .map(|(b, s)| if *s == 0.0 { f64::NAN } else { b / s })
+        .collect();
+    let t_dist = match StudentsT::new(0.0, 1.0, df) {
+        Ok(d) => d,
+        Err(_) => {
+            return OlsOutcome::Skipped {
+                reason: SkipReason::InsufficientPairs,
+                n,
+            };
+        }
+    };
+    let p_value = t
+        .iter()
+        .map(|&ti| {
+            if ti.is_finite() {
+                2.0 * (1.0 - t_dist.cdf(ti.abs()))
+            } else {
+                f64::NAN
+            }
+        })
+        .collect();
+
+    OlsOutcome::Computed(OlsFit {
+        n,
+        p,
+        beta: gls.beta,
+        se,
+        t,
+        p_value,
+        df,
+        sigma2,
+    })
+}
+
+struct GlsFit {
+    beta: Vec<f64>,
+    xtvix_inv_diag: Vec<f64>,
+    rss: f64,
+    logdet_xtvix: f64,
+}
+
+fn group_indices(groups: &[String]) -> Vec<Vec<usize>> {
+    let mut map: std::collections::BTreeMap<&str, Vec<usize>> = std::collections::BTreeMap::new();
+    for (idx, group) in groups.iter().enumerate() {
+        map.entry(group.as_str()).or_default().push(idx);
+    }
+    map.into_values().collect()
+}
+
+fn reml_objective(lambda: f64, design: &[Vec<f64>], y: &[f64], group_index: &[Vec<usize>]) -> f64 {
+    let Some(fit) = gls_fit(lambda, design, y, group_index) else {
+        return f64::INFINITY;
+    };
+    let n = design.len();
+    let p = design[0].len();
+    if n <= p || fit.rss <= 0.0 || !fit.rss.is_finite() {
+        return f64::INFINITY;
+    }
+    let logdet_v0: f64 = group_index
+        .iter()
+        .map(|idx| (1.0 + lambda * idx.len() as f64).ln())
+        .sum();
+    let df = (n - p) as f64;
+    df * (fit.rss / df).ln() + logdet_v0 + fit.logdet_xtvix
+}
+
+fn gls_fit(
+    lambda: f64,
+    design: &[Vec<f64>],
+    y: &[f64],
+    group_index: &[Vec<usize>],
+) -> Option<GlsFit> {
+    let p = design[0].len();
+    let mut wx = vec![vec![0.0; p]; design.len()];
+    let mut wy = vec![0.0; y.len()];
+    apply_compound_symmetry_inverse(lambda, design, y, group_index, &mut wx, &mut wy);
+
+    let mut xtvix = vec![vec![0.0; p]; p];
+    let mut xtviy = vec![0.0; p];
+    for i in 0..design.len() {
+        for j in 0..p {
+            xtviy[j] += design[i][j] * wy[i];
+            for k in 0..p {
+                xtvix[j][k] += design[i][j] * wx[i][k];
+            }
+        }
+    }
+    let chol = cholesky(&xtvix)?;
+    let beta = solve_cholesky(&chol, &xtviy);
+    let inv_diag = inverse_diag_from_cholesky(&chol);
+    let logdet_xtvix = 2.0
+        * chol
+            .iter()
+            .enumerate()
+            .map(|(i, row)| row[i].ln())
+            .sum::<f64>();
+
+    let residuals: Vec<f64> = design
+        .iter()
+        .zip(y.iter())
+        .map(|(row, yi)| {
+            let pred: f64 = row.iter().zip(beta.iter()).map(|(x, b)| x * b).sum();
+            yi - pred
+        })
+        .collect();
+    let mut wres = vec![0.0; residuals.len()];
+    apply_compound_symmetry_inverse_to_vector(lambda, &residuals, group_index, &mut wres);
+    let rss = residuals
+        .iter()
+        .zip(wres.iter())
+        .map(|(r, wr)| r * wr)
+        .sum();
+    Some(GlsFit {
+        beta,
+        xtvix_inv_diag: inv_diag,
+        rss,
+        logdet_xtvix,
+    })
+}
+
+fn apply_compound_symmetry_inverse(
+    lambda: f64,
+    design: &[Vec<f64>],
+    y: &[f64],
+    group_index: &[Vec<usize>],
+    wx: &mut [Vec<f64>],
+    wy: &mut [f64],
+) {
+    for idx in group_index {
+        let m = idx.len() as f64;
+        let factor = lambda / (1.0 + lambda * m);
+        let mut sum_y = 0.0;
+        let mut sum_x = vec![0.0; design[0].len()];
+        for &i in idx {
+            sum_y += y[i];
+            for (col, value) in design[i].iter().enumerate() {
+                sum_x[col] += value;
+            }
+        }
+        for &i in idx {
+            wy[i] = y[i] - factor * sum_y;
+            for (col, value) in design[i].iter().enumerate() {
+                wx[i][col] = value - factor * sum_x[col];
+            }
+        }
+    }
+}
+
+fn apply_compound_symmetry_inverse_to_vector(
+    lambda: f64,
+    values: &[f64],
+    group_index: &[Vec<usize>],
+    out: &mut [f64],
+) {
+    for idx in group_index {
+        let m = idx.len() as f64;
+        let factor = lambda / (1.0 + lambda * m);
+        let sum: f64 = idx.iter().map(|&i| values[i]).sum();
+        for &i in idx {
+            out[i] = values[i] - factor * sum;
+        }
+    }
+}
+
+fn cholesky(matrix: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
+    let p = matrix.len();
+    let mut l = vec![vec![0.0; p]; p];
+    for j in 0..p {
+        let diag_sum: f64 = l[j].iter().take(j).map(|v| v * v).sum();
+        let diag = matrix[j][j] - diag_sum;
+        if !diag.is_finite() || diag <= 0.0 {
+            return None;
+        }
+        l[j][j] = diag.sqrt();
+        for i in (j + 1)..p {
+            let off_sum: f64 = l[i]
+                .iter()
+                .zip(l[j].iter())
+                .take(j)
+                .map(|(li, lj)| li * lj)
+                .sum();
+            l[i][j] = (matrix[i][j] - off_sum) / l[j][j];
+        }
+    }
+    Some(l)
+}
+
+fn solve_cholesky(l: &[Vec<f64>], rhs: &[f64]) -> Vec<f64> {
+    let p = rhs.len();
+    let mut z = vec![0.0; p];
+    for i in 0..p {
+        let mut sum = rhs[i];
+        for (k, zk) in z.iter().enumerate().take(i) {
+            sum -= l[i][k] * zk;
+        }
+        z[i] = sum / l[i][i];
+    }
+    let mut out = vec![0.0; p];
+    for i in (0..p).rev() {
+        let mut sum = z[i];
+        for k in (i + 1)..p {
+            sum -= l[k][i] * out[k];
+        }
+        out[i] = sum / l[i][i];
+    }
+    out
+}
+
+fn inverse_diag_from_cholesky(l: &[Vec<f64>]) -> Vec<f64> {
+    let p = l.len();
+    let mut out = vec![0.0; p];
+    for target in 0..p {
+        let mut rhs = vec![0.0; p];
+        rhs[target] = 1.0;
+        let col = solve_cholesky(l, &rhs);
+        out[target] = col[target];
+    }
+    out
+}
+
 /// Benjamini–Hochberg FDR correction. Input `p_values` is a slice of optional
 /// p-values (None = skipped test, excluded from the correction). Returns a
 /// `Vec<Option<f64>>` of q-values aligned with the input indices; the same

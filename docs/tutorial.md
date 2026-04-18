@@ -190,6 +190,21 @@ OLS writes `de_results.tsv`, `de_report.tsv`, `de_covariates.tsv`, and
 `de_design.tsv`. The existing `--covariates age,sex,batch` shortcut remains
 available and expands to `~ condition + age + sex + batch`.
 
+Repeated-measures designs can use the initial mixed model path:
+
+```bash
+atman de --input-dir out --output-dir out_mixed \
+    --test mixed \
+    --groups "PT2-PT1" \
+    --fixed "condition + age + sex" \
+    --random "1|subject_id" \
+    --min-pairs 5
+```
+
+The mixed model supports a random intercept for `subject_id` only. It profiles
+the REML objective over the random-intercept variance ratio, then fits the
+fixed effects by GLS. It writes the same DE tables as OLS plus `de_design.tsv`.
+
 ## 8. Protein bootstrap
 
 Subject-level bootstrap uncertainty for protein effects:

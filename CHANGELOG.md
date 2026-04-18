@@ -53,6 +53,9 @@ exposed by the Rust binary.
 - **Formula OLS (`de --test ols --design`).** Formula-style covariate-adjusted
   linear models with explicit contrasts, design-matrix reporting, and
   compatibility with the existing `--covariates` shortcut.
+- **Mixed-effects DE (`de --test mixed`).** Initial repeated-measures model
+  with fixed-effect formulas and a REML-profiled random intercept for
+  `subject_id`.
 
 ### Fixed
 
