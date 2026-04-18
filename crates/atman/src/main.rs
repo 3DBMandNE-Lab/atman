@@ -20,6 +20,8 @@ struct Cli {
 enum Command {
     /// Parse raw NPX files into canonical long TSV + catalog + sample sheet.
     Ingest(commands::ingest::Args),
+    /// Convert a wide proteomics matrix plus metadata into canonical Atman TSVs.
+    IngestMatrix(Box<commands::ingest_matrix::Args>),
     /// Apply QC rule (Dube: mask rows where QC_Warning or Assay_Warning ≠ PASS).
     Qc(commands::qc::Args),
     /// Pivot QC'd long TSV into per-panel Dube-wide CSVs.
@@ -46,6 +48,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Ingest(args) => commands::ingest::run(args),
+        Command::IngestMatrix(args) => commands::ingest_matrix::run(*args),
         Command::Qc(args) => commands::qc::run(args),
         Command::Matrix(args) => commands::matrix::run(args),
         Command::FoldChange(args) => commands::fold_change::run(args),

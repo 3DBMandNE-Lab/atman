@@ -18,9 +18,9 @@ cargo install --path crates/atman
 atman --help
 ```
 
-Expected: help text listing `ingest`, `validate`, `qc`, `report`, `matrix`,
-`fold-change`, `de`, `asymmetry`, `robustness`, `module-trajectory`, and
-`module-de`.
+Expected: help text listing `ingest`, `ingest-matrix`, `validate`, `qc`,
+`report`, `matrix`, `fold-change`, `de`, `asymmetry`, `robustness`,
+`module-trajectory`, and `module-de`.
 
 Run the test suite to confirm the reproduction base is intact:
 
@@ -63,6 +63,26 @@ Expected: 3,725 rows masked, 118,410 usable rows remain.
 
 For non-Olink sources, an adapter can write `qc_measurements.tsv` directly if
 the source matrix is already filtered or if QC has been handled upstream.
+
+Matrix ingest alternative for non-Olink data:
+
+```bash
+atman ingest-matrix \
+    --matrix matrix.tsv \
+    --samples sample_metadata.tsv \
+    --orientation proteins-rows \
+    --platform spectronaut_report \
+    --abundance-unit log2_intensity \
+    --sample-id-col sample_id \
+    --condition-col condition \
+    --assay-id-col Protein.Group \
+    --gene-col Genes \
+    --output-dir out_ms
+```
+
+Use `--orientation samples-rows --proteins protein_metadata.tsv` when rows are
+samples and protein IDs are matrix columns. Add `--log2-transform` for positive
+linear intensities; non-positive values are written as QC-masked measurements.
 
 ## 3. Validate
 

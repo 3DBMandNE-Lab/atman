@@ -4,6 +4,7 @@ pub mod asymmetry;
 pub mod de;
 pub mod fold_change;
 pub mod ingest;
+pub mod ingest_matrix;
 pub mod matrix;
 pub mod module_de;
 pub mod module_trajectory;

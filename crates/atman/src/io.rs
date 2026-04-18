@@ -148,16 +148,24 @@ pub fn read_measurements_long(path: &Path) -> Result<Vec<MeasurementRecord>> {
     let mut out = Vec::new();
     for result in reader.records() {
         let row = result.with_context(|| format!("reading record from {:?}", path))?;
-        let abundance_raw: f64 = row[c_abund_raw].parse().context("abundance_raw parse")?;
         let unit = &row[c_unit];
         let dropped_by_qc: bool = row[c_drop].parse::<u8>().map(|v| v != 0).unwrap_or(false);
         let abund_str = &row[c_abund];
+        let abundance_raw_value: f64 = if row[c_abund_raw].is_empty() {
+            if dropped_by_qc {
+                f64::NAN
+            } else {
+                anyhow::bail!("abundance_raw parse: empty value on non-dropped row");
+            }
+        } else {
+            row[c_abund_raw].parse().context("abundance_raw parse")?
+        };
         let abundance = if abund_str.is_empty() {
-            abundance_from_unit(unit, abundance_raw)
+            abundance_from_unit(unit, abundance_raw_value)
         } else {
             abundance_from_unit(unit, abund_str.parse().context("abundance parse")?)
         };
-        let abundance_raw = abundance_from_unit(unit, abundance_raw);
+        let abundance_raw = abundance_from_unit(unit, abundance_raw_value);
         let detection_limit = if row[c_lod].is_empty() {
             DetectionLimit(None)
         } else {

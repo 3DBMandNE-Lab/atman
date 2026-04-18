@@ -95,9 +95,9 @@ Acceptance:
 
 ## Phase 2: Make Input Broad And Boring
 
-### 3. `atman ingest-matrix`
+### 3. `atman ingest-matrix` (implemented)
 
-Promote the generic adapter pattern into a supported CLI command.
+Supported CLI command for common wide protein matrices.
 
 Command:
 
@@ -135,9 +135,9 @@ Acceptance:
 - Replaces the generic Python adapter for common cases.
 - Writes `samples.tsv`, `proteins.tsv`, `measurements.tsv`, and
   `qc_measurements.tsv`.
-- Preserves extra sample covariates for OLS.
+- Preserves extra sample covariates after the canonical sample columns.
 - Can log2-transform positive linear intensities.
-- Drops or QC-masks non-positive values when log-transforming.
+- QC-masks non-positive values when log-transforming.
 
 Tests:
 

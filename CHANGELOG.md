@@ -26,6 +26,9 @@ exposed by the Rust binary.
   effective sample counts before downstream analysis.
 - **QC reporting (`report qc`).** Writes dataset, sample, protein, and
   condition-level QC/missingness TSVs for canonical Atman directories.
+- **Wide matrix ingest (`ingest-matrix`).** Converts common protein matrix
+  layouts plus metadata into canonical Atman TSVs, with optional log2
+  transformation and sample covariate preservation.
 - **Differential abundance (`de`).** Paired Student's t-test with BH-FDR,
   plus a moderated variance-shrinkage mode (`--test moderated
   --moderation-prior-df 4`).
@@ -46,7 +49,7 @@ exposed by the Rust binary.
 
 ### Notes
 
-- 81 tests in `cargo test --workspace --release`, including an integration
+- 84 tests in `cargo test --workspace --release`, including an integration
   test that diffs every output against the published Dube reference files.
 - No Python runtime is required for the Atman CLI.
 

@@ -35,6 +35,8 @@ Atman has two input modes:
 
 - **Built-in ingest:** `atman ingest --platform olink-explore-ngs` reads raw
   long-format Olink Explore NPX CSV files and writes Atman's canonical TSVs.
+- **Matrix ingest:** `atman ingest-matrix` reads common wide protein matrices
+  plus sample/protein metadata and writes Atman's canonical TSVs.
 - **Canonical TSV adapters:** any script or converter can write
   `samples.tsv`, `proteins.tsv`, `measurements.tsv`, and optionally
   `qc_measurements.tsv`. Once those files exist, Atman's downstream commands
@@ -53,6 +55,7 @@ needed, and emit Atman's TSV schema.
 
 ```text
 atman ingest             raw Olink Explore long CSV -> canonical TSVs
+atman ingest-matrix      wide protein matrix + metadata -> canonical TSVs
 atman validate           check canonical TSV schema, keys, and sample support
 atman qc                 apply QC masking rules
 atman report qc          summarize QC, missingness, and condition support
@@ -73,6 +76,13 @@ atman ingest \
     --output-dir out \
     example_data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
     example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
+
+# For already-normalized wide matrices, use atman ingest-matrix instead.
+# Example:
+# atman ingest-matrix --matrix matrix.tsv --samples sample_metadata.tsv \
+#     --orientation proteins-rows --platform diann_report \
+#     --abundance-unit log2_diann_pg_quantity --condition-col diagnosis \
+#     --assay-id-col Protein.Group --gene-col Genes --output-dir out
 
 atman qc --input-dir out --output-dir out --rule dube
 
