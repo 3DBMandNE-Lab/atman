@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 
 pub mod asymmetry;
+pub mod bootstrap;
 pub mod de;
 pub mod fold_change;
 pub mod ingest;

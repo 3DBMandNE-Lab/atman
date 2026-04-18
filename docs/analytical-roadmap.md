@@ -168,9 +168,9 @@ Acceptance:
 
 ## Phase 3: Quantify Uncertainty
 
-### 5. `atman bootstrap protein`
+### 5. `atman bootstrap protein` (implemented)
 
-Add subject-level bootstrap uncertainty for protein effects.
+Subject-level bootstrap uncertainty for protein effects.
 
 Command:
 
@@ -190,6 +190,7 @@ Outputs:
 - confidence interval
 - sign stability
 - effective sample counts
+- skip reason
 
 Acceptance:
 
@@ -197,6 +198,7 @@ Acceptance:
 - Paired mode resamples paired subjects.
 - Unpaired mode resamples within condition.
 - Seeded runs are deterministic.
+- Integration tests cover seeded unpaired output and paired resampling.
 
 ### 6. `atman bootstrap module`
 

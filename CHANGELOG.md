@@ -43,6 +43,8 @@ exposed by the Rust binary.
   over per-subject gene deltas.
 - **Module-level differential abundance (`module-de`).** Aggregate proteins
   into user-supplied modules and test at module level.
+- **Protein bootstrap (`bootstrap protein`).** Subject-level bootstrap
+  intervals and sign stability for paired or unpaired protein effects.
 
 ### Fixed
 
@@ -52,7 +54,7 @@ exposed by the Rust binary.
 
 ### Notes
 
-- 84 tests in `cargo test --workspace --release`, including an integration
+- 86 tests in `cargo test --workspace --release`, including an integration
   test that diffs every output against the published Dube reference files.
 - No Python runtime is required for the Atman CLI.
 

@@ -32,6 +32,8 @@ enum Command {
     De(commands::de::Args),
     /// Compare matched contrast pairs for provocation-dependent asymmetry.
     Asymmetry(commands::asymmetry::Args),
+    /// Bootstrap uncertainty for protein effects.
+    Bootstrap(commands::bootstrap::Args),
     /// Compute LOO robustness and ranking stability from DE outputs.
     Robustness(commands::robustness::Args),
     /// Compute module trajectory scores from per-subject delta table and modules.tsv.
@@ -54,6 +56,7 @@ fn main() -> Result<()> {
         Command::FoldChange(args) => commands::fold_change::run(args),
         Command::De(args) => commands::de::run(args),
         Command::Asymmetry(args) => commands::asymmetry::run(args),
+        Command::Bootstrap(args) => commands::bootstrap::run(args),
         Command::Robustness(args) => commands::robustness::run(args),
         Command::ModuleTrajectory(args) => commands::module_trajectory::run(args),
         Command::ModuleDe(args) => commands::module_de::run(args),

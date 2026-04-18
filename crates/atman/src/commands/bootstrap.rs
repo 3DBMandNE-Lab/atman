@@ -1,0 +1,495 @@
+use anyhow::{bail, Context, Result};
+use atman_core::Sample;
+use clap::{Args as ClapArgs, Subcommand};
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+
+use super::parse_comparisons;
+use crate::io::{atomic_write, read_measurements_long, read_proteins, read_samples};
+
+#[derive(ClapArgs, Debug)]
+pub struct Args {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Subject-level bootstrap confidence intervals for protein effects.
+    Protein(ProteinArgs),
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct ProteinArgs {
+    /// Directory containing canonical Atman TSV files.
+    #[arg(long)]
+    input_dir: PathBuf,
+
+    /// Output TSV path.
+    #[arg(long)]
+    output: PathBuf,
+
+    /// Comma-separated comparisons in A-B form.
+    #[arg(long)]
+    groups: String,
+
+    /// Bootstrap mode: welch-t for unpaired or paired-t for matched subjects.
+    #[arg(long, default_value = "welch-t")]
+    test: String,
+
+    /// Number of bootstrap replicates.
+    #[arg(long, default_value_t = 2000)]
+    n: usize,
+
+    /// Minimum subjects per group, or matched subjects in paired mode.
+    #[arg(long, default_value_t = 2)]
+    min_pairs: usize,
+
+    /// Deterministic RNG seed.
+    #[arg(long, default_value_t = 1)]
+    seed: u64,
+
+    /// Lower CI quantile.
+    #[arg(long, default_value_t = 0.025)]
+    ci_low: f64,
+
+    /// Upper CI quantile.
+    #[arg(long, default_value_t = 0.975)]
+    ci_high: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ProteinKey {
+    platform: String,
+    panel: String,
+    assay_id: String,
+    gene_symbol: String,
+}
+
+#[derive(Debug)]
+struct ProteinMeta {
+    uniprot: String,
+}
+
+#[derive(Debug)]
+struct BootstrapRow {
+    comparison: String,
+    platform: String,
+    panel: String,
+    assay_id: String,
+    gene_symbol: String,
+    uniprot: String,
+    n_a: usize,
+    n_b: usize,
+    n_pairs: usize,
+    point_effect: Option<f64>,
+    bootstrap_mean: Option<f64>,
+    ci_low: Option<f64>,
+    ci_high: Option<f64>,
+    sign_stability: Option<f64>,
+    n_bootstrap: usize,
+    skip_reason: String,
+}
+
+pub fn run(args: Args) -> Result<()> {
+    match args.command {
+        Command::Protein(args) => run_protein(args),
+    }
+}
+
+fn run_protein(args: ProteinArgs) -> Result<()> {
+    if args.test != "welch-t" && args.test != "paired-t" {
+        bail!("bootstrap protein supports --test welch-t or paired-t");
+    }
+    if args.n == 0 {
+        bail!("--n must be > 0");
+    }
+    if args.min_pairs < 2 {
+        bail!("--min-pairs must be >= 2");
+    }
+    if !(0.0..=1.0).contains(&args.ci_low)
+        || !(0.0..=1.0).contains(&args.ci_high)
+        || args.ci_low >= args.ci_high
+    {
+        bail!("CI quantiles must satisfy 0 <= ci-low < ci-high <= 1");
+    }
+
+    let comparisons = parse_comparisons(&args.groups)?;
+    let measurements_path = if args.input_dir.join("qc_measurements.tsv").exists() {
+        args.input_dir.join("qc_measurements.tsv")
+    } else {
+        args.input_dir.join("measurements.tsv")
+    };
+    let measurements = read_measurements_long(&measurements_path)?;
+    let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
+    let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
+    let sample_by_id: HashMap<&str, &Sample> =
+        samples.iter().map(|s| (s.sample_id.as_str(), s)).collect();
+
+    let mut meta: HashMap<(String, String), ProteinMeta> = HashMap::new();
+    for p in proteins {
+        meta.insert(
+            (p.platform.as_str().to_string(), p.assay_id.0),
+            ProteinMeta {
+                uniprot: p.uniprot.join(","),
+            },
+        );
+    }
+
+    let mut cells: BTreeMap<ProteinKey, BTreeMap<String, BTreeMap<String, Vec<f64>>>> =
+        BTreeMap::new();
+    for m in &measurements {
+        let Some(value) = m.effective_abundance() else {
+            continue;
+        };
+        let Some(sample) = sample_by_id.get(m.sample_id.as_str()) else {
+            continue;
+        };
+        if sample.is_control {
+            continue;
+        }
+        let Some(condition) = &sample.condition else {
+            continue;
+        };
+        let subject = sample.subject_id.as_ref().unwrap_or(&sample.sample_id);
+        let key = ProteinKey {
+            platform: m.platform.as_str().to_string(),
+            panel: m.panel.clone().unwrap_or_default(),
+            assay_id: m.assay_id.0.clone(),
+            gene_symbol: m.gene_symbol.clone().unwrap_or_default(),
+        };
+        cells
+            .entry(key)
+            .or_default()
+            .entry(condition.clone())
+            .or_default()
+            .entry(subject.clone())
+            .or_default()
+            .push(value);
+    }
+
+    let mut rng = Rng64::new(args.seed);
+    let mut rows = Vec::new();
+    for (a, b) in &comparisons {
+        let comparison = format!("{a}-{b}");
+        for (key, by_condition) in &cells {
+            let a_values = subject_means(by_condition.get(a));
+            let b_values = subject_means(by_condition.get(b));
+            let uniprot = meta
+                .get(&(key.platform.clone(), key.assay_id.clone()))
+                .map(|m| m.uniprot.clone())
+                .unwrap_or_default();
+            let row = if args.test == "paired-t" {
+                bootstrap_paired(
+                    &args,
+                    &mut rng,
+                    &comparison,
+                    key,
+                    &uniprot,
+                    &a_values,
+                    &b_values,
+                )
+            } else {
+                bootstrap_unpaired(
+                    &args,
+                    &mut rng,
+                    &comparison,
+                    key,
+                    &uniprot,
+                    &a_values,
+                    &b_values,
+                )
+            };
+            rows.push(row);
+        }
+    }
+
+    rows.sort_by(|a, b| {
+        a.comparison
+            .cmp(&b.comparison)
+            .then_with(|| a.panel.cmp(&b.panel))
+            .then_with(|| a.gene_symbol.cmp(&b.gene_symbol))
+            .then_with(|| a.assay_id.cmp(&b.assay_id))
+    });
+    write_rows(&args.output, &rows)?;
+    let computed = rows.iter().filter(|r| r.point_effect.is_some()).count();
+    eprintln!(
+        "bootstrap protein: test={} comparisons={} rows={} computed={} n={} seed={}",
+        args.test,
+        comparisons.len(),
+        rows.len(),
+        computed,
+        args.n,
+        args.seed
+    );
+    Ok(())
+}
+
+fn bootstrap_unpaired(
+    args: &ProteinArgs,
+    rng: &mut Rng64,
+    comparison: &str,
+    key: &ProteinKey,
+    uniprot: &str,
+    a_values: &BTreeMap<String, f64>,
+    b_values: &BTreeMap<String, f64>,
+) -> BootstrapRow {
+    let a: Vec<f64> = a_values.values().copied().collect();
+    let b: Vec<f64> = b_values.values().copied().collect();
+    if a.len() < args.min_pairs || b.len() < args.min_pairs {
+        return skipped_row(
+            comparison,
+            key,
+            uniprot,
+            a.len(),
+            b.len(),
+            0,
+            "insufficient_subjects",
+        );
+    }
+    let point = mean(&a) - mean(&b);
+    let mut effects = Vec::with_capacity(args.n);
+    for _ in 0..args.n {
+        let ma = bootstrap_mean(&a, rng);
+        let mb = bootstrap_mean(&b, rng);
+        effects.push(ma - mb);
+    }
+    computed_row(
+        RowContext {
+            comparison,
+            key,
+            uniprot,
+            n_a: a.len(),
+            n_b: b.len(),
+            n_pairs: 0,
+        },
+        point,
+        effects,
+        args,
+    )
+}
+
+fn bootstrap_paired(
+    args: &ProteinArgs,
+    rng: &mut Rng64,
+    comparison: &str,
+    key: &ProteinKey,
+    uniprot: &str,
+    a_values: &BTreeMap<String, f64>,
+    b_values: &BTreeMap<String, f64>,
+) -> BootstrapRow {
+    let diffs: Vec<f64> = a_values
+        .iter()
+        .filter_map(|(subject, a)| b_values.get(subject).map(|b| a - b))
+        .collect();
+    if diffs.len() < args.min_pairs {
+        return skipped_row(
+            comparison,
+            key,
+            uniprot,
+            a_values.len(),
+            b_values.len(),
+            diffs.len(),
+            "insufficient_pairs",
+        );
+    }
+    let point = mean(&diffs);
+    let mut effects = Vec::with_capacity(args.n);
+    for _ in 0..args.n {
+        effects.push(bootstrap_mean(&diffs, rng));
+    }
+    computed_row(
+        RowContext {
+            comparison,
+            key,
+            uniprot,
+            n_a: a_values.len(),
+            n_b: b_values.len(),
+            n_pairs: diffs.len(),
+        },
+        point,
+        effects,
+        args,
+    )
+}
+
+struct RowContext<'a> {
+    comparison: &'a str,
+    key: &'a ProteinKey,
+    uniprot: &'a str,
+    n_a: usize,
+    n_b: usize,
+    n_pairs: usize,
+}
+
+fn computed_row(
+    ctx: RowContext<'_>,
+    point: f64,
+    mut effects: Vec<f64>,
+    args: &ProteinArgs,
+) -> BootstrapRow {
+    let boot_mean = mean(&effects);
+    let sign_stability = sign_stability(point, &effects);
+    effects.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    BootstrapRow {
+        comparison: ctx.comparison.to_string(),
+        platform: ctx.key.platform.clone(),
+        panel: ctx.key.panel.clone(),
+        assay_id: ctx.key.assay_id.clone(),
+        gene_symbol: ctx.key.gene_symbol.clone(),
+        uniprot: ctx.uniprot.to_string(),
+        n_a: ctx.n_a,
+        n_b: ctx.n_b,
+        n_pairs: ctx.n_pairs,
+        point_effect: Some(point),
+        bootstrap_mean: Some(boot_mean),
+        ci_low: Some(quantile_sorted(&effects, args.ci_low)),
+        ci_high: Some(quantile_sorted(&effects, args.ci_high)),
+        sign_stability: Some(sign_stability),
+        n_bootstrap: effects.len(),
+        skip_reason: String::new(),
+    }
+}
+
+fn skipped_row(
+    comparison: &str,
+    key: &ProteinKey,
+    uniprot: &str,
+    n_a: usize,
+    n_b: usize,
+    n_pairs: usize,
+    reason: &str,
+) -> BootstrapRow {
+    BootstrapRow {
+        comparison: comparison.to_string(),
+        platform: key.platform.clone(),
+        panel: key.panel.clone(),
+        assay_id: key.assay_id.clone(),
+        gene_symbol: key.gene_symbol.clone(),
+        uniprot: uniprot.to_string(),
+        n_a,
+        n_b,
+        n_pairs,
+        point_effect: None,
+        bootstrap_mean: None,
+        ci_low: None,
+        ci_high: None,
+        sign_stability: None,
+        n_bootstrap: 0,
+        skip_reason: reason.to_string(),
+    }
+}
+
+fn subject_means(input: Option<&BTreeMap<String, Vec<f64>>>) -> BTreeMap<String, f64> {
+    input
+        .into_iter()
+        .flat_map(|m| m.iter())
+        .map(|(subject, values)| (subject.clone(), mean(values)))
+        .collect()
+}
+
+fn mean(values: &[f64]) -> f64 {
+    values.iter().sum::<f64>() / values.len() as f64
+}
+
+fn bootstrap_mean(values: &[f64], rng: &mut Rng64) -> f64 {
+    let mut total = 0.0;
+    for _ in 0..values.len() {
+        total += values[rng.gen_range(values.len())];
+    }
+    total / values.len() as f64
+}
+
+fn quantile_sorted(values: &[f64], q: f64) -> f64 {
+    if values.is_empty() {
+        return f64::NAN;
+    }
+    let idx = ((values.len() - 1) as f64 * q).round() as usize;
+    values[idx.min(values.len() - 1)]
+}
+
+fn sign_stability(point: f64, effects: &[f64]) -> f64 {
+    if point > 0.0 {
+        effects.iter().filter(|v| **v > 0.0).count() as f64 / effects.len() as f64
+    } else if point < 0.0 {
+        effects.iter().filter(|v| **v < 0.0).count() as f64 / effects.len() as f64
+    } else {
+        effects.iter().filter(|v| **v == 0.0).count() as f64 / effects.len() as f64
+    }
+}
+
+fn write_rows(path: &Path, rows: &[BootstrapRow]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating output dir {:?}", parent))?;
+    }
+    let mut buf = String::from(
+        "comparison\tplatform\tpanel\tassay_id\tgene_symbol\tuniprot\tn_a\tn_b\tn_pairs\tpoint_effect\tbootstrap_mean\tci_low\tci_high\tsign_stability\tn_bootstrap\tskip_reason\n",
+    );
+    for r in rows {
+        buf.push_str(&r.comparison);
+        buf.push('\t');
+        buf.push_str(&r.platform);
+        buf.push('\t');
+        buf.push_str(&r.panel);
+        buf.push('\t');
+        buf.push_str(&r.assay_id);
+        buf.push('\t');
+        buf.push_str(&r.gene_symbol);
+        buf.push('\t');
+        buf.push_str(&r.uniprot);
+        buf.push('\t');
+        buf.push_str(&r.n_a.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_b.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_pairs.to_string());
+        buf.push('\t');
+        push_opt(&mut buf, r.point_effect);
+        buf.push('\t');
+        push_opt(&mut buf, r.bootstrap_mean);
+        buf.push('\t');
+        push_opt(&mut buf, r.ci_low);
+        buf.push('\t');
+        push_opt(&mut buf, r.ci_high);
+        buf.push('\t');
+        push_opt(&mut buf, r.sign_stability);
+        buf.push('\t');
+        buf.push_str(&r.n_bootstrap.to_string());
+        buf.push('\t');
+        buf.push_str(&r.skip_reason);
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+fn push_opt(buf: &mut String, value: Option<f64>) {
+    if let Some(value) = value {
+        buf.push_str(&format!("{value}"));
+    }
+}
+
+struct Rng64 {
+    state: u64,
+}
+
+impl Rng64 {
+    fn new(seed: u64) -> Self {
+        Self {
+            state: if seed == 0 { 0x9e3779b97f4a7c15 } else { seed },
+        }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.state = x;
+        x.wrapping_mul(0x2545f4914f6cdd1d)
+    }
+
+    fn gen_range(&mut self, upper: usize) -> usize {
+        (self.next_u64() as usize) % upper
+    }
+}

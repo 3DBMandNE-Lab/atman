@@ -62,6 +62,7 @@ atman report qc          summarize QC, missingness, and condition support
 atman matrix             canonical long TSV -> per-panel wide NPX CSVs
 atman fold-change        compute per-panel log2 fold-change tables
 atman de                 paired, moderated, Welch, or OLS differential abundance
+atman bootstrap protein  subject-level bootstrap intervals for protein effects
 atman asymmetry          compare matched contrast pairs
 atman robustness         summarize rerun/LOO rank and sign stability
 atman module-trajectory  score user-defined modules from per-subject deltas
@@ -108,6 +109,14 @@ atman de \
     --test paired-t --paired-by participant \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
     --min-pairs 5
+
+atman bootstrap protein \
+    --input-dir out \
+    --groups "PT2-PT1" \
+    --test paired-t \
+    --n 2000 \
+    --seed 1 \
+    --output out/protein_bootstrap.tsv
 ```
 
 Common outputs:
@@ -119,6 +128,7 @@ Common outputs:
 - `<panel>_npx.csv`
 - `<panel>_log2_fc.csv`
 - `de_results.tsv`, `de_report.tsv`
+- `protein_bootstrap.tsv`
 
 ## Reproducibility Check
 

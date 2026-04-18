@@ -19,8 +19,8 @@ atman --help
 ```
 
 Expected: help text listing `ingest`, `ingest-matrix`, `validate`, `qc`,
-`report`, `matrix`, `fold-change`, `de`, `asymmetry`, `robustness`,
-`module-trajectory`, and `module-de`.
+`report`, `matrix`, `fold-change`, `de`, `bootstrap`, `asymmetry`,
+`robustness`, `module-trajectory`, and `module-de`.
 
 Run the test suite to confirm the reproduction base is intact:
 
@@ -174,7 +174,27 @@ atman de --input-dir out --output-dir out_mod \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" --min-pairs 5
 ```
 
-## 8. Asymmetry
+## 8. Protein bootstrap
+
+Subject-level bootstrap uncertainty for protein effects:
+
+```bash
+atman bootstrap protein \
+    --input-dir out \
+    --groups "PT2-PT1" \
+    --test paired-t \
+    --n 2000 \
+    --seed 1 \
+    --output out/protein_bootstrap.tsv
+```
+
+For unpaired designs, use `--test welch-t`. The command resamples subjects,
+not measurement rows. In paired mode, only matched subjects are resampled.
+
+Output columns include point effect, bootstrap mean effect, confidence
+interval, sign stability, effective sample counts, and skip reason.
+
+## 9. Asymmetry
 
 ```bash
 atman asymmetry \
@@ -185,7 +205,7 @@ atman asymmetry \
 
 Emits per-pair asymmetry metrics (challenge-vs-rest) at the contrast-family level.
 
-## 9. Robustness
+## 10. Robustness
 
 Robustness consumes the baseline DE table plus one or more rerun DE tables.
 The example below shows the command shape using placeholder LOO outputs:
