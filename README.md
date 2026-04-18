@@ -112,6 +112,15 @@ atman de \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
     --min-pairs 5
 
+# Covariate-adjusted OLS with formula-style design.
+atman de \
+    --input-dir out --output-dir out_ols \
+    --test ols \
+    --groups "Case-Control" \
+    --design "~ condition + age + sex + batch" \
+    --contrast conditionCase \
+    --min-pairs 5
+
 atman bootstrap protein \
     --input-dir out \
     --groups "PT2-PT1" \
@@ -146,7 +155,8 @@ Common outputs:
   `report/condition_counts.tsv`
 - `<panel>_npx.csv`
 - `<panel>_log2_fc.csv`
-- `de_results.tsv`, `de_report.tsv`
+- `de_results.tsv`, `de_report.tsv`; OLS also writes `de_covariates.tsv` and
+  `de_design.tsv`
 - `protein_bootstrap.tsv`, `module_bootstrap.tsv`
 - `null/null_summary.tsv`, `null/empirical_p.tsv`
 

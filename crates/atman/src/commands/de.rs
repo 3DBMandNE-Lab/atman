@@ -44,10 +44,23 @@ pub struct Args {
     #[arg(long)]
     covariates: Option<String>,
 
+    /// Formula-style design for `--test ols`, for example
+    /// `~ condition + age + sex + batch`. The intercept is included
+    /// automatically. `condition` is the Atman sample condition; other terms
+    /// are read from samples.tsv.
+    #[arg(long)]
+    design: Option<String>,
+
+    /// Coefficient to test for `--test ols --design`, for example
+    /// `conditionCase`. If omitted with --groups, Atman uses the comparison
+    /// coefficient for each `A-B` group.
+    #[arg(long)]
+    contrast: Option<String>,
+
     /// Comma-separated comparisons in `A-B` form. Each is a separate
     /// hypothesis family for FDR. Example: "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2".
     #[arg(long)]
-    groups: String,
+    groups: Option<String>,
 
     /// Minimum number of samples required per group for a test to run.
     /// For paired tests this is the number of matched pairs; for `welch-t`
@@ -87,19 +100,32 @@ pub fn run(args: Args) -> Result<()> {
     {
         anyhow::bail!("moderation-prior-df must be > 0 for moderated test");
     }
-    if args.test != "ols" && args.covariates.is_some() {
-        anyhow::bail!("--covariates is only valid with --test ols");
+    if args.test != "ols"
+        && (args.covariates.is_some() || args.design.is_some() || args.contrast.is_some())
+    {
+        anyhow::bail!("--covariates, --design, and --contrast are only valid with --test ols");
+    }
+    if args.covariates.is_some() && args.design.is_some() {
+        anyhow::bail!("use either --covariates or --design, not both");
     }
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
-    // Parse comparisons.
-    let comparisons = parse_comparisons(&args.groups)?;
+    // Parse comparisons after samples are available below; formula OLS can
+    // infer the reference condition from --contrast when exactly two
+    // non-control conditions are present.
 
     // Read inputs.
     let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
+    let comparisons = resolve_comparisons(
+        args.groups.as_deref(),
+        &samples,
+        args.test.as_str(),
+        args.design.as_deref(),
+        args.contrast.as_deref(),
+    )?;
 
     // Lookup: sample_id → (subject, condition, is_control)
     let sample_by_id: HashMap<&str, &atman_core::Sample> =
@@ -172,28 +198,15 @@ pub fn run(args: Args) -> Result<()> {
             .push((subject, abundance));
     }
 
-    // Covariate setup for `--test ols`. Parse the comma list, read
-    // samples.tsv as raw records to pull arbitrary columns by header name,
-    // then classify each as numeric or categorical. Categorical columns get
-    // one-hot-encoded later, per comparison, after the sample subset is
-    // known.
-    let (cov_names, cov_raw) = if args.test == "ols" {
-        let names: Vec<String> = args
-            .covariates
-            .as_deref()
-            .unwrap_or("")
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let raw = if names.is_empty() {
-            HashMap::new()
-        } else {
-            read_covariate_columns(&args.input_dir.join("samples.tsv"), &names)?
-        };
-        (names, raw)
+    let ols_setup = if args.test == "ols" {
+        Some(build_ols_setup(
+            &args.input_dir.join("samples.tsv"),
+            args.design.as_deref(),
+            args.covariates.as_deref(),
+            args.contrast.as_deref(),
+        )?)
     } else {
-        (Vec::new(), HashMap::new())
+        None
     };
 
     // For each comparison, run paired_t on every (panel, gene) and collect.
@@ -208,6 +221,7 @@ pub fn run(args: Args) -> Result<()> {
     // gene, covariate) with beta, se, t, p for the non-intercept and
     // non-group columns.
     let mut covariate_rows: Vec<CovariateRow> = Vec::new();
+    let mut design_rows: Vec<DesignReportRow> = Vec::new();
 
     for (comp_a, comp_b) in &comparisons {
         let comparison_label = format!("{}-{}", comp_a, comp_b);
@@ -219,9 +233,12 @@ pub fn run(args: Args) -> Result<()> {
         // this comparison so every per-protein fit reuses it, only swapping
         // the y vector (with complete-case filtering on non-finite abundance).
         let ols_design: Option<OlsDesign> = if args.test == "ols" {
-            Some(build_ols_design(
-                &samples, comp_a, comp_b, &cov_names, &cov_raw,
-            )?)
+            let setup = ols_setup
+                .as_ref()
+                .expect("ols_setup populated when test=ols");
+            let design = build_ols_design(&samples, comp_a, comp_b, setup)?;
+            design_rows.extend(design.report_rows.clone());
+            Some(design)
         } else {
             None
         };
@@ -414,11 +431,14 @@ pub fn run(args: Args) -> Result<()> {
     if args.test == "ols" && !covariate_rows.is_empty() {
         write_covariate_rows(&args.output_dir.join("de_covariates.tsv"), &covariate_rows)?;
     }
+    if args.test == "ols" {
+        write_design_rows(&args.output_dir.join("de_design.tsv"), &design_rows)?;
+    }
 
     let computed = all_rows.iter().filter(|r| r.p_value.is_some()).count();
     let skipped = all_rows.len() - computed;
     eprintln!(
-        "de: test={} comparisons={} rows={} computed={} skipped={} min_pairs={} prior_df={} covariates={}",
+        "de: test={} comparisons={} rows={} computed={} skipped={} min_pairs={} prior_df={} design={}",
         args.test,
         comparisons.len(),
         all_rows.len(),
@@ -426,7 +446,10 @@ pub fn run(args: Args) -> Result<()> {
         skipped,
         args.min_pairs,
         args.moderation_prior_df,
-        cov_names.join(","),
+        ols_setup
+            .as_ref()
+            .map(|s| s.label.as_str())
+            .unwrap_or(""),
     );
     Ok(())
 }
@@ -510,6 +533,161 @@ fn paired_variance_from_row(row: &DeResultRow) -> Option<f64> {
 // OLS (covariate-adjusted) helpers
 // -----------------------------------------------------------------
 
+#[derive(Debug, Clone)]
+enum DesignTerm {
+    Condition,
+    Covariate(String),
+}
+
+struct OlsSetup {
+    terms: Vec<DesignTerm>,
+    cov_names: Vec<String>,
+    cov_raw: HashMap<String, Vec<Option<String>>>,
+    contrast: Option<String>,
+    label: String,
+}
+
+fn build_ols_setup(
+    samples_path: &Path,
+    design: Option<&str>,
+    covariates: Option<&str>,
+    contrast: Option<&str>,
+) -> Result<OlsSetup> {
+    if let Some(formula) = design {
+        let terms = parse_design_terms(formula)?;
+        if !terms.iter().any(|t| matches!(t, DesignTerm::Condition)) {
+            anyhow::bail!("--design must include `condition` for DE contrasts");
+        }
+        let cov_names = covariate_names_from_terms(&terms);
+        let cov_raw = if cov_names.is_empty() {
+            HashMap::new()
+        } else {
+            read_covariate_columns(samples_path, &cov_names)?
+        };
+        Ok(OlsSetup {
+            terms,
+            cov_names,
+            cov_raw,
+            contrast: contrast.map(str::to_string),
+            label: formula.to_string(),
+        })
+    } else {
+        let cov_names: Vec<String> = covariates
+            .unwrap_or("")
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let cov_raw = if cov_names.is_empty() {
+            HashMap::new()
+        } else {
+            read_covariate_columns(samples_path, &cov_names)?
+        };
+        let mut terms = vec![DesignTerm::Condition];
+        terms.extend(cov_names.iter().cloned().map(DesignTerm::Covariate));
+        Ok(OlsSetup {
+            terms,
+            cov_names,
+            cov_raw,
+            contrast: contrast.map(str::to_string),
+            label: if covariates.unwrap_or("").trim().is_empty() {
+                "~ condition".to_string()
+            } else {
+                format!("~ condition + {}", covariates.unwrap_or("").trim())
+            },
+        })
+    }
+}
+
+fn parse_design_terms(formula: &str) -> Result<Vec<DesignTerm>> {
+    let formula = formula.trim();
+    let rhs = formula
+        .strip_prefix('~')
+        .ok_or_else(|| anyhow!("--design must start with `~`"))?
+        .trim();
+    if rhs.is_empty() {
+        anyhow::bail!("--design must contain at least `condition`");
+    }
+    let mut terms = Vec::new();
+    let mut seen = BTreeSet::new();
+    for raw in rhs.split('+') {
+        let term = raw.trim();
+        if term.is_empty() {
+            anyhow::bail!("empty term in --design");
+        }
+        if term == "1" {
+            continue;
+        }
+        if term == "0" || term == "-1" {
+            anyhow::bail!("intercept removal is not supported; Atman includes an intercept");
+        }
+        if !seen.insert(term.to_string()) {
+            anyhow::bail!("duplicate term {:?} in --design", term);
+        }
+        if term == "condition" {
+            terms.push(DesignTerm::Condition);
+        } else {
+            terms.push(DesignTerm::Covariate(term.to_string()));
+        }
+    }
+    if terms.is_empty() {
+        anyhow::bail!("--design must contain at least `condition`");
+    }
+    Ok(terms)
+}
+
+fn covariate_names_from_terms(terms: &[DesignTerm]) -> Vec<String> {
+    terms
+        .iter()
+        .filter_map(|t| match t {
+            DesignTerm::Condition => None,
+            DesignTerm::Covariate(name) => Some(name.clone()),
+        })
+        .collect()
+}
+
+fn resolve_comparisons(
+    groups: Option<&str>,
+    samples: &[Sample],
+    test: &str,
+    design: Option<&str>,
+    contrast: Option<&str>,
+) -> Result<Vec<(String, String)>> {
+    if let Some(groups) = groups {
+        return parse_comparisons(groups);
+    }
+    if test != "ols" || design.is_none() {
+        anyhow::bail!("--groups is required unless using --test ols --design with --contrast");
+    }
+    let contrast =
+        contrast.ok_or_else(|| anyhow!("--contrast is required when --groups is omitted"))?;
+    let comp_a = contrast
+        .strip_prefix("condition")
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow!("can only infer --groups from condition contrasts like conditionCase")
+        })?;
+    let conditions: BTreeSet<String> = samples
+        .iter()
+        .filter(|s| !s.is_control)
+        .filter_map(|s| s.condition.clone())
+        .collect();
+    if !conditions.contains(comp_a) {
+        anyhow::bail!(
+            "contrast condition {:?} is not present in samples.tsv",
+            comp_a
+        );
+    }
+    let others: Vec<String> = conditions.into_iter().filter(|c| c != comp_a).collect();
+    if others.len() != 1 {
+        anyhow::bail!(
+            "cannot infer --groups for contrast {}; provide --groups A-B when more than two conditions are present",
+            contrast
+        );
+    }
+    Ok(vec![(comp_a.to_string(), others[0].clone())])
+}
+
 /// Covariate kind determined at column-classification time. `Numeric`
 /// columns are passed through as f64. `Categorical` columns are one-hot
 /// encoded using the supplied levels; the first element of `levels` is the
@@ -521,14 +699,6 @@ enum CovKind {
 }
 
 impl CovKind {
-    /// Number of design columns this covariate contributes.
-    fn width(&self) -> usize {
-        match self {
-            CovKind::Numeric => 1,
-            CovKind::Categorical { levels } => levels.len().saturating_sub(1),
-        }
-    }
-
     /// Human label for each design column this covariate contributes.
     /// Used for the header of de_covariates.tsv.
     fn col_labels(&self, base: &str) -> Vec<String> {
@@ -537,7 +707,7 @@ impl CovKind {
             CovKind::Categorical { levels } => levels
                 .iter()
                 .skip(1)
-                .map(|lvl| format!("{}={}", base, lvl))
+                .map(|lvl| format!("{}{}", base, lvl))
                 .collect(),
         }
     }
@@ -554,6 +724,7 @@ struct OlsDesign {
     rows: Vec<(String, Vec<f64>)>,
     group_col: usize,
     design_labels: Vec<String>,
+    report_rows: Vec<DesignReportRow>,
 }
 
 /// Row shape for de_covariates.tsv — per (comparison × protein × covariate
@@ -569,6 +740,17 @@ struct CovariateRow {
     p_value: f64,
     df: f64,
     n: usize,
+}
+
+#[derive(Clone)]
+struct DesignReportRow {
+    comparison: String,
+    sample_id: String,
+    condition: String,
+    included: bool,
+    drop_reason: String,
+    columns: String,
+    values: String,
 }
 
 /// Raw-read `samples.tsv` and return `sample_id → [cov_value]` for the
@@ -656,9 +838,11 @@ fn build_ols_design(
     samples: &[Sample],
     comp_a: &str,
     comp_b: &str,
-    cov_names: &[String],
-    cov_raw: &HashMap<String, Vec<Option<String>>>,
+    setup: &OlsSetup,
 ) -> Result<OlsDesign> {
+    let comparison = format!("{comp_a}-{comp_b}");
+    let condition_label = format!("condition{comp_a}");
+
     // Pick samples in either group.
     let in_group: Vec<&Sample> = samples
         .iter()
@@ -671,78 +855,212 @@ fn build_ols_design(
         })
         .collect();
 
-    // Pull covariate values aligned with `in_group`; drop samples that
-    // are missing any covariate.
+    // Pull covariate values aligned with `in_group`; drop samples missing
+    // any formula covariate before classifying/encoding.
     let mut kept: Vec<(&Sample, Vec<Option<String>>)> = Vec::new();
+    let mut report_rows = Vec::new();
     for s in &in_group {
-        let vals = if cov_names.is_empty() {
+        let vals = if setup.cov_names.is_empty() {
             Vec::new()
         } else {
-            match cov_raw.get(&s.sample_id) {
+            match setup.cov_raw.get(&s.sample_id) {
                 Some(v) => v.clone(),
-                None => continue,
+                None => {
+                    report_rows.push(DesignReportRow {
+                        comparison: comparison.clone(),
+                        sample_id: s.sample_id.clone(),
+                        condition: s.condition.clone().unwrap_or_default(),
+                        included: false,
+                        drop_reason: "missing_covariate_row".to_string(),
+                        columns: String::new(),
+                        values: String::new(),
+                    });
+                    continue;
+                }
             }
         };
         if vals.iter().any(|v| v.is_none()) {
+            report_rows.push(DesignReportRow {
+                comparison: comparison.clone(),
+                sample_id: s.sample_id.clone(),
+                condition: s.condition.clone().unwrap_or_default(),
+                included: false,
+                drop_reason: "missing_covariate".to_string(),
+                columns: String::new(),
+                values: String::new(),
+            });
             continue;
         }
         kept.push((s, vals));
     }
 
     // Classify covariate kinds from the retained samples.
-    let kinds = classify_covariates(
-        cov_names,
+    let cov_kinds = classify_covariates(
+        &setup.cov_names,
         &kept.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
     );
 
-    // Assemble encoded rows: [1 (intercept), group (0/1 for comp_b/comp_a), encoded covariate columns...].
-    // We encode group = 1 when the sample's condition is comp_a and 0 when
-    // comp_b so `beta_group` is the effect of being in `comp_a` relative to
-    // `comp_b` — i.e., positive β means comp_a is higher, matching the
-    // paired-t / welch-t convention where `mean_diff = mean_a − mean_b`.
+    let mut design_labels = vec!["(Intercept)".to_string()];
+    for term in &setup.terms {
+        match term {
+            DesignTerm::Condition => design_labels.push(condition_label.clone()),
+            DesignTerm::Covariate(name) => {
+                let idx = cov_index(&setup.cov_names, name)?;
+                design_labels.extend(cov_kinds[idx].col_labels(name));
+            }
+        }
+    }
+    let contrast = setup
+        .contrast
+        .as_deref()
+        .unwrap_or(condition_label.as_str());
+    let group_col = design_labels
+        .iter()
+        .position(|label| label == contrast)
+        .ok_or_else(|| {
+            anyhow!(
+                "contrast {:?} not found in design columns: {}",
+                contrast,
+                design_labels.join(",")
+            )
+        })?;
+
     let mut rows: Vec<(String, Vec<f64>)> = Vec::with_capacity(kept.len());
-    for (s, vals) in &kept {
-        let mut row: Vec<f64> =
-            Vec::with_capacity(2 + kinds.iter().map(|k| k.width()).sum::<usize>());
+    for (s, vals) in kept {
+        let mut row: Vec<f64> = Vec::with_capacity(design_labels.len());
         row.push(1.0);
-        row.push(if s.condition.as_deref() == Some(comp_a) {
-            1.0
-        } else {
-            0.0
-        });
-        for (i, kind) in kinds.iter().enumerate() {
-            let v = vals[i]
-                .as_ref()
-                .expect("missing covariate filtered out above");
-            match kind {
-                CovKind::Numeric => {
-                    row.push(v.parse::<f64>().unwrap_or(f64::NAN));
+        for term in &setup.terms {
+            match term {
+                DesignTerm::Condition => {
+                    row.push(if s.condition.as_deref() == Some(comp_a) {
+                        1.0
+                    } else {
+                        0.0
+                    });
                 }
-                CovKind::Categorical { levels } => {
-                    // one-hot drop-first
-                    for lvl in levels.iter().skip(1) {
-                        row.push(if v == lvl { 1.0 } else { 0.0 });
-                    }
+                DesignTerm::Covariate(name) => {
+                    let idx = cov_index(&setup.cov_names, name)?;
+                    push_encoded_covariate(&mut row, name, &cov_kinds[idx], &vals[idx])?;
                 }
             }
         }
+        report_rows.push(DesignReportRow {
+            comparison: comparison.clone(),
+            sample_id: s.sample_id.clone(),
+            condition: s.condition.clone().unwrap_or_default(),
+            included: true,
+            drop_reason: String::new(),
+            columns: design_labels.join(","),
+            values: row
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        });
         rows.push((s.sample_id.clone(), row));
     }
-
-    // Column labels for reporting.
-    let mut design_labels = vec![
-        "(Intercept)".to_string(),
-        format!("{}_vs_{}", comp_a, comp_b),
-    ];
-    for (name, kind) in cov_names.iter().zip(kinds.iter()) {
-        design_labels.extend(kind.col_labels(name));
-    }
+    ensure_full_rank(&rows, &design_labels, &comparison)?;
 
     Ok(OlsDesign {
         rows,
-        group_col: 1,
+        group_col,
         design_labels,
+        report_rows,
     })
+}
+
+fn cov_index(names: &[String], name: &str) -> Result<usize> {
+    names
+        .iter()
+        .position(|n| n == name)
+        .ok_or_else(|| anyhow!("internal error: missing covariate {:?}", name))
+}
+
+fn push_encoded_covariate(
+    row: &mut Vec<f64>,
+    name: &str,
+    kind: &CovKind,
+    value: &Option<String>,
+) -> Result<()> {
+    let v = value
+        .as_ref()
+        .expect("missing covariate filtered out above");
+    match kind {
+        CovKind::Numeric => {
+            let parsed = v
+                .parse::<f64>()
+                .with_context(|| format!("numeric covariate {:?} contains {:?}", name, v))?;
+            row.push(parsed);
+        }
+        CovKind::Categorical { levels } => {
+            for lvl in levels.iter().skip(1) {
+                row.push(if v == lvl { 1.0 } else { 0.0 });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_full_rank(
+    rows: &[(String, Vec<f64>)],
+    labels: &[String],
+    comparison: &str,
+) -> Result<()> {
+    let rank = matrix_rank(&rows.iter().map(|(_, row)| row.clone()).collect::<Vec<_>>());
+    if rank < labels.len() {
+        anyhow::bail!(
+            "singular design matrix for {comparison}: rank {} < {} columns ({})",
+            rank,
+            labels.len(),
+            labels.join(",")
+        );
+    }
+    Ok(())
+}
+
+fn matrix_rank(rows: &[Vec<f64>]) -> usize {
+    if rows.is_empty() {
+        return 0;
+    }
+    let mut a = rows.to_vec();
+    let n_rows = a.len();
+    let n_cols = a[0].len();
+    let mut rank = 0;
+    let eps = 1e-10;
+    for col in 0..n_cols {
+        let pivot = (rank..n_rows).max_by(|&i, &j| {
+            a[i][col]
+                .abs()
+                .partial_cmp(&a[j][col].abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let Some(pivot) = pivot else {
+            continue;
+        };
+        if a[pivot][col].abs() <= eps {
+            continue;
+        }
+        a.swap(rank, pivot);
+        let pivot_value = a[rank][col];
+        for value in &mut a[rank][col..n_cols] {
+            *value /= pivot_value;
+        }
+        let pivot_tail = a[rank][col..n_cols].to_vec();
+        for (r, row) in a.iter_mut().enumerate().take(n_rows) {
+            if r == rank {
+                continue;
+            }
+            let factor = row[col];
+            for (value, pivot_value) in row[col..n_cols].iter_mut().zip(pivot_tail.iter()) {
+                *value -= factor * pivot_value;
+            }
+        }
+        rank += 1;
+        if rank == n_rows {
+            break;
+        }
+    }
+    rank
 }
 
 /// Raw per-group means of the response within the fitted rows. Used to
@@ -844,6 +1162,24 @@ fn write_covariate_rows(path: &Path, rows: &[CovariateRow]) -> Result<()> {
             r.p_value,
             r.df,
             r.n,
+        ));
+    }
+    crate::io::atomic_write(path, buf.as_bytes())
+}
+
+fn write_design_rows(path: &Path, rows: &[DesignReportRow]) -> Result<()> {
+    let mut buf =
+        String::from("comparison\tsample_id\tcondition\tincluded\tdrop_reason\tcolumns\tvalues\n");
+    for r in rows {
+        buf.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            r.comparison,
+            r.sample_id,
+            r.condition,
+            if r.included { 1 } else { 0 },
+            r.drop_reason,
+            r.columns,
+            r.values,
         ));
     }
     crate::io::atomic_write(path, buf.as_bytes())

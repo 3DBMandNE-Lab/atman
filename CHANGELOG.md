@@ -50,6 +50,9 @@ exposed by the Rust binary.
 - **Null calibration (`null`).** Label permutation for unpaired Welch tests and
   paired sign flips for matched designs, with contrast-level null summaries and
   per-protein empirical p-values.
+- **Formula OLS (`de --test ols --design`).** Formula-style covariate-adjusted
+  linear models with explicit contrasts, design-matrix reporting, and
+  compatibility with the existing `--covariates` shortcut.
 
 ### Fixed
 

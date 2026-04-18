@@ -174,6 +174,22 @@ atman de --input-dir out --output-dir out_mod \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" --min-pairs 5
 ```
 
+Covariate-adjusted OLS uses a formula-style design. `condition` is the Atman
+sample condition; other terms are read from `samples.tsv`.
+
+```bash
+atman de --input-dir out --output-dir out_ols \
+    --test ols \
+    --groups "Case-Control" \
+    --design "~ condition + age + sex + batch" \
+    --contrast conditionCase \
+    --min-pairs 5
+```
+
+OLS writes `de_results.tsv`, `de_report.tsv`, `de_covariates.tsv`, and
+`de_design.tsv`. The existing `--covariates age,sex,batch` shortcut remains
+available and expands to `~ condition + age + sex + batch`.
+
 ## 8. Protein bootstrap
 
 Subject-level bootstrap uncertainty for protein effects:

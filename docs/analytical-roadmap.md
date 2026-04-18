@@ -257,7 +257,7 @@ Acceptance:
 
 ## Phase 4: Better Models
 
-### 8. Formula-Based OLS
+### 8. Formula-Based OLS (implemented)
 
 Replace the current covariate list with a formula interface while preserving
 the existing `--covariates` path as a compatibility shortcut.
@@ -276,12 +276,16 @@ Capabilities:
 - categorical covariates with reference level
 - missing covariate complete-case handling
 - clear design-matrix report
+- `--covariates` compatibility shortcut expands to formula-style OLS
 
 Acceptance:
 
 - Reproduces current OLS output for equivalent designs.
 - Emits `de_covariates.tsv` with stable coefficient names.
 - Fails clearly on singular designs.
+- Emits `de_design.tsv`.
+- Integration tests cover formula/shortcut equivalence, inferred two-condition
+  contrasts, and singular design refusal.
 
 ### 9. Mixed-Effects Models
 
