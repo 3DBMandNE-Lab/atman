@@ -147,7 +147,7 @@ Tests:
 - covariate preservation fixture
 - failure on unmatched sample IDs
 
-### 4. Adapter Examples
+### 4. Adapter Examples (implemented)
 
 Keep `adapters/` as examples and templates for source-specific parsing that is
 too irregular for `ingest-matrix`.

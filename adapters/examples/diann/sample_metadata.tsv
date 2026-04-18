@@ -1,0 +1,5 @@
+sample_id	subject_id	condition
+DIA_C1	DIA_C1	Control
+DIA_C2	DIA_C2	Control
+DIA_K1	DIA_K1	Case
+DIA_K2	DIA_K2	Case

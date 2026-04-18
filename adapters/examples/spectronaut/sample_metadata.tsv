@@ -1,0 +1,5 @@
+sample_id	subject_id	condition	batch
+SN_C1	SN_C1	Control	1
+SN_C2	SN_C2	Control	1
+SN_K1	SN_K1	Case	2
+SN_K2	SN_K2	Case	2

@@ -58,7 +58,39 @@ Unknown units are accepted as `raw` by the Rust reader. For differential
 abundance, use a scale where additive differences are meaningful. For most
 linear intensity exports, log2-transform before writing the TSVs.
 
-## Generic Wide-Matrix Adapter
+## Built-In Matrix Ingest
+
+For common wide matrices, prefer the Rust CLI:
+
+```bash
+atman ingest-matrix \
+  --matrix pg_matrix.tsv \
+  --samples sample_metadata.tsv \
+  --output-dir out_ms \
+  --platform diann_report \
+  --abundance-unit log2_diann_pg_quantity \
+  --orientation proteins-rows \
+  --assay-id-col Protein.Group \
+  --gene-col Genes \
+  --uniprot-col Protein.Ids \
+  --sample-id-col sample_id \
+  --condition-col diagnosis \
+  --subject-id-col participant_id \
+  --log2-transform
+```
+
+Then validate and run Atman:
+
+```bash
+atman validate --input-dir out_ms --groups Case-Control --min-pairs 2
+atman de --input-dir out_ms --output-dir out_ms \
+  --test welch-t --groups Case-Control --min-pairs 2
+```
+
+See `examples/` for tiny synthetic fixtures covering Spectronaut, DIA-NN,
+MaxQuant/LFQ, and SomaScan-style matrices.
+
+## Python Wide-Matrix Adapter
 
 Use `generic/wide_matrix_to_atman.py` when you have:
 
@@ -88,6 +120,7 @@ python adapters/generic/wide_matrix_to_atman.py \
 Then run Atman on the output directory:
 
 ```bash
+atman validate --input-dir out_ms --groups Case-Control --min-pairs 5
 atman de --input-dir out_ms --output-dir out_ms \
   --test welch-t --groups Case-Control --min-pairs 5
 ```

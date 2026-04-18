@@ -1,0 +1,5 @@
+sample_id	subject_id	condition
+MQ_C1	MQ_C1	Control
+MQ_C2	MQ_C2	Control
+MQ_K1	MQ_K1	Case
+MQ_K2	MQ_K2	Case

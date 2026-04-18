@@ -29,6 +29,9 @@ exposed by the Rust binary.
 - **Wide matrix ingest (`ingest-matrix`).** Converts common protein matrix
   layouts plus metadata into canonical Atman TSVs, with optional log2
   transformation and sample covariate preservation.
+- **Adapter examples.** Tiny synthetic Spectronaut, DIA-NN, MaxQuant/LFQ, and
+  SomaScan-style fixtures demonstrate `ingest-matrix` mappings and validate
+  cleanly.
 - **Differential abundance (`de`).** Paired Student's t-test with BH-FDR,
   plus a moderated variance-shrinkage mode (`--test moderated
   --moderation-prior-df 4`).

@@ -1,0 +1,5 @@
+sample_id	subject_id	condition	age
+SOMA_C1	SOMA_C1	Control	50
+SOMA_C2	SOMA_C2	Control	55
+SOMA_K1	SOMA_K1	Case	60
+SOMA_K2	SOMA_K2	Case	63
