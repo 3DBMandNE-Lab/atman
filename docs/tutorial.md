@@ -217,7 +217,30 @@ count, and skip reason.
 
 For unpaired designs, use `--test welch-t`.
 
-## 10. Asymmetry
+## 10. Null calibration
+
+Permutation and sign-flip calibration estimate how many discoveries the current
+design produces under a no-effect null:
+
+```bash
+atman null \
+    --input-dir out \
+    --output-dir out/null \
+    --groups "PT2-PT1" \
+    --test paired-t \
+    --n 1000 \
+    --seed 1
+```
+
+Use `--test welch-t` for unpaired label permutation. Use `--test paired-t` for
+paired sign flips over matched subjects.
+
+Output in `out/null/`:
+- `null_summary.tsv` — observed hit counts, null hit counts, and empirical FDR
+  by contrast and q threshold
+- `empirical_p.tsv` — per-protein observed p/q values plus empirical p-values
+
+## 11. Asymmetry
 
 ```bash
 atman asymmetry \
@@ -228,7 +251,7 @@ atman asymmetry \
 
 Emits per-pair asymmetry metrics (challenge-vs-rest) at the contrast-family level.
 
-## 11. Robustness
+## 12. Robustness
 
 Robustness consumes the baseline DE table plus one or more rerun DE tables.
 The example below shows the command shape using placeholder LOO outputs:

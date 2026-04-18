@@ -9,6 +9,7 @@ pub mod ingest_matrix;
 pub mod matrix;
 pub mod module_de;
 pub mod module_trajectory;
+pub mod null;
 pub mod qc;
 pub mod report;
 pub mod robustness;

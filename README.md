@@ -64,6 +64,7 @@ atman fold-change        compute per-panel log2 fold-change tables
 atman de                 paired, moderated, Welch, or OLS differential abundance
 atman bootstrap protein  subject-level bootstrap intervals for protein effects
 atman bootstrap module   subject-level bootstrap intervals for module effects
+atman null               permutation/sign-flip null calibration for DE effects
 atman asymmetry          compare matched contrast pairs
 atman robustness         summarize rerun/LOO rank and sign stability
 atman module-trajectory  score user-defined modules from per-subject deltas
@@ -127,6 +128,14 @@ atman bootstrap module \
     --n 2000 \
     --seed 1 \
     --output out/module_bootstrap.tsv
+
+atman null \
+    --input-dir out \
+    --output-dir out/null \
+    --groups "PT2-PT1" \
+    --test paired-t \
+    --n 1000 \
+    --seed 1
 ```
 
 Common outputs:
@@ -139,6 +148,7 @@ Common outputs:
 - `<panel>_log2_fc.csv`
 - `de_results.tsv`, `de_report.tsv`
 - `protein_bootstrap.tsv`, `module_bootstrap.tsv`
+- `null/null_summary.tsv`, `null/empirical_p.tsv`
 
 ## Reproducibility Check
 

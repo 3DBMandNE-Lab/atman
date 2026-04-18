@@ -47,6 +47,9 @@ exposed by the Rust binary.
   intervals and sign stability for paired or unpaired protein effects.
 - **Module bootstrap (`bootstrap module`).** Subject-level bootstrap intervals,
   sign stability, and gene coverage for user-defined module scores.
+- **Null calibration (`null`).** Label permutation for unpaired Welch tests and
+  paired sign flips for matched designs, with contrast-level null summaries and
+  per-protein empirical p-values.
 
 ### Fixed
 

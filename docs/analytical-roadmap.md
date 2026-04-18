@@ -225,15 +225,15 @@ Acceptance:
 - Seeded runs are deterministic.
 - Integration tests cover seeded unpaired output, paired resampling, and missing module members.
 
-### 7. `atman null`
+### 7. `atman null` (implemented)
 
 Add permutation and sign-flip calibration.
 
 Commands:
 
 ```bash
-atman null --input-dir out --groups Case-Control --test welch-t --n 1000
-atman null --input-dir out --groups PT1-PR1 --test paired-t --paired --n 1000
+atman null --input-dir out --output-dir out/null --groups Case-Control --test welch-t --n 1000
+atman null --input-dir out --output-dir out/null --groups PT1-PR1 --test paired-t --n 1000
 ```
 
 Null modes:
@@ -253,6 +253,7 @@ Acceptance:
 - Seeded deterministic runs.
 - Refuses invalid paired/unpaired designs.
 - Reports null calibration by contrast.
+- Integration tests cover seeded unpaired permutation, paired sign flips, and invalid paired designs.
 
 ## Phase 4: Better Models
 
