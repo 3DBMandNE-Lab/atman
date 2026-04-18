@@ -1,0 +1,35 @@
+{
+    "title": "Atman: a standalone Rust CLI for reproducible proteomics analysis",
+    "description": "Atman is a standalone Rust command-line tool for proteomics analysis. A single local binary exposes `ingest`, `validate`, `qc`, `matrix`, `fold-change`, `de`, `asymmetry`, `robustness`, `module-trajectory`, and `module-de` subcommands. The built-in ingest path supports Olink Explore NPX long CSV files, while downstream commands operate on Atman's canonical TSV schema so adapters can provide data from other proteomics sources such as LFQ/intensity matrices, Spectronaut exports, DIA-NN protein-group matrices, SomaScan-style log2 abundance matrices, or already-normalized protein tables. Version 1.0.0 reproduces the Dube et al. 2023 Olink Explore heat-acclimation dataset's published filtered NPX files cell-exactly and log2 fold-change tables to floating-point precision using the bundled fixture data.",
+    "creators": [
+        {
+            "name": "Joseph, Kevin",
+            "orcid": ""
+        }
+    ],
+    "keywords": [
+        "proteomics",
+        "Olink",
+        "NPX",
+        "differential abundance",
+        "heterogeneity",
+        "reproducibility",
+        "Rust",
+        "bioinformatics",
+        "heat acclimation",
+        "Dube 2023"
+    ],
+    "license": "MIT",
+    "upload_type": "software",
+    "access_right": "open",
+    "related_identifiers": [
+        {
+            "identifier": "10.1038/s41597-023-02809-5",
+            "relation": "isDerivedFrom",
+            "resource_type": "dataset",
+            "scheme": "doi"
+        }
+    ],
+    "communities": [],
+    "grants": []
+}

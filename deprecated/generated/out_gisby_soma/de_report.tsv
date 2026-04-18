@@ -1,0 +1,2 @@
+comparison	panel	n_tests	n_skipped	n_q_lt_05	n_q_lt_10	min_q	max_abs_effect
+late-early	SomaScan_v4.1	6360	0	226	407	0.00002140292977514946	2.8677687497200393

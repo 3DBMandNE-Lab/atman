@@ -1,149 +1,160 @@
-# karnaProteome
+# Atman
 
-A local-first Rust engine for proteomics data, extending the karna bioinformatics platform into the protein-abundance modality.
+[![CI](https://github.com/kevinjoseph/atman/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kevinjoseph/atman/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
 
-## Scope
+Atman is a standalone Rust command-line tool for reproducible proteomics
+workflows. It has a built-in Olink Explore NPX ingest path, a simple canonical
+TSV interchange format for other proteomics sources, and analysis commands for
+differential abundance, module testing, asymmetry, and robustness summaries.
 
-**v0.1 — reproduction base** (done): ingest, QC-filter, and reproduce the published Dube et al. *Scientific Data* 2023 Olink Explore NGS outputs byte-for-byte on filtered NPX files and within 1e-4 on log2 fold-change files. No normalization beyond what Olink already applied.
+Atman does not require a service, database, notebook runtime, or workflow
+system. The repository includes a Dube et al. 2023 Olink Explore fixture
+dataset so the package can test its raw-to-result reproduction path end to end.
 
-**v0.2 analysis — pass 1** (done): paired Student's t-test at subject level with BH-FDR per comparison family (`karnaproteome de`). Optional moderated variance-shrinkage mode (`--test moderated`). Heat-shock instrument sanity check. Findings doc on the Dube heat-acclimation dataset.
+## Install
 
-**v0.2 analysis — heterogeneity tooling** (done): provocation-contrast asymmetry metrics (`karnaproteome asymmetry`), standalone LOO/rank stability summaries (`karnaproteome robustness`), and module trajectory scoring from user-supplied module definitions (`karnaproteome module-trajectory`).
+From source with stable Rust 1.75 or newer:
 
-**v0.2 analysis — pass 2** (done): pathway enrichment via Fisher's exact ORA against MSigDB Hallmark / KEGG / GO-BP, with universe correction to the Olink Explore measurable gene universe. Retracted the pass-1 headline after discovering the full MSigDB background inflated Olink-overlap-heavy pathways (EMT is 53% Olink-covered).
+```bash
+git clone https://github.com/kevinjoseph/atman.git
+cd atman
+cargo install --path crates/atman
+```
 
-**v0.2 analysis — pass 3** (done, null): per-protein and per-pathway OLS regression against Dube's physiological covariates (Tcore, Tskin, LSR, LDF, CVC, HR, BP, SSNA). Genomewide phenotype regression doesn't work at n=10. External calibration against Dube's own per-subject delta NPX files matched at 1e-6 precision.
+Or build a container:
 
-**Deferred (v0.2+):** karnadata integration, bridge normalization, additional ingest adapters (Olink Target qPCR, SomaScan, DIA-NN, Spectronaut).
+```bash
+docker build -t atman:1.0.0 .
+docker run --rm atman:1.0.0 --help
+```
 
-## Reproduction
+## Input Support
+
+Atman has two input modes:
+
+- **Built-in ingest:** `atman ingest --platform olink-explore-ngs` reads raw
+  long-format Olink Explore NPX CSV files and writes Atman's canonical TSVs.
+- **Canonical TSV adapters:** any script or converter can write
+  `samples.tsv`, `proteins.tsv`, `measurements.tsv`, and optionally
+  `qc_measurements.tsv`. Once those files exist, Atman's downstream commands
+  (`de`, `module-de`, `robustness`, and related summaries) run the same way
+  regardless of the original assay source.
+
+The canonical TSV route is how Atman can be used with other proteomics
+matrices, including log2 LFQ/intensity exports from MaxQuant-like workflows,
+Spectronaut protein-group quantity tables, DIA-NN protein-group matrices,
+SomaScan-style log2 abundance matrices, and already-normalized CSV/TSV
+protein matrices. Those adapters are intentionally thin: normalize source
+metadata, map samples and proteins, log-transform linear intensities when
+needed, and emit Atman's TSV schema.
+
+## Commands
+
+```text
+atman ingest             raw Olink Explore long CSV -> canonical TSVs
+atman validate           check canonical TSV schema, keys, and sample support
+atman qc                 apply QC masking rules
+atman matrix             canonical long TSV -> per-panel wide NPX CSVs
+atman fold-change        compute per-panel log2 fold-change tables
+atman de                 paired, moderated, Welch, or OLS differential abundance
+atman asymmetry          compare matched contrast pairs
+atman robustness         summarize rerun/LOO rank and sign stability
+atman module-trajectory  score user-defined modules from per-subject deltas
+atman module-de          aggregate proteins into modules and test at module level
+```
+
+## Quick Start
+
+```bash
+atman ingest \
+    --platform olink-explore-ngs --parser dube \
+    --output-dir out \
+    example_data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
+    example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
+
+atman qc --input-dir out --output-dir out --rule dube
+
+atman validate \
+    --input-dir out \
+    --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
+    --min-pairs 5
+
+atman matrix \
+    --input-dir out --output-dir out \
+    --format dube-wide --split-by panel
+
+atman fold-change \
+    --input-dir out --output-dir out \
+    --groups "PT2-PT1,PR2-PR1,PT2-PR2,PT1-PR1"
+
+atman de \
+    --input-dir out --output-dir out \
+    --test paired-t --paired-by participant \
+    --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
+    --min-pairs 5
+```
+
+Common outputs:
+
+- `measurements.tsv`, `qc_measurements.tsv`, `samples.tsv`, `proteins.tsv`
+- optional `validate_report.tsv`
+- `<panel>_npx.csv`
+- `<panel>_log2_fc.csv`
+- `de_results.tsv`, `de_report.tsv`
+
+## Reproducibility Check
+
+Run the package test suite:
 
 ```bash
 cargo test --workspace --release
 ```
 
-50 tests pass. The workspace integration test `dube_reproduction_end_to_end` runs `ingest → qc → matrix → fold-change` against the raw NPX CSVs in `example_data/dube_heat_2023/` and diffs every output against the published Dube reference files (~2.5s):
+The integration tests execute `ingest -> qc -> matrix -> fold-change` against
+the bundled Dube fixture data and compare outputs with the published reference
+tables:
 
-- all 8 filtered NPX files: byte-exact cell match
-- all 8 log2 fold-change files: max delta 1.05e-15 (IEEE 754 last-bit drift)
+- filtered NPX files: byte-exact cell match
+- log2 fold-change files: numerical match to floating-point precision
 
-The workspace integration test `dube_de_heat_shock_sanity` runs `ingest → qc → de` against the same raw data and asserts canonical heat-shock proteins (HSPB1, HSPA1A, DNAJB1, HSPG2) go up in both acute heat comparisons. 4/4 up in PT1−PR1 and PT2−PR2.
+The DE sanity test also verifies that canonical heat-shock proteins increase
+in both acute heat comparisons.
 
-## Manual pipeline
+## Data Model
 
-```bash
-# Stage 1–4: reproduction base
-karnaproteome ingest \
-    --platform olink-explore-ngs --parser dube \
-    --output-dir out/ \
-    example_data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
-    example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
-karnaproteome qc --input-dir out/ --output-dir out/ --rule dube
-karnaproteome matrix --input-dir out/ --output-dir out/ --format dube-wide --split-by panel
-karnaproteome fold-change --input-dir out/ --output-dir out/ \
-    --groups "PT2-PT1,PR2-PR1,PT2-PR2,PT1-PR1"
+Atman writes a small canonical TSV dataset between commands. This schema is
+also the adapter target for non-Olink sources:
 
-# Stage 5: analysis
-karnaproteome de --input-dir out/ --output-dir out/ \
-    --test paired-t --paired-by participant \
-    --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" --min-pairs 5
+- `samples.tsv`: sample IDs, subject IDs, conditions, controls, ingest order
+- `proteins.tsv`: assay IDs, UniProt IDs, gene symbols, panel metadata
+- `measurements.tsv`: one row per sample-assay abundance measurement
+- `qc_measurements.tsv`: same schema after QC masking
 
-# Optional: moderated shrinkage model
-karnaproteome de --input-dir out/ --output-dir out_mod/ \
-    --test moderated --moderation-prior-df 4 \
-    --paired-by participant \
-    --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" --min-pairs 5
-
-# Provocation-contrast asymmetry (challenge-vs-rest style pairs)
-karnaproteome asymmetry --de-results out/de_results.tsv \
-    --pairs "PT2-PT1:PR2-PR1,PT2-PR2:PT1-PR1" \
-    --output out/asymmetry.tsv
-
-# LOO robustness summaries from baseline + rerun DE tables
-karnaproteome robustness \
-    --baseline out/de_results.tsv \
-    --loo "out_loo1/de_results.tsv,out_loo2/de_results.tsv" \
-    --top-k 20 \
-    --output-dir out/robustness
-
-# Module trajectory scoring with user-supplied modules.tsv
-karnaproteome module-trajectory \
-    --deltas-tsv docs/findings/heterogeneity/per_subject_gene_deltas.tsv \
-    --modules-tsv modules.tsv \
-    --output out/module_trajectory_scores.tsv
-
-# Stage 6: pathway enrichment (two passes)
-scripts/run_enrichment.sh out/de_results.tsv docs/findings/pathway_results/
-scripts/enrich_restricted_universe.py out/de_results.tsv \
-    docs/findings/pathway_results_restricted/
-
-# Stage 7: phenotype regression (null, for the record)
-scripts/phenotype_regression.py docs/findings/phenotype_results/
-scripts/phenotype_pathway_regression.py out/de_results.tsv \
-    docs/findings/phenotype_results/
-```
-
-The `scripts/run_enrichment.sh` Bash driver and the two Python scripts shell out to the sibling `genesets` Rust CLI for gene-set data (set `KARNA_GENESETS=/path/to/genesets` if it's not at the default).
+Downstream commands operate on these files, so each stage can be inspected,
+rerun, or replaced independently.
 
 ## Layout
 
-```
-crates/proteome-core/       platform-agnostic library
-  src/
-    types.rs                Platform, AssayId, MeasurementRecord, ...
-    errors.rs               IngestError
-    sample_id.rs            SampleIdParser trait + DubeSampleIdParser
-    ingest/olink_explore.rs Olink Explore NGS long-CSV adapter
-    qc.rs                   Dube QC rule (mask on QC_Warning or Assay_Warning != PASS)
-    matrix.rs               long → Dube-wide pivot (gene-symbol keyed, string values)
-    fold_change.rs          Neumaier-compensated log2 FC
-    de.rs                   paired Student's t + BH-FDR
-
-crates/karnaproteome/       engine binary
-  src/
-    main.rs                 clap dispatch
-    io.rs                   atomic write, long-TSV read/write, per-format CSV writers
-    commands/
-      ingest.rs             karnaproteome ingest
-      qc.rs                 karnaproteome qc
-      matrix.rs             karnaproteome matrix
-      fold_change.rs        karnaproteome fold-change
-      de.rs                 karnaproteome de
-      asymmetry.rs          karnaproteome asymmetry
-      robustness.rs         karnaproteome robustness
-      module_trajectory.rs  karnaproteome module-trajectory
-  tests/
-    dube_reproduction.rs    acceptance: strict diff 8 filtered NPX + numeric diff 8 FC
-    dube_de_sanity.rs       acceptance: canonical HSPs up in heat comparisons
-
-scripts/                    Python + Bash analysis drivers (not part of the Rust crates)
-  run_enrichment.sh         Fisher's exact ORA via sibling genesets CLI
-  enrich_restricted_universe.py   universe-corrected ORA
-  phenotype_regression.py         per-protein OLS vs Dube phenotypes
-  phenotype_pathway_regression.py per-pathway OLS vs Dube phenotypes
-
-example_data/dube_heat_2023/   all 5 Figshare items for project 163291 (CC BY 4.0)
-  20212016_Dube_NPX_2021-11-30.csv               raw NPX, Explore 1536
-  20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv   raw NPX, Expansion
-  filtered_npx/npx/<panel>_npx.csv × 8           Dube's published filtered NPX
-  fold_changes/fold_changes/<panel>_log2_fc.csv × 8    Dube's published log2 FC
-  delta_npx/dNPX_{hd1,hd7,accpre,accpost}.csv    Dube's per-subject delta NPX
-  Physiological_data.xlsx                        per-subject body temp / sweat / HR / BP / SSNA
-
-docs/superpowers/
-  specs/2026-04-14-karnaproteome-olink-reproduction-design.md
-  plans/2026-04-14-karnaproteome-olink-reproduction.md
-
-docs/findings/
-  2026-04-14-dube-heat-acclimation-findings.md   per-protein + pathway + phenotype write-up
-  pathway_results/                                ORA pass 1 JSONs (inflated universe)
-  pathway_results_restricted/                     ORA pass 2 TSVs (Olink universe)
-  phenotype_results/                              per-protein + per-pathway OLS results
+```text
+crates/atman-core/       core data model and algorithms
+crates/atman/            CLI, command orchestration, and file IO
+adapters/                canonical TSV adapter helpers and templates
+docs/tutorial.md         package tutorial using the bundled Dube fixture
+docs/analytical-roadmap.md
+                         planned analytical capability build-out
+example_data/dube_heat_2023/
+                         Dube et al. 2023 Olink Explore fixture data
 ```
 
-## Reference
+## Reference Dataset
 
-Gagnon D, Barry H, Barhdadi A, Oussaid E, Mongrain I, Lemieux Perreault LP, Dubé MP.
-*A dataset of proteomic changes during human heat stress and heat acclimation.* Scientific Data (2023).
+Gagnon D, Barry H, Barhdadi A, Oussaid E, Mongrain I, Lemieux Perreault LP,
+Dubé MP. *A dataset of proteomic changes during human heat stress and heat
+acclimation.* Scientific Data (2023).
 [10.1038/s41597-023-02809-5](https://doi.org/10.1038/s41597-023-02809-5).
-Data CC BY 4.0 via Figshare project [163291](https://figshare.com/projects/163291).
+
+## License
+
+Atman is licensed under either [MIT](./LICENSE-MIT) or
+[Apache-2.0](./LICENSE-APACHE), at your option.

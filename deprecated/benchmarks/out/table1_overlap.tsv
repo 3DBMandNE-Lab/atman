@@ -1,0 +1,13 @@
+contrast	tool_a	tool_b	jaccard	n_a	n_b	n_shared
+PT1-PR1	atman	OlinkAnalyze_ttest	0.484375	62	33	31
+PT1-PR1	atman	limma	0.24193548387096775	62	15	15
+PT1-PR1	OlinkAnalyze_ttest	limma	0.45454545454545453	33	15	15
+PT2-PR2	atman	OlinkAnalyze_ttest	0.1588447653429603	277	44	44
+PT2-PR2	atman	limma	0.5141843971631206	277	150	145
+PT2-PR2	OlinkAnalyze_ttest	limma	0.24358974358974358	44	150	38
+PT2-PT1	atman	OlinkAnalyze_ttest	0.2222222222222222	8	3	2
+PT2-PT1	atman	limma	0.4444444444444444	8	5	4
+PT2-PT1	OlinkAnalyze_ttest	limma	0.3333333333333333	3	5	2
+PR2-PR1	atman	OlinkAnalyze_ttest	0.2857142857142857	7	2	2
+PR2-PR1	atman	limma	0.0	7	0	0
+PR2-PR1	OlinkAnalyze_ttest	limma	0.0	2	0	0

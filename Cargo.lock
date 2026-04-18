@@ -77,6 +77,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "atman"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "atman-core",
+ "clap",
+ "csv",
+ "serde",
+ "statrs",
+ "tempfile",
+]
+
+[[package]]
+name = "atman-core"
+version = "1.0.0"
+dependencies = [
+ "csv",
+ "proptest",
+ "regex",
+ "serde",
+ "statrs",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -304,19 +330,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "karnaproteome"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "csv",
- "proteome-core",
- "serde",
- "statrs",
- "tempfile",
-]
-
-[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -492,19 +505,6 @@ dependencies = [
  "rusty-fork",
  "tempfile",
  "unarray",
-]
-
-[[package]]
-name = "proteome-core"
-version = "0.1.0"
-dependencies = [
- "csv",
- "proptest",
- "regex",
- "serde",
- "statrs",
- "tempfile",
- "thiserror",
 ]
 
 [[package]]

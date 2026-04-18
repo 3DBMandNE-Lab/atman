@@ -1,0 +1,2 @@
+obs_acute_sd	obs_adapt_sd	obs_acute_adapt_corr	perm_mean_acute_sd	perm_mean_adapt_sd	perm_mean_corr	empirical_p_acute_sd_ge_obs	empirical_p_adapt_sd_ge_obs	empirical_p_corr_ge_obs
+0.07599729538023779	0.08843388955372256	0.6316287424327365	0.006365013187096159	0.006892972863357482	0.4648219964034868	0.001996007984031936	0.001996007984031936	0.29141716566866266

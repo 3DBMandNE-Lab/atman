@@ -1,0 +1,30 @@
+module	gene_symbol	source	verified
+heat_shock	HSPA1A	Dube manuscript + dube_de_sanity.rs canonical HSP panel	yes
+heat_shock	DNAJB1	Dube manuscript + dube_de_sanity.rs canonical HSP panel	yes
+heat_shock	HSPB1	Dube manuscript + dube_de_sanity.rs canonical HSP panel	yes
+heat_shock	HSPG2	Dube manuscript (heat-responsive ECM proteoglycan)	yes
+immune	ITGAL	leukocyte integrin αL; Inflammation_II panel	yes
+immune	ITGAM	leukocyte integrin αM; single-panel Olink Explore	yes
+immune	ITGB2	leukocyte integrin β2; single-panel Olink Explore	yes
+immune	IL10	anti-inflammatory cytokine; Inflammation panel	yes
+immune	IFNG	type-II interferon; Inflammation panel	yes
+immune	IL1B	IL-1 family pro-inflammatory; Inflammation panel	yes
+immune	IL2	T-cell growth cytokine; single-panel Olink Explore	yes
+immune	IL17A	Th17 effector cytokine; single-panel Olink Explore	yes
+immune	CCL2	monocyte chemoattractant; Neurology panel	yes
+immune	CXCL10	IFNG-inducible chemokine; Inflammation panel	yes
+vascular	NPPB	natriuretic peptide B; Cardiometabolic panel	yes
+vascular	VEGFA	vascular endothelial growth factor A	yes
+vascular	ICAM1	intercellular adhesion molecule 1	yes
+vascular	VCAM1	vascular cell adhesion molecule 1	yes
+vascular	SELE	E-selectin	yes
+vascular	EDN1	endothelin-1	yes
+vascular	ACE	angiotensin-converting enzyme	yes
+ecm_remodel	MMP1	matrix metalloproteinase 1 (collagenase)	yes
+ecm_remodel	MMP3	matrix metalloproteinase 3 (stromelysin-1)	yes
+ecm_remodel	MMP9	matrix metalloproteinase 9 (gelatinase B)	yes
+ecm_remodel	TIMP1	tissue inhibitor of MMP 1	yes
+ecm_remodel	TIMP2	tissue inhibitor of MMP 2	yes
+ecm_remodel	COL4A4	type IV collagen α4 (basement membrane)	yes
+ecm_remodel	FN1	fibronectin 1	yes
+ecm_remodel	TGFB1	transforming growth factor β1 (ECM programming)	yes
