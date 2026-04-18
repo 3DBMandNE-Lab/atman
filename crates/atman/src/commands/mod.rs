@@ -8,6 +8,7 @@ pub mod matrix;
 pub mod module_de;
 pub mod module_trajectory;
 pub mod qc;
+pub mod report;
 pub mod robustness;
 pub mod validate;
 

@@ -24,6 +24,8 @@ exposed by the Rust binary.
 - **Canonical TSV validation (`validate`).** Checks schema, duplicate keys,
   sample/protein references, platform parsing, QC fields, abundance units, and
   effective sample counts before downstream analysis.
+- **QC reporting (`report qc`).** Writes dataset, sample, protein, and
+  condition-level QC/missingness TSVs for canonical Atman directories.
 - **Differential abundance (`de`).** Paired Student's t-test with BH-FDR,
   plus a moderated variance-shrinkage mode (`--test moderated
   --moderation-prior-df 4`).
@@ -44,7 +46,7 @@ exposed by the Rust binary.
 
 ### Notes
 
-- 80 tests in `cargo test --workspace --release`, including an integration
+- 81 tests in `cargo test --workspace --release`, including an integration
   test that diffs every output against the published Dube reference files.
 - No Python runtime is required for the Atman CLI.
 

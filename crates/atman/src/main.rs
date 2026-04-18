@@ -38,6 +38,8 @@ enum Command {
     ModuleDe(commands::module_de::Args),
     /// Validate canonical Atman TSV inputs.
     Validate(commands::validate::Args),
+    /// Generate compact reports from canonical Atman outputs.
+    Report(commands::report::Args),
 }
 
 fn main() -> Result<()> {
@@ -53,5 +55,6 @@ fn main() -> Result<()> {
         Command::ModuleTrajectory(args) => commands::module_trajectory::run(args),
         Command::ModuleDe(args) => commands::module_de::run(args),
         Command::Validate(args) => commands::validate::run(args),
+        Command::Report(args) => commands::report::run(args),
     }
 }

@@ -55,6 +55,7 @@ needed, and emit Atman's TSV schema.
 atman ingest             raw Olink Explore long CSV -> canonical TSVs
 atman validate           check canonical TSV schema, keys, and sample support
 atman qc                 apply QC masking rules
+atman report qc          summarize QC, missingness, and condition support
 atman matrix             canonical long TSV -> per-panel wide NPX CSVs
 atman fold-change        compute per-panel log2 fold-change tables
 atman de                 paired, moderated, Welch, or OLS differential abundance
@@ -80,6 +81,10 @@ atman validate \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
     --min-pairs 5
 
+atman report qc \
+    --input-dir out \
+    --output-dir out/report
+
 atman matrix \
     --input-dir out --output-dir out \
     --format dube-wide --split-by panel
@@ -99,6 +104,8 @@ Common outputs:
 
 - `measurements.tsv`, `qc_measurements.tsv`, `samples.tsv`, `proteins.tsv`
 - optional `validate_report.tsv`
+- `report/qc_summary.tsv`, `report/sample_qc.tsv`, `report/protein_qc.tsv`,
+  `report/condition_counts.tsv`
 - `<panel>_npx.csv`
 - `<panel>_log2_fc.csv`
 - `de_results.tsv`, `de_report.tsv`

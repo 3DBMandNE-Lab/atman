@@ -18,8 +18,9 @@ cargo install --path crates/atman
 atman --help
 ```
 
-Expected: help text listing `ingest`, `validate`, `qc`, `matrix`, `fold-change`, `de`,
-`asymmetry`, `robustness`, `module-trajectory`, and `module-de`.
+Expected: help text listing `ingest`, `validate`, `qc`, `report`, `matrix`,
+`fold-change`, `de`, `asymmetry`, `robustness`, `module-trajectory`, and
+`module-de`.
 
 Run the test suite to confirm the reproduction base is intact:
 
@@ -83,7 +84,23 @@ For adapter-generated canonical TSVs, run `validate` before downstream
 analysis. Unknown abundance units are warnings by default; add `--strict` to
 fail CI on warnings.
 
-## 4. Matrix (Dube-wide pivot)
+## 4. QC report
+
+```bash
+atman report qc --input-dir out --output-dir out/report
+```
+
+Outputs:
+- `out/report/qc_summary.tsv` — dataset-level counts and fractions
+- `out/report/sample_qc.tsv` — per-sample missingness and QC masking
+- `out/report/protein_qc.tsv` — per-protein missingness and support
+- `out/report/condition_counts.tsv` — samples, subjects, and effective
+  measurements by condition
+
+The command emits warnings for small effective condition groups and sparse
+proteins. Tune those thresholds with `--min-subjects` and `--sparse-threshold`.
+
+## 5. Matrix (Dube-wide pivot)
 
 ```bash
 atman matrix --input-dir out --output-dir out --format dube-wide --split-by panel
@@ -99,7 +116,7 @@ diff out/cardiometabolic_npx.csv \
 ```
 Expected: empty output (byte-exact).
 
-## 5. Fold change
+## 6. Fold change
 
 ```bash
 atman fold-change --input-dir out --output-dir out \
@@ -109,7 +126,7 @@ atman fold-change --input-dir out --output-dir out \
 Emits 8 per-panel log2 fold-change CSVs. Maximum delta against Dube's
 published FC tables is 1.05 × 10⁻¹⁵ (IEEE 754 last-bit drift).
 
-## 6. Differential abundance
+## 7. Differential abundance
 
 Paired Student's t-test at subject level:
 
@@ -137,7 +154,7 @@ atman de --input-dir out --output-dir out_mod \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" --min-pairs 5
 ```
 
-## 7. Asymmetry
+## 8. Asymmetry
 
 ```bash
 atman asymmetry \
@@ -148,7 +165,7 @@ atman asymmetry \
 
 Emits per-pair asymmetry metrics (challenge-vs-rest) at the contrast-family level.
 
-## 8. Robustness
+## 9. Robustness
 
 Robustness consumes the baseline DE table plus one or more rerun DE tables.
 The example below shows the command shape using placeholder LOO outputs:

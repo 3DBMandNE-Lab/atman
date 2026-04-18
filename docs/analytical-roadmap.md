@@ -58,9 +58,9 @@ Tests:
 - Integration tests for valid, missing-column, duplicate-key, warning/strict,
   and non-Olink directories.
 
-### 2. `atman report qc`
+### 2. `atman report qc` (implemented)
 
-Add a compact QC/missingness report.
+Compact QC/missingness report.
 
 Command:
 
@@ -91,6 +91,7 @@ Acceptance:
 - Works on Olink and non-Olink canonical TSVs.
 - No plotting dependency.
 - Clear warnings for small groups and sparse proteins.
+- Integration test covers summary, sample, protein, and condition tables.
 
 ## Phase 2: Make Input Broad And Boring
 
