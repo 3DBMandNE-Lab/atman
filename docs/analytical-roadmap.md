@@ -333,14 +333,14 @@ Acceptance:
 
 ## Phase 5: Biological Summaries
 
-### 11. Module And Pathway Scoring
+### 11. Module And Pathway Scoring (implemented)
 
 Add per-sample module scores.
 
 Command:
 
 ```bash
-atman score modules --input-dir out --modules modules.tsv --output module_scores.tsv
+atman score modules --input-dir out --modules-tsv modules.tsv --output module_scores.tsv
 ```
 
 Methods:
@@ -354,6 +354,10 @@ Acceptance:
 
 - Writes per-sample scores usable by `de`.
 - Handles missing module members and reports coverage.
+- Optional `--canonical-output-dir` writes module-score canonical TSVs for
+  downstream DE.
+- Integration tests cover all scoring methods, coverage reporting, and DE over
+  canonical module scores.
 
 ### 12. Enrichment
 

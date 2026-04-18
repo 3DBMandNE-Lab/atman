@@ -46,6 +46,8 @@ enum Command {
     Validate(commands::validate::Args),
     /// Generate compact reports from canonical Atman outputs.
     Report(commands::report::Args),
+    /// Score biological modules from canonical Atman measurements.
+    Score(commands::score::Args),
 }
 
 fn main() -> Result<()> {
@@ -65,5 +67,6 @@ fn main() -> Result<()> {
         Command::Null(args) => commands::null::run(args),
         Command::Validate(args) => commands::validate::run(args),
         Command::Report(args) => commands::report::run(args),
+        Command::Score(args) => commands::score::run(args),
     }
 }

@@ -69,6 +69,7 @@ atman asymmetry          compare matched contrast pairs
 atman robustness         summarize rerun/LOO rank and sign stability
 atman module-trajectory  score user-defined modules from per-subject deltas
 atman module-de          aggregate proteins into modules and test at module level
+atman score modules      score modules per sample from canonical measurements
 ```
 
 ## Quick Start
@@ -154,6 +155,13 @@ atman null \
     --test paired-t \
     --n 1000 \
     --seed 1
+
+atman score modules \
+    --input-dir out \
+    --modules-tsv modules.tsv \
+    --method mean \
+    --output out/module_scores.tsv \
+    --canonical-output-dir out/module_score_canonical
 ```
 
 Common outputs:
@@ -170,6 +178,7 @@ Common outputs:
   and trimmed-mean columns after the original DE fields
 - `protein_bootstrap.tsv`, `module_bootstrap.tsv`
 - `null/null_summary.tsv`, `null/empirical_p.tsv`
+- `module_scores.tsv`; optional module-score canonical TSVs for downstream DE
 
 ## Reproducibility Check
 

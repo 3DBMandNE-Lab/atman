@@ -213,7 +213,25 @@ The mixed model supports a random intercept for `subject_id` only. It profiles
 the REML objective over the random-intercept variance ratio, then fits the
 fixed effects by GLS. It writes the same DE tables as OLS plus `de_design.tsv`.
 
-## 8. Protein bootstrap
+## 8. Module scoring
+
+Per-sample module scores are available from canonical measurements:
+
+```bash
+atman score modules \
+    --input-dir out \
+    --modules-tsv modules.tsv \
+    --method mean \
+    --output out/module_scores.tsv \
+    --canonical-output-dir out/module_score_canonical
+```
+
+Supported methods are `mean`, `median`, `zscore`, and `pc1`. The score table
+reports declared genes, observed genes, and per-sample coverage. When
+`--canonical-output-dir` is supplied, Atman writes canonical TSVs that can be
+used directly with `atman de`.
+
+## 9. Protein bootstrap
 
 Subject-level bootstrap uncertainty for protein effects:
 
@@ -233,7 +251,7 @@ not measurement rows. In paired mode, only matched subjects are resampled.
 Output columns include point effect, bootstrap mean effect, confidence
 interval, sign stability, effective sample counts, and skip reason.
 
-## 9. Module bootstrap
+## 10. Module bootstrap
 
 Subject-level bootstrap uncertainty for user-defined module scores:
 
@@ -256,7 +274,7 @@ count, and skip reason.
 
 For unpaired designs, use `--test welch-t`.
 
-## 10. Null calibration
+## 11. Null calibration
 
 Permutation and sign-flip calibration estimate how many discoveries the current
 design produces under a no-effect null:
@@ -279,7 +297,7 @@ Output in `out/null/`:
   by contrast and q threshold
 - `empirical_p.tsv` — per-protein observed p/q values plus empirical p-values
 
-## 11. Asymmetry
+## 12. Asymmetry
 
 ```bash
 atman asymmetry \
@@ -290,7 +308,7 @@ atman asymmetry \
 
 Emits per-pair asymmetry metrics (challenge-vs-rest) at the contrast-family level.
 
-## 12. Robustness
+## 13. Robustness
 
 Robustness consumes the baseline DE table plus one or more rerun DE tables.
 The example below shows the command shape using placeholder LOO outputs:

@@ -13,6 +13,7 @@ pub mod null;
 pub mod qc;
 pub mod report;
 pub mod robustness;
+pub mod score;
 pub mod validate;
 
 /// Parse comma-separated comparisons in `A-B` form with strict validation.

@@ -59,6 +59,9 @@ exposed by the Rust binary.
 - **Robust DE sidecars.** `de_results.tsv` now appends effect sizes,
   confidence intervals, Wilcoxon p-values, median differences, and trimmed
   mean differences while preserving the original leading columns.
+- **Module scoring (`score modules`).** Per-sample module scores with mean,
+  median, z-score, and PC1 methods, coverage reporting, and optional canonical
+  outputs for downstream DE.
 
 ### Fixed
 
