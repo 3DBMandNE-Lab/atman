@@ -194,7 +194,30 @@ not measurement rows. In paired mode, only matched subjects are resampled.
 Output columns include point effect, bootstrap mean effect, confidence
 interval, sign stability, effective sample counts, and skip reason.
 
-## 9. Asymmetry
+## 9. Module bootstrap
+
+Subject-level bootstrap uncertainty for user-defined module scores:
+
+```bash
+atman bootstrap module \
+    --input-dir out \
+    --modules-tsv modules.tsv \
+    --groups "PT2-PT1" \
+    --test paired-t \
+    --n 2000 \
+    --seed 1 \
+    --output out/module_bootstrap.tsv
+```
+
+The modules file is tab-separated with `module` and `gene_symbol` columns.
+Atman scores each module as the mean effective abundance across observed member
+genes in each sample, then resamples subjects. The output reports module effect
+intervals, sign stability, sample counts, declared gene count, observed gene
+count, and skip reason.
+
+For unpaired designs, use `--test welch-t`.
+
+## 10. Asymmetry
 
 ```bash
 atman asymmetry \
@@ -205,7 +228,7 @@ atman asymmetry \
 
 Emits per-pair asymmetry metrics (challenge-vs-rest) at the contrast-family level.
 
-## 10. Robustness
+## 11. Robustness
 
 Robustness consumes the baseline DE table plus one or more rerun DE tables.
 The example below shows the command shape using placeholder LOO outputs:

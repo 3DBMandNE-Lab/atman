@@ -200,7 +200,7 @@ Acceptance:
 - Seeded runs are deterministic.
 - Integration tests cover seeded unpaired output and paired resampling.
 
-### 6. `atman bootstrap module`
+### 6. `atman bootstrap module` (implemented)
 
 Same as protein bootstrap, but over module scores.
 
@@ -213,12 +213,17 @@ Outputs:
 
 - module effect interval
 - sign stability
+- effective sample counts
+- skip reason
+- number of module genes declared
 - number of module genes observed
 
 Acceptance:
 
 - Shares bootstrap engine with protein mode where possible.
 - Handles missing module members.
+- Seeded runs are deterministic.
+- Integration tests cover seeded unpaired output, paired resampling, and missing module members.
 
 ### 7. `atman null`
 

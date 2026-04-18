@@ -45,6 +45,8 @@ exposed by the Rust binary.
   into user-supplied modules and test at module level.
 - **Protein bootstrap (`bootstrap protein`).** Subject-level bootstrap
   intervals and sign stability for paired or unpaired protein effects.
+- **Module bootstrap (`bootstrap module`).** Subject-level bootstrap intervals,
+  sign stability, and gene coverage for user-defined module scores.
 
 ### Fixed
 

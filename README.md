@@ -63,6 +63,7 @@ atman matrix             canonical long TSV -> per-panel wide NPX CSVs
 atman fold-change        compute per-panel log2 fold-change tables
 atman de                 paired, moderated, Welch, or OLS differential abundance
 atman bootstrap protein  subject-level bootstrap intervals for protein effects
+atman bootstrap module   subject-level bootstrap intervals for module effects
 atman asymmetry          compare matched contrast pairs
 atman robustness         summarize rerun/LOO rank and sign stability
 atman module-trajectory  score user-defined modules from per-subject deltas
@@ -117,6 +118,15 @@ atman bootstrap protein \
     --n 2000 \
     --seed 1 \
     --output out/protein_bootstrap.tsv
+
+atman bootstrap module \
+    --input-dir out \
+    --modules-tsv modules.tsv \
+    --groups "PT2-PT1" \
+    --test paired-t \
+    --n 2000 \
+    --seed 1 \
+    --output out/module_bootstrap.tsv
 ```
 
 Common outputs:
@@ -128,7 +138,7 @@ Common outputs:
 - `<panel>_npx.csv`
 - `<panel>_log2_fc.csv`
 - `de_results.tsv`, `de_report.tsv`
-- `protein_bootstrap.tsv`
+- `protein_bootstrap.tsv`, `module_bootstrap.tsv`
 
 ## Reproducibility Check
 
