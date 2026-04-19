@@ -1898,8 +1898,13 @@ fn run_limma(
             y.push(row);
         }
 
-        // (iii) Single-contrast matrix: test the group_b coefficient.
-        let contrast_matrix: Vec<Vec<f64>> = vec![vec![0.0], vec![1.0]];
+        // (iii) Single-contrast matrix: test (A − B) direction.
+        // Design column 1 is the group-B indicator, so β_1 = mean_b − mean_a;
+        // atman's `A-B` comparison semantics are "mean_a minus mean_b"
+        // (matching welch-t and paired-t paths). Use contrast −β_1 to
+        // produce `mean_a − mean_b`. TREAT p-values use |t|, so the sign
+        // flip doesn't affect p-values or f-statistics.
+        let contrast_matrix: Vec<Vec<f64>> = vec![vec![0.0], vec![-1.0]];
 
         // (iv) Limma fit.
         let options = LimmaOptions {
