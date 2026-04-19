@@ -159,6 +159,48 @@ pub fn fit_f_dist(s2: &[f64], df_res: f64) -> Option<(f64, f64)> {
     Some((df_prior, s2_prior))
 }
 
+/// Output of `squeeze_var`: per-feature posterior variance and the
+/// shared `(df_prior, s2_prior)`. Per-feature `df_total = df_prior + df_res`
+/// is the reader's job (it never varies across features for a given fit).
+pub struct SqueezeVarOutput {
+    pub s2_posterior: Vec<f64>,
+    pub df_prior: f64,
+    pub s2_prior: f64,
+}
+
+/// Empirical-Bayes variance shrinkage.
+///
+/// - If `prior` is `Some((df_prior, s2_prior))` — typically from a prior
+///   call to [`fit_f_dist`] — returns per-feature
+///   `s²_post = (df_prior · s²_prior + df_res · s²) / (df_prior + df_res)`.
+/// - If `prior` is `None`, returns `s²_post = s²` unchanged, `df_prior = ∞`,
+///   `s²_prior = NaN`. This is the fallback for `fit_f_dist` failure.
+pub fn squeeze_var(
+    s2: &[f64],
+    df_res: f64,
+    prior: Option<(f64, f64)>,
+) -> SqueezeVarOutput {
+    match prior {
+        Some((df_prior, s2_prior)) => {
+            let denom = df_prior + df_res;
+            let s2_posterior: Vec<f64> = s2
+                .iter()
+                .map(|v| (df_prior * s2_prior + df_res * v) / denom)
+                .collect();
+            SqueezeVarOutput {
+                s2_posterior,
+                df_prior,
+                s2_prior,
+            }
+        }
+        None => SqueezeVarOutput {
+            s2_posterior: s2.to_vec(),
+            df_prior: f64::INFINITY,
+            s2_prior: f64::NAN,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +287,30 @@ mod tests {
             "s²_prior {s2_prior}, want ~{s2_prior_true}"
         );
         let _ = n;
+    }
+
+    #[test]
+    fn squeeze_var_blends_sample_variance_toward_prior() {
+        // With df_prior = df_res = 4 and s²_prior = 1.0, s²_post should
+        // equal 0.5 * s²_sample + 0.5 * 1.0.
+        let s2 = vec![0.0_f64, 1.0, 2.0, 4.0, 10.0];
+        let df_res = 4.0;
+        let result = super::squeeze_var(&s2, df_res, Some((4.0, 1.0)));
+        let expected: Vec<f64> = s2.iter().map(|v| 0.5 * v + 0.5).collect();
+        for (got, want) in result.s2_posterior.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-12, "got {got}, want {want}");
+        }
+        assert!((result.df_prior - 4.0).abs() < 1e-12);
+        assert!((result.s2_prior - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn squeeze_var_with_none_prior_returns_sample_values_unchanged() {
+        let s2 = vec![1.0, 2.0, 4.0];
+        let out = super::squeeze_var(&s2, 4.0, None);
+        for (got, want) in out.s2_posterior.iter().zip(s2.iter()) {
+            assert_eq!(got, want);
+        }
+        assert!(out.df_prior.is_infinite()); // no shrinkage
     }
 }
