@@ -122,7 +122,7 @@ design <- model.matrix(~ groups)
 fit <- lmFit(y, design)
 
 # Reference 1: no trend.
-fit_notrend <- eBayes(fit, trend = FALSE, robust = TRUE)
+fit_notrend <- eBayes(fit, trend = FALSE, robust = FALSE)
 ref_notrend <- data.frame(
     feature      = rownames(y),
     s2_trend     = NA_real_,
@@ -145,7 +145,7 @@ write.table(ref_notrend,
 Amean <- rowMeans(y)
 lm_trend <- lm(log(fit$sigma^2) ~ log(Amean) + I(log(Amean)^2))
 s2_trend <- exp(predict(lm_trend))
-fit_trend <- eBayes(fit, trend = s2_trend, robust = TRUE)
+fit_trend <- eBayes(fit, trend = s2_trend, robust = FALSE)
 ref_trend <- data.frame(
     feature      = rownames(y),
     s2_trend     = s2_trend,
