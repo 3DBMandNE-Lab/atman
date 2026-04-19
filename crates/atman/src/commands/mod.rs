@@ -4,6 +4,7 @@ pub mod asymmetry;
 pub mod bootstrap;
 pub mod coupling;
 pub mod de;
+pub mod decompose;
 pub mod enrich;
 pub mod fold_change;
 pub mod ingest;

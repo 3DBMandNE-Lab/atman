@@ -7,6 +7,7 @@
 pub mod de;
 pub mod errors;
 pub mod fold_change;
+pub mod ica;
 pub mod ingest;
 pub mod matrix;
 pub mod qc;

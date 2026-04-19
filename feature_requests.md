@@ -15,47 +15,7 @@ preferred for reproducibility posture but not blocking.
 
 ## P0 — Wait-worthy
 
-### 1. `atman decompose ica` with multi-seed stability
-
-**Command sketch.**
-
-```bash
-atman decompose ica \
-  --input-dir out \
-  --k-selection cumulative-variance=0.80 \
-  --k-min 3 --k-max 30 \
-  --n-seeds 50 \
-  --seed-stability-threshold 0.9 \
-  --stability-metric jaccard-top20 \
-  --output-loadings out/ica_loadings.tsv \
-  --output-activations out/ica_activations.tsv \
-  --output-stability out/ica_stability.tsv
-```
-
-**What it does.** Runs FastICA (or equivalently robust ICA) `n_seeds`
-times per cohort with different initializations. For each program in the
-reference-seed decomposition, computes recovery stability across the
-other `n_seeds − 1` runs (top-20 loading Jaccard ≥ threshold against the
-reference). Emits a `program, seed_stability_fraction, n_stable_runs`
-table alongside the canonical loadings/activations. Programs below
-`seed-stability-threshold` are flagged but not silently dropped (user can
-gate downstream).
-
-**Why we need it.** Single-seed FastICA is initialization-dependent; the
-CSF manuscript currently uses `random_state=20260418` on one run and
-reviewer raised this as the single most exposed technical item in the
-paper. SIH at n=24/K=11 is the highest-risk case — if the decomposition
-is unstable across seeds, the entire cross-cohort archetype alignment
-needs re-derivation.
-
-**Matches reviewer items.** #5 (single-seed ICA), partially #4 (forced
-matched-K — same flag structure).
-
-**Scope hints.** Rust FastICA implementations exist (e.g. via `ndarray`
-and a symmetric decorrelation loop). Alternative: robust ICA variants
-(FastICA with bootstrap-style restart clustering — ICASSO) provide the
-stability metric natively. Either path is acceptable; the CLI contract
-matters more than the internal algorithm.
+*(No open P0 items — Feature 1 `atman decompose ica` shipped 2026-04-19.)*
 
 ---
 
@@ -207,8 +167,8 @@ per run.
 | Review item | Addressed by | Priority |
 |---|---|---|
 | #2 annotation-constrained alignment circularity | Feature 3 | P1 |
-| #4 forced matched-K sensitivity | Feature 1 (same flag structure) | P0 |
-| #5 multi-seed FastICA stability | Feature 1 | P0 |
+| #4 forced matched-K sensitivity | Feature 1 (shipped) | P0 (done) |
+| #5 multi-seed FastICA stability | Feature 1 (shipped) | P0 (done) |
 | #7 A02 bookkeeping | Covered by completed ratio command | P1 |
 | #8 r×τ quantitative fit | Covered by completed per-subject proxy regression | P2 |
 | #9 pre-specification provenance | Feature 5 | P1 |
@@ -222,10 +182,9 @@ per run.
 
 ## Implementation sequencing that would maximally help the CSF manuscript
 
-1. **Ship remaining P0 first (feature 1).** This converts the strongest
-   reviewer liability into a one-line atman call. Without it, I have to
-   implement multi-seed ICA stability in Python and hope reviewers accept
-   the Python implementation.
+1. ~~**Ship remaining P0 first (feature 1).**~~ **Shipped 2026-04-19.**
+   `atman decompose ica` lands the reviewer-exposed multi-seed FastICA
+   stability requirement as a one-line CLI call.
 
 2. **Ship P1 features 3 and 5 in a follow-up release.** These close the
    annotation-alignment circularity, the pre-specification provenance

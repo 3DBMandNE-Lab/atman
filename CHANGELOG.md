@@ -4,6 +4,17 @@ All notable changes to Atman are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Multi-seed FastICA decomposition (`decompose ica`).** Pure-Rust FastICA
+  (log-cosh contrast, symmetric decorrelation) with deterministic
+  Xoshiro256++ seeding. Runs `--n-seeds` decompositions per cohort and reports
+  top-N Jaccard seed stability against the reference seed, plus canonical
+  loadings and activations TSVs. Supports `--max-missing-fraction` +
+  `--impute mean` for sparse canonical matrices.
+
 ## [1.0.0] — 2026-04-19
 
 First public release of Atman as a standalone proteomics command-line tool.
