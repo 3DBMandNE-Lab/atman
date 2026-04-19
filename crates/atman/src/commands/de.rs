@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 use super::parse_comparisons;
 use crate::io::{
-    read_measurements_long, read_proteins, read_samples, write_de_report, write_de_results,
-    DeReportRow, DeResultRow,
+    atomic_write, read_measurements_long, read_proteins, read_samples, write_de_report,
+    write_de_results, DeReportRow, DeResultRow,
 };
 
 #[derive(ClapArgs, Debug)]
@@ -59,6 +59,10 @@ pub struct Args {
     #[arg(long)]
     contrast: Option<String>,
 
+    /// Physiological subject-level proxy from samples.tsv to include as a continuous OLS regressor.
+    #[arg(long)]
+    per_subject_proxy: Option<String>,
+
     /// Fixed-effect terms for `--test mixed`, for example
     /// `condition + age + sex`. The intercept is included automatically.
     #[arg(long)]
@@ -87,6 +91,8 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let mut args = args;
+    apply_per_subject_proxy(&mut args)?;
     if args.test != "paired-t"
         && args.test != "moderated"
         && args.test != "welch-t"
@@ -118,11 +124,12 @@ pub fn run(args: Args) -> Result<()> {
         && (args.covariates.is_some()
             || args.design.is_some()
             || args.contrast.is_some()
+            || args.per_subject_proxy.is_some()
             || args.fixed.is_some()
             || args.random.is_some())
     {
         anyhow::bail!(
-            "--covariates, --design, --contrast, --fixed, and --random require --test ols or mixed"
+            "--covariates, --design, --contrast, --per-subject-proxy, --fixed, and --random require --test ols or mixed"
         );
     }
     if args.covariates.is_some() && args.design.is_some() {
@@ -535,6 +542,13 @@ pub fn run(args: Args) -> Result<()> {
     if (args.test == "ols" || args.test == "mixed") && !covariate_rows.is_empty() {
         write_covariate_rows(&args.output_dir.join("de_covariates.tsv"), &covariate_rows)?;
     }
+    if let Some(proxy) = args.per_subject_proxy.as_deref() {
+        write_proxy_summary(
+            &args.output_dir.join("de_proxy_summary.tsv"),
+            proxy,
+            &covariate_rows,
+        )?;
+    }
     if args.test == "ols" || args.test == "mixed" {
         write_design_rows(&args.output_dir.join("de_design.tsv"), &design_rows)?;
     }
@@ -556,6 +570,59 @@ pub fn run(args: Args) -> Result<()> {
             .unwrap_or(""),
     );
     Ok(())
+}
+
+fn apply_per_subject_proxy(args: &mut Args) -> Result<()> {
+    let Some(proxy) = args
+        .per_subject_proxy
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(());
+    };
+    if args.test == "mixed" {
+        anyhow::bail!("--per-subject-proxy currently supports OLS DE; use --test ols");
+    }
+    if args.fixed.is_some() || args.random.is_some() {
+        anyhow::bail!("--per-subject-proxy cannot be combined with --fixed/--random");
+    }
+    args.test = "ols".to_string();
+    let proxy = canonical_proxy_name(proxy);
+    if let Some(design) = args.design.as_mut() {
+        let terms = parse_design_terms(design)?;
+        if !terms.iter().any(|term| match term {
+            DesignTerm::Covariate(name) => name == &proxy,
+            DesignTerm::Condition => false,
+        }) {
+            design.push_str(" + ");
+            design.push_str(&proxy);
+        }
+    } else if let Some(covariates) = args.covariates.as_mut() {
+        let mut values: Vec<String> = covariates
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !values.iter().any(|value| value == &proxy) {
+            values.push(proxy.clone());
+        }
+        *covariates = values.join(",");
+    } else {
+        args.covariates = Some(proxy.clone());
+    }
+    args.per_subject_proxy = Some(proxy);
+    Ok(())
+}
+
+fn canonical_proxy_name(proxy: &str) -> String {
+    match proxy.to_ascii_lowercase().as_str() {
+        "qalb" | "q_alb" | "q-alb" => "QAlb".to_string(),
+        "qigg" | "q_igg" | "q-igg" | "q_{igg}" => "QIgG".to_string(),
+        "evans" | "evans_index" | "evans-index" => "Evans_index".to_string(),
+        "ventricular_volume" | "ventricular-volume" => "ventricular_volume".to_string(),
+        _ => proxy.to_string(),
+    }
 }
 
 #[derive(Default)]
@@ -1509,7 +1576,56 @@ fn write_covariate_rows(path: &Path, rows: &[CovariateRow]) -> Result<()> {
             r.n,
         ));
     }
-    crate::io::atomic_write(path, buf.as_bytes())
+    atomic_write(path, buf.as_bytes())
+}
+
+fn write_proxy_summary(path: &Path, proxy: &str, rows: &[CovariateRow]) -> Result<()> {
+    let mut by_comparison: BTreeMap<&str, Vec<&CovariateRow>> = BTreeMap::new();
+    for row in rows {
+        if row.covariate == proxy {
+            by_comparison
+                .entry(row.comparison.as_str())
+                .or_default()
+                .push(row);
+        }
+    }
+    let mut buf = String::from(
+        "proxy\tcomparison\tn_tests\tn_p_lt_05\tmedian_abs_beta\tmedian_p_value\tinterpretation\n",
+    );
+    for (comparison, rows) in by_comparison {
+        let n_tests = rows.len();
+        let n_p_lt_05 = rows.iter().filter(|row| row.p_value < 0.05).count();
+        let median_abs_beta = median(rows.iter().map(|row| row.beta.abs()).collect());
+        let median_p_value = median(rows.iter().map(|row| row.p_value).collect());
+        buf.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            proxy,
+            comparison,
+            n_tests,
+            n_p_lt_05,
+            fmt_opt(median_abs_beta),
+            fmt_opt(median_p_value),
+            proxy_interpretation(proxy)
+        ));
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+fn proxy_interpretation(proxy: &str) -> &'static str {
+    match proxy {
+        "QAlb" => "albumin quotient barrier-clearance adjustment",
+        "QIgG" => "immunoglobulin quotient barrier-clearance adjustment",
+        "Evans_index" => "ventricular size barrier-clearance adjustment",
+        "ventricular_volume" => "ventricular volume barrier-clearance adjustment",
+        _ => "physiological proxy adjustment",
+    }
+}
+
+fn fmt_opt(value: Option<f64>) -> String {
+    value
+        .filter(|v| v.is_finite())
+        .map(|v| format!("{v:.6}"))
+        .unwrap_or_else(|| "NA".to_string())
 }
 
 fn write_design_rows(path: &Path, rows: &[DesignReportRow]) -> Result<()> {
@@ -1527,5 +1643,5 @@ fn write_design_rows(path: &Path, rows: &[DesignReportRow]) -> Result<()> {
             r.values,
         ));
     }
-    crate::io::atomic_write(path, buf.as_bytes())
+    atomic_write(path, buf.as_bytes())
 }

@@ -235,13 +235,6 @@ weight vector instead of an indicator vector.
 
 ## P2 — Nice to have
 
-### 12. `atman de --per-subject-proxy QAlb` — barrier/clearance proxy regression
-
-Auto-detects known physiological proxies in `samples.tsv` (QAlb, Evans
-index, ventricular volume, `Q_{IgG}`) and includes them as continuous
-regressors with a compartmental-physics summary section in the DE
-output. Makes reviewer #8 a one-liner rather than a manual regression.
-
 ## Feature-to-review-item matrix
 
 | Review item | Addressed by | Priority |
@@ -250,7 +243,7 @@ output. Makes reviewer #8 a one-liner rather than a manual regression.
 | #4 forced matched-K sensitivity | Feature 1 (same flag structure) | P0 |
 | #5 multi-seed FastICA stability | Feature 1 | P0 |
 | #7 A02 bookkeeping | Covered by completed ratio command | P1 |
-| #8 r×τ quantitative fit | Feature 12 | P2 |
+| #8 r×τ quantitative fit | Covered by completed per-subject proxy regression | P2 |
 | #9 pre-specification provenance | Feature 5 | P1 |
 | #10 sign-test framing | Covered by completed module-level meta support | P1 |
 | #11 platform heterogeneity | Covered by completed within-cohort rank transform | P2 |

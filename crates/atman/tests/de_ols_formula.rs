@@ -9,22 +9,22 @@ fn write_ols_fixture(dir: &std::path::Path, confounded_sex: bool) {
     std::fs::create_dir_all(dir).unwrap();
     let samples = if confounded_sex {
         "\
-sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\tage\tsex\n\
-C1\tC1\tControl\t0\tcsf\t1\t30\tF\n\
-C2\tC2\tControl\t0\tcsf\t2\t40\tF\n\
-K1\tK1\tCase\t0\tcsf\t3\t31\tM\n\
-K2\tK2\tCase\t0\tcsf\t4\t41\tM\n"
+sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\tage\tsex\tQAlb\n\
+C1\tC1\tControl\t0\tcsf\t1\t30\tF\t5\n\
+C2\tC2\tControl\t0\tcsf\t2\t40\tF\t7\n\
+K1\tK1\tCase\t0\tcsf\t3\t31\tM\t5.5\n\
+K2\tK2\tCase\t0\tcsf\t4\t41\tM\t7.5\n"
     } else {
         "\
-sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\tage\tsex\n\
-C1\tC1\tControl\t0\tcsf\t1\t30\tF\n\
-C2\tC2\tControl\t0\tcsf\t2\t42\tM\n\
-C3\tC3\tControl\t0\tcsf\t3\t35\tF\n\
-C4\tC4\tControl\t0\tcsf\t4\t47\tM\n\
-K1\tK1\tCase\t0\tcsf\t5\t32\tF\n\
-K2\tK2\tCase\t0\tcsf\t6\t44\tM\n\
-K3\tK3\tCase\t0\tcsf\t7\t37\tF\n\
-K4\tK4\tCase\t0\tcsf\t8\t49\tM\n"
+sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\tage\tsex\tQAlb\n\
+C1\tC1\tControl\t0\tcsf\t1\t30\tF\t5\n\
+C2\tC2\tControl\t0\tcsf\t2\t42\tM\t7\n\
+C3\tC3\tControl\t0\tcsf\t3\t35\tF\t6\n\
+C4\tC4\tControl\t0\tcsf\t4\t47\tM\t8\n\
+K1\tK1\tCase\t0\tcsf\t5\t32\tF\t5.5\n\
+K2\tK2\tCase\t0\tcsf\t6\t44\tM\t7.5\n\
+K3\tK3\tCase\t0\tcsf\t7\t37\tF\t6.5\n\
+K4\tK4\tCase\t0\tcsf\t8\t49\tM\t8.5\n"
     };
     std::fs::write(dir.join("samples.tsv"), samples).unwrap();
     std::fs::write(
@@ -73,6 +73,42 @@ spectronaut_report\tP00002\tP00002\tGENE2\tspectronaut\t\n",
         }
     }
     std::fs::write(dir.join("qc_measurements.tsv"), measurements).unwrap();
+}
+
+#[test]
+fn per_subject_proxy_adds_continuous_ols_regressor_and_summary() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("input");
+    let output_dir = tmp.path().join("proxy");
+    write_ols_fixture(&input, false);
+
+    let output = run_atman(&[
+        "de",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output_dir.to_str().unwrap(),
+        "--groups",
+        "Case-Control",
+        "--per-subject-proxy",
+        "QAlb",
+        "--min-pairs",
+        "2",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let covariates = std::fs::read_to_string(output_dir.join("de_covariates.tsv")).unwrap();
+    assert!(covariates.starts_with("comparison\tpanel\tgene_symbol\tcovariate"));
+    assert!(covariates.contains("\tQAlb\t"));
+
+    let summary = std::fs::read_to_string(output_dir.join("de_proxy_summary.tsv")).unwrap();
+    assert!(summary.starts_with("proxy\tcomparison\tn_tests"));
+    assert!(summary.contains("QAlb\tCase-Control\t2\t"));
+    assert!(summary.contains("albumin quotient barrier-clearance adjustment"));
 }
 
 #[test]
