@@ -9,6 +9,7 @@
 //! Phipson et al. 2016 (robust), Ritchie et al. 2015 (limma v3).
 
 use crate::de::cholesky_lower;
+use statrs::distribution::{ContinuousCDF, StudentsT};
 
 /// Digamma ψ(x) = d/dx ln Γ(x). Asymptotic expansion for x ≥ 10,
 /// recurrence `ψ(x) = ψ(x+1) - 1/x` for smaller x. The x ≥ 10 cutoff
@@ -364,6 +365,76 @@ pub fn fit_parametric_trend(means: &[f64], s2: &[f64]) -> Option<Vec<f64>> {
     Some(trend)
 }
 
+/// Output of [`moderated_t`] — effect estimate, standard error, t,
+/// two-sided p-value.
+pub struct ModeratedT {
+    pub effect: f64,
+    pub se: f64,
+    pub t: f64,
+    pub p_value: f64,
+}
+
+/// Moderated t-statistic for a single contrast `c` on coefficient
+/// vector `β`, given:
+/// - `xtx_l`: lower-triangular Cholesky factor of `X'X`
+/// - `s2_posterior`: eBayes-shrunken residual variance for this feature
+/// - `df_total`: `df_res + df_prior`
+///
+/// `se(c·β) = sqrt(s²_post · c' (X'X)⁻¹ c)` where `c' (X'X)⁻¹ c = ||L⁻¹ c||²`
+/// via one forward-solve against the cached Cholesky factor.
+pub fn moderated_t(
+    beta: &[f64],
+    contrast: &[f64],
+    xtx_l: &[Vec<f64>],
+    s2_posterior: f64,
+    df_total: f64,
+) -> ModeratedT {
+    let effect = beta
+        .iter()
+        .zip(contrast.iter())
+        .map(|(b, c)| b * c)
+        .sum::<f64>();
+    // Forward-solve L z = c; then ||z||² = c' (X'X)⁻¹ c.
+    let p = xtx_l.len();
+    let mut z = vec![0.0_f64; p];
+    for i in 0..p {
+        let mut s = contrast[i];
+        for k in 0..i {
+            s -= xtx_l[i][k] * z[k];
+        }
+        z[i] = s / xtx_l[i][i];
+    }
+    let ctx_inv_c: f64 = z.iter().map(|v| v * v).sum();
+    let se = (s2_posterior * ctx_inv_c).sqrt();
+    if !se.is_finite() || se <= 0.0 {
+        return ModeratedT {
+            effect,
+            se,
+            t: f64::NAN,
+            p_value: f64::NAN,
+        };
+    }
+    let t = effect / se;
+    let dist = match StudentsT::new(0.0, 1.0, df_total) {
+        Ok(d) => d,
+        Err(_) => {
+            return ModeratedT {
+                effect,
+                se,
+                t,
+                p_value: f64::NAN,
+            }
+        }
+    };
+    let p_value = 2.0 * (1.0 - dist.cdf(t.abs()));
+    ModeratedT {
+        effect,
+        se,
+        t,
+        p_value,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,6 +578,18 @@ mod tests {
             out.s2_prior,
         );
         let _ = df_non;
+    }
+
+    #[test]
+    fn moderated_t_reduces_to_standard_t_at_zero_df_prior() {
+        // df_prior = 0 ⇒ s²_post = s²_sample ⇒ moderated t = classical t.
+        let beta = vec![2.0];
+        let contrast = vec![1.0];
+        let xtx_l = vec![vec![1.0]]; // X'X = I, L = I ⇒ c' (X'X)⁻¹ c = 1
+        let out = super::moderated_t(&beta, &contrast, &xtx_l, 4.0 /* s²_post */, 9.0 /* df */);
+        // t = 2.0 / sqrt(4.0 * 1.0) = 1.0; p-value = 2 · (1 - T_9(1))
+        assert!((out.t - 1.0).abs() < 1e-12);
+        assert!(out.p_value > 0.0 && out.p_value < 1.0);
     }
 
     #[test]
