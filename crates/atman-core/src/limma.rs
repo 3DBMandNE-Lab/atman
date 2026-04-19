@@ -9,7 +9,7 @@
 //! Phipson et al. 2016 (robust), Ritchie et al. 2015 (limma v3).
 
 use crate::de::cholesky_lower;
-use statrs::distribution::{ContinuousCDF, StudentsT};
+use statrs::distribution::{ContinuousCDF, FisherSnedecor, StudentsT};
 
 /// Digamma ψ(x) = d/dx ln Γ(x). Asymptotic expansion for x ≥ 10,
 /// recurrence `ψ(x) = ψ(x+1) - 1/x` for smaller x. The x ≥ 10 cutoff
@@ -435,6 +435,129 @@ pub fn moderated_t(
     }
 }
 
+/// Output of [`moderated_f`] — F statistic, numerator df `k`,
+/// denominator df `df_total`, and p-value.
+pub struct ModeratedF {
+    pub f: f64,
+    pub num_df: usize,
+    pub den_df: f64,
+    pub p_value: f64,
+}
+
+/// Moderated F-statistic across a contrast matrix `C` (rows = coefficients,
+/// columns = contrasts), with eBayes-shrunken posterior variance `s²_post`
+/// and `df_total = df_res + df_prior`.
+///
+/// Algorithm:
+/// 1. `eff` = `Cᵀ · β` (length `k`).
+/// 2. `M` = `Cᵀ · (X'X)⁻¹ · C` (`k × k`). Compute via `M = Zᵀ Z` where
+///    `Z = L⁻¹ C` (forward-solve each column of `C` against `L`).
+/// 3. Cholesky-factor `M`. If non-SPD, return `None` (rank-deficient
+///    contrast matrix).
+/// 4. Solve `M · w = eff`, then `F = effᵀ · w / (k · s²_post)`.
+/// 5. p-value from `F_{k, df_total}`.
+pub fn moderated_f(
+    beta: &[f64],
+    contrast_matrix: &[Vec<f64>],
+    xtx_l: &[Vec<f64>],
+    s2_posterior: f64,
+    df_total: f64,
+) -> Option<ModeratedF> {
+    if contrast_matrix.is_empty() {
+        return None;
+    }
+    let p = beta.len();
+    if xtx_l.len() != p {
+        return None;
+    }
+    if contrast_matrix.len() != p {
+        return None;
+    }
+    let k = contrast_matrix[0].len();
+    if k == 0 {
+        return None;
+    }
+    for row in contrast_matrix {
+        if row.len() != k {
+            return None;
+        }
+    }
+    if s2_posterior <= 0.0 || !s2_posterior.is_finite() {
+        return None;
+    }
+
+    // eff_j = Σ_i C[i][j] · β[i]
+    let mut eff = vec![0.0_f64; k];
+    for j in 0..k {
+        for i in 0..p {
+            eff[j] += contrast_matrix[i][j] * beta[i];
+        }
+    }
+
+    // Z = L⁻¹ C: for each column j of C, forward-solve.
+    let mut z_mat = vec![vec![0.0_f64; k]; p];
+    for j in 0..k {
+        let mut z_col = vec![0.0_f64; p];
+        for i in 0..p {
+            let mut s = contrast_matrix[i][j];
+            for q in 0..i {
+                s -= xtx_l[i][q] * z_col[q];
+            }
+            z_col[i] = s / xtx_l[i][i];
+        }
+        for i in 0..p {
+            z_mat[i][j] = z_col[i];
+        }
+    }
+
+    // M = Zᵀ Z (k × k, symmetric).
+    let mut m = vec![vec![0.0_f64; k]; k];
+    for a in 0..k {
+        for b in 0..k {
+            let mut s = 0.0;
+            for i in 0..p {
+                s += z_mat[i][a] * z_mat[i][b];
+            }
+            m[a][b] = s;
+        }
+    }
+
+    // Cholesky of M.
+    let m_l = crate::de::cholesky_lower(&m)?;
+
+    // Forward-solve L w_tmp = eff, then Lᵀ w = w_tmp.
+    let mut w_tmp = vec![0.0_f64; k];
+    for i in 0..k {
+        let mut s = eff[i];
+        for q in 0..i {
+            s -= m_l[i][q] * w_tmp[q];
+        }
+        w_tmp[i] = s / m_l[i][i];
+    }
+    let mut w = vec![0.0_f64; k];
+    for i in (0..k).rev() {
+        let mut s = w_tmp[i];
+        for q in (i + 1)..k {
+            s -= m_l[q][i] * w[q];
+        }
+        w[i] = s / m_l[i][i];
+    }
+
+    let quad = eff.iter().zip(w.iter()).map(|(e, wv)| e * wv).sum::<f64>();
+    let f = quad / (k as f64 * s2_posterior);
+    if !f.is_finite() || f < 0.0 {
+        return None;
+    }
+    let dist = FisherSnedecor::new(k as f64, df_total).ok()?;
+    let p_value = 1.0 - dist.cdf(f);
+    Some(ModeratedF {
+        f,
+        num_df: k,
+        den_df: df_total,
+        p_value,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,6 +701,46 @@ mod tests {
             out.s2_prior,
         );
         let _ = df_non;
+    }
+
+    #[test]
+    fn moderated_f_equals_moderated_t_squared_for_single_contrast() {
+        // 1-column contrast: F-statistic should equal t².
+        let beta = vec![2.0, -1.0];
+        let contrast_matrix = vec![vec![1.0], vec![-1.0]]; // contrast is (1, -1)
+        let xtx_l = vec![vec![1.0, 0.0], vec![0.0, 1.0]]; // identity ⇒ L = I
+        let s2_posterior = 4.0;
+        let df_total = 10.0;
+        let f_out = super::moderated_f(&beta, &contrast_matrix, &xtx_l, s2_posterior, df_total)
+            .expect("ok");
+        let t_out = super::moderated_t(
+            &beta,
+            &[1.0_f64, -1.0],
+            &xtx_l,
+            s2_posterior,
+            df_total,
+        );
+        assert!((f_out.f - t_out.t * t_out.t).abs() < 1e-10);
+    }
+
+    #[test]
+    fn moderated_f_populates_two_contrast_case() {
+        let beta = vec![1.0, 2.0, 3.0];
+        // Two contrasts: (β₁ - β₂), (β₂ - β₃).
+        let contrast_matrix = vec![
+            vec![1.0, 0.0],
+            vec![-1.0, 1.0],
+            vec![0.0, -1.0],
+        ];
+        let xtx_l = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let f_out = super::moderated_f(&beta, &contrast_matrix, &xtx_l, 1.0, 20.0).expect("ok");
+        assert!(f_out.f > 0.0 && f_out.f.is_finite());
+        assert!(f_out.p_value >= 0.0 && f_out.p_value <= 1.0);
+        assert_eq!(f_out.num_df, 2);
     }
 
     #[test]
