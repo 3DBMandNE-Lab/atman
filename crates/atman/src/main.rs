@@ -54,6 +54,8 @@ enum Command {
     Report(commands::report::Args),
     /// Score biological modules from canonical Atman measurements.
     Score(commands::score::Args),
+    /// Rank-transform measurements within each cohort/input directory.
+    WithinCohortRank(commands::within_cohort_rank::Args),
 }
 
 fn main() -> Result<()> {
@@ -77,5 +79,6 @@ fn main() -> Result<()> {
         Command::Validate(args) => commands::validate::run(args),
         Command::Report(args) => commands::report::run(args),
         Command::Score(args) => commands::score::run(args),
+        Command::WithinCohortRank(args) => commands::within_cohort_rank::run(args),
     }
 }

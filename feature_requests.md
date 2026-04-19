@@ -317,16 +317,6 @@ Flags programs that fail annotation significance, have diffuse loadings,
 or show keratin-contamination. Lets Methods report "N of K programs
 carry interpretable biology" (reviewer #12).
 
-### 11. `atman within-cohort-rank` — explicit platform-heterogeneity preprocessing
-
-```bash
-atman within-cohort-rank --input-dir out --output-dir out/ranked
-```
-
-Replaces the DIA-vs-DDA intensity-scale heterogeneity across cohorts
-with explicit within-cohort rank-transformation as an auditable pipeline
-step (reviewer #11).
-
 ### 12. `atman de --per-subject-proxy QAlb` — barrier/clearance proxy regression
 
 Auto-detects known physiological proxies in `samples.tsv` (QAlb, Evans
@@ -355,7 +345,7 @@ atman release makes that concrete.
 | #8 r×τ quantitative fit | Feature 12 | P2 |
 | #9 pre-specification provenance | Feature 5 | P1 |
 | #10 sign-test framing | Covered by completed module-level meta support | P1 |
-| #11 platform heterogeneity | Feature 11 | P2 |
+| #11 platform heterogeneity | Covered by completed within-cohort rank transform | P2 |
 | #12 program interpretability count | Feature 10 | P2 |
 | #13 category continuum rather than dichotomy | Covered by completed module-level meta support | P1 |
 | Methods reproducibility posture | Features 4, 5, 6, 13 | P1 + P2 |

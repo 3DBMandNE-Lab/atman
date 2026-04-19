@@ -18,6 +18,7 @@ pub mod report;
 pub mod robustness;
 pub mod score;
 pub mod validate;
+pub mod within_cohort_rank;
 
 /// Parse comma-separated comparisons in `A-B` form with strict validation.
 pub fn parse_comparisons(groups: &str) -> Result<Vec<(String, String)>> {
