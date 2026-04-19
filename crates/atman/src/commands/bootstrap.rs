@@ -20,6 +20,8 @@ enum Command {
     Protein(ProteinArgs),
     /// Subject-level bootstrap confidence intervals for module effects.
     Module(ModuleArgs),
+    /// Subject-level bootstrap confidence intervals for signed-loading program effects.
+    Program(ProgramArgs),
 }
 
 #[derive(ClapArgs, Debug)]
@@ -104,6 +106,49 @@ pub struct ModuleArgs {
     ci_high: f64,
 }
 
+#[derive(ClapArgs, Debug)]
+pub struct ProgramArgs {
+    /// Directory containing canonical Atman TSV files.
+    #[arg(long)]
+    input_dir: PathBuf,
+
+    /// Signed loading TSV with columns `program`, `gene_symbol`, and `loading`.
+    #[arg(long)]
+    loadings: PathBuf,
+
+    /// Output TSV path.
+    #[arg(long)]
+    output: PathBuf,
+
+    /// Comma-separated comparisons in A-B form.
+    #[arg(long)]
+    groups: String,
+
+    /// Bootstrap mode: welch-t for unpaired or paired-t for matched subjects.
+    #[arg(long, default_value = "welch-t")]
+    test: String,
+
+    /// Number of bootstrap replicates.
+    #[arg(long, default_value_t = 2000)]
+    n: usize,
+
+    /// Minimum subjects per group, or matched subjects in paired mode.
+    #[arg(long, default_value_t = 2)]
+    min_pairs: usize,
+
+    /// Deterministic RNG seed.
+    #[arg(long, default_value_t = 20260418)]
+    seed: u64,
+
+    /// Lower CI quantile.
+    #[arg(long, default_value_t = 0.025)]
+    ci_low: f64,
+
+    /// Upper CI quantile.
+    #[arg(long, default_value_t = 0.975)]
+    ci_high: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ProteinKey {
     platform: String,
@@ -155,10 +200,29 @@ struct ModuleBootstrapRow {
     skip_reason: String,
 }
 
+#[derive(Debug)]
+struct ProgramBootstrapRow {
+    comparison: String,
+    program: String,
+    n_a: usize,
+    n_b: usize,
+    n_pairs: usize,
+    n_loadings_declared: usize,
+    n_loadings_observed: usize,
+    point_effect: Option<f64>,
+    bootstrap_mean: Option<f64>,
+    ci_low: Option<f64>,
+    ci_high: Option<f64>,
+    sign_stability: Option<f64>,
+    n_bootstrap: usize,
+    skip_reason: String,
+}
+
 pub fn run(args: Args) -> Result<()> {
     match args.command {
         Command::Protein(args) => run_protein(args),
         Command::Module(args) => run_module(args),
+        Command::Program(args) => run_program(args),
     }
 }
 
@@ -431,6 +495,160 @@ fn run_module(args: ModuleArgs) -> Result<()> {
     Ok(())
 }
 
+fn run_program(args: ProgramArgs) -> Result<()> {
+    if args.test != "welch-t" && args.test != "paired-t" {
+        bail!("bootstrap program supports --test welch-t or paired-t");
+    }
+    if args.n == 0 {
+        bail!("--n must be > 0");
+    }
+    if args.min_pairs < 2 {
+        bail!("--min-pairs must be >= 2");
+    }
+    if !(0.0..=1.0).contains(&args.ci_low)
+        || !(0.0..=1.0).contains(&args.ci_high)
+        || args.ci_low >= args.ci_high
+    {
+        bail!("CI quantiles must satisfy 0 <= ci-low < ci-high <= 1");
+    }
+
+    let comparisons = parse_comparisons(&args.groups)?;
+    let loadings = read_program_loadings(&args.loadings)?;
+    let measurements_path = if args.input_dir.join("qc_measurements.tsv").exists() {
+        args.input_dir.join("qc_measurements.tsv")
+    } else {
+        args.input_dir.join("measurements.tsv")
+    };
+    let measurements = read_measurements_long(&measurements_path)?;
+    let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
+    let sample_by_id: HashMap<&str, &Sample> =
+        samples.iter().map(|s| (s.sample_id.as_str(), s)).collect();
+
+    let mut gene_to_programs: HashMap<&str, Vec<(&str, f64)>> = HashMap::new();
+    for (program, genes) in &loadings {
+        for (gene, loading) in genes {
+            gene_to_programs
+                .entry(gene.as_str())
+                .or_default()
+                .push((program.as_str(), *loading));
+        }
+    }
+
+    #[derive(Default)]
+    struct WeightedAcc {
+        weighted_sum: f64,
+        weight_abs_sum: f64,
+        n: usize,
+    }
+
+    let mut observed_genes: BTreeMap<String, BTreeMap<String, ()>> = BTreeMap::new();
+    let mut per_program_sample: HashMap<(String, String), WeightedAcc> = HashMap::new();
+    for m in &measurements {
+        let Some(gene) = m.gene_symbol.as_deref() else {
+            continue;
+        };
+        let Some(program_names) = gene_to_programs.get(gene) else {
+            continue;
+        };
+        let Some(value) = m.effective_abundance() else {
+            continue;
+        };
+        for (program, loading) in program_names {
+            observed_genes
+                .entry((*program).to_string())
+                .or_default()
+                .insert(gene.to_string(), ());
+            let acc = per_program_sample
+                .entry(((*program).to_string(), m.sample_id.clone()))
+                .or_default();
+            acc.weighted_sum += value * loading;
+            acc.weight_abs_sum += loading.abs();
+            acc.n += 1;
+        }
+    }
+
+    let mut cells: BTreeMap<String, BTreeMap<String, BTreeMap<String, Vec<f64>>>> = BTreeMap::new();
+    for ((program, sample_id), acc) in per_program_sample {
+        if acc.n == 0 || acc.weight_abs_sum == 0.0 {
+            continue;
+        }
+        let Some(sample) = sample_by_id.get(sample_id.as_str()) else {
+            continue;
+        };
+        if sample.is_control {
+            continue;
+        }
+        let Some(condition) = &sample.condition else {
+            continue;
+        };
+        let subject = sample.subject_id.as_ref().unwrap_or(&sample.sample_id);
+        cells
+            .entry(program)
+            .or_default()
+            .entry(condition.clone())
+            .or_default()
+            .entry(subject.clone())
+            .or_default()
+            .push(acc.weighted_sum / acc.weight_abs_sum);
+    }
+
+    let mut rng = Rng64::new(args.seed);
+    let mut rows = Vec::new();
+    for (a, b) in &comparisons {
+        let comparison = format!("{a}-{b}");
+        for (program, genes) in &loadings {
+            let by_condition = cells.get(program);
+            let a_values = subject_means(by_condition.and_then(|m| m.get(a)));
+            let b_values = subject_means(by_condition.and_then(|m| m.get(b)));
+            let n_observed = observed_genes.get(program).map(BTreeMap::len).unwrap_or(0);
+            let mut ctx = ProgramRowContext {
+                comparison: &comparison,
+                program,
+                n_a: a_values.len(),
+                n_b: b_values.len(),
+                n_pairs: 0,
+                n_loadings_declared: genes.len(),
+                n_loadings_observed: n_observed,
+            };
+            let row = if args.test == "paired-t" {
+                let diffs: Vec<f64> = a_values
+                    .iter()
+                    .filter_map(|(subject, a)| b_values.get(subject).map(|b| a - b))
+                    .collect();
+                ctx.n_pairs = diffs.len();
+                bootstrap_program_from_values(&args, &mut rng, ctx, None, Some(&diffs))
+            } else {
+                bootstrap_program_from_values(
+                    &args,
+                    &mut rng,
+                    ctx,
+                    Some((&a_values, &b_values)),
+                    None,
+                )
+            };
+            rows.push(row);
+        }
+    }
+
+    rows.sort_by(|a, b| {
+        a.comparison
+            .cmp(&b.comparison)
+            .then_with(|| a.program.cmp(&b.program))
+    });
+    write_program_rows(&args.output, &rows)?;
+    let computed = rows.iter().filter(|r| r.point_effect.is_some()).count();
+    eprintln!(
+        "bootstrap program: test={} comparisons={} rows={} computed={} n={} seed={}",
+        args.test,
+        comparisons.len(),
+        rows.len(),
+        computed,
+        args.n,
+        args.seed
+    );
+    Ok(())
+}
+
 fn bootstrap_unpaired(
     args: &ProteinArgs,
     rng: &mut Rng64,
@@ -646,6 +864,19 @@ struct ModuleRowContext<'a> {
     n_genes_observed: usize,
 }
 
+#[derive(Clone, Copy)]
+struct ProgramRowContext<'a> {
+    comparison: &'a str,
+    program: &'a str,
+    n_a: usize,
+    n_b: usize,
+    n_pairs: usize,
+    n_loadings_declared: usize,
+    n_loadings_observed: usize,
+}
+
+type SubjectValues<'a> = (&'a BTreeMap<String, f64>, &'a BTreeMap<String, f64>);
+
 fn computed_module_row(
     ctx: ModuleRowContext<'_>,
     point: f64,
@@ -683,6 +914,88 @@ fn skipped_module_row(ctx: ModuleRowContext<'_>, reason: &str) -> ModuleBootstra
         n_pairs: ctx.n_pairs,
         n_genes_declared: ctx.n_genes_declared,
         n_genes_observed: ctx.n_genes_observed,
+        point_effect: None,
+        bootstrap_mean: None,
+        ci_low: None,
+        ci_high: None,
+        sign_stability: None,
+        n_bootstrap: 0,
+        skip_reason: reason.to_string(),
+    }
+}
+
+fn bootstrap_program_from_values(
+    args: &ProgramArgs,
+    rng: &mut Rng64,
+    ctx: ProgramRowContext<'_>,
+    unpaired: Option<SubjectValues<'_>>,
+    paired_diffs: Option<&[f64]>,
+) -> ProgramBootstrapRow {
+    if ctx.n_loadings_observed == 0 {
+        return skipped_program_row(ctx, "no_observed_loadings");
+    }
+    let mut effects = Vec::with_capacity(args.n);
+    let point = if let Some(diffs) = paired_diffs {
+        if diffs.len() < args.min_pairs {
+            return skipped_program_row(ctx, "insufficient_pairs");
+        }
+        for _ in 0..args.n {
+            effects.push(bootstrap_mean(diffs, rng));
+        }
+        mean(diffs)
+    } else if let Some((a_values, b_values)) = unpaired {
+        let a: Vec<f64> = a_values.values().copied().collect();
+        let b: Vec<f64> = b_values.values().copied().collect();
+        if a.len() < args.min_pairs || b.len() < args.min_pairs {
+            return skipped_program_row(ctx, "insufficient_subjects");
+        }
+        for _ in 0..args.n {
+            effects.push(bootstrap_mean(&a, rng) - bootstrap_mean(&b, rng));
+        }
+        mean(&a) - mean(&b)
+    } else {
+        return skipped_program_row(ctx, "internal_error");
+    };
+    computed_program_row(ctx, point, effects, args.ci_low, args.ci_high)
+}
+
+fn computed_program_row(
+    ctx: ProgramRowContext<'_>,
+    point: f64,
+    mut effects: Vec<f64>,
+    ci_low: f64,
+    ci_high: f64,
+) -> ProgramBootstrapRow {
+    let boot_mean = mean(&effects);
+    let sign_stability = sign_stability(point, &effects);
+    effects.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    ProgramBootstrapRow {
+        comparison: ctx.comparison.to_string(),
+        program: ctx.program.to_string(),
+        n_a: ctx.n_a,
+        n_b: ctx.n_b,
+        n_pairs: ctx.n_pairs,
+        n_loadings_declared: ctx.n_loadings_declared,
+        n_loadings_observed: ctx.n_loadings_observed,
+        point_effect: Some(point),
+        bootstrap_mean: Some(boot_mean),
+        ci_low: Some(quantile_sorted(&effects, ci_low)),
+        ci_high: Some(quantile_sorted(&effects, ci_high)),
+        sign_stability: Some(sign_stability),
+        n_bootstrap: effects.len(),
+        skip_reason: String::new(),
+    }
+}
+
+fn skipped_program_row(ctx: ProgramRowContext<'_>, reason: &str) -> ProgramBootstrapRow {
+    ProgramBootstrapRow {
+        comparison: ctx.comparison.to_string(),
+        program: ctx.program.to_string(),
+        n_a: ctx.n_a,
+        n_b: ctx.n_b,
+        n_pairs: ctx.n_pairs,
+        n_loadings_declared: ctx.n_loadings_declared,
+        n_loadings_observed: ctx.n_loadings_observed,
         point_effect: None,
         bootstrap_mean: None,
         ci_low: None,
@@ -817,6 +1130,47 @@ fn write_module_rows(path: &Path, rows: &[ModuleBootstrapRow]) -> Result<()> {
     atomic_write(path, buf.as_bytes())
 }
 
+fn write_program_rows(path: &Path, rows: &[ProgramBootstrapRow]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating output dir {:?}", parent))?;
+    }
+    let mut buf = String::from(
+        "comparison\tprogram\tn_a\tn_b\tn_pairs\tn_loadings_declared\tn_loadings_observed\tpoint_effect\tbootstrap_mean\tci_low\tci_high\tsign_stability\tn_bootstrap\tskip_reason\n",
+    );
+    for r in rows {
+        buf.push_str(&r.comparison);
+        buf.push('\t');
+        buf.push_str(&r.program);
+        buf.push('\t');
+        buf.push_str(&r.n_a.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_b.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_pairs.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_loadings_declared.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_loadings_observed.to_string());
+        buf.push('\t');
+        push_opt(&mut buf, r.point_effect);
+        buf.push('\t');
+        push_opt(&mut buf, r.bootstrap_mean);
+        buf.push('\t');
+        push_opt(&mut buf, r.ci_low);
+        buf.push('\t');
+        push_opt(&mut buf, r.ci_high);
+        buf.push('\t');
+        push_opt(&mut buf, r.sign_stability);
+        buf.push('\t');
+        buf.push_str(&r.n_bootstrap.to_string());
+        buf.push('\t');
+        buf.push_str(&r.skip_reason);
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
 fn read_modules(path: &Path) -> Result<BTreeMap<String, Vec<String>>> {
     let mut reader = ReaderBuilder::new()
         .delimiter(b'\t')
@@ -843,6 +1197,47 @@ fn read_modules(path: &Path) -> Result<BTreeMap<String, Vec<String>>> {
         out.entry(module.to_string())
             .or_default()
             .push(gene.to_string());
+    }
+    Ok(out)
+}
+
+fn read_program_loadings(path: &Path) -> Result<BTreeMap<String, Vec<(String, f64)>>> {
+    let mut reader = ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(path)
+        .with_context(|| format!("opening {:?}", path))?;
+    let headers = reader.headers()?.clone();
+    let program_col = headers
+        .iter()
+        .position(|h| h == "program")
+        .with_context(|| format!("missing column `program` in {:?}", path))?;
+    let gene_col = headers
+        .iter()
+        .position(|h| h == "gene_symbol")
+        .with_context(|| format!("missing column `gene_symbol` in {:?}", path))?;
+    let loading_col = headers
+        .iter()
+        .position(|h| h == "loading")
+        .with_context(|| format!("missing column `loading` in {:?}", path))?;
+    let mut out: BTreeMap<String, Vec<(String, f64)>> = BTreeMap::new();
+    for row in reader.records() {
+        let row = row?;
+        let program = row[program_col].trim();
+        let gene = row[gene_col].trim();
+        let loading: f64 = row[loading_col]
+            .trim()
+            .parse()
+            .with_context(|| format!("parsing loading in {:?}", path))?;
+        if program.is_empty() || gene.is_empty() || !loading.is_finite() || loading == 0.0 {
+            continue;
+        }
+        out.entry(program.to_string())
+            .or_default()
+            .push((gene.to_string(), loading));
+    }
+    if out.is_empty() {
+        bail!("no finite non-zero program loadings found in {:?}", path);
     }
     Ok(out)
 }

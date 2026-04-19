@@ -200,39 +200,6 @@ per run.
 
 ---
 
-### 9. `atman bootstrap program` — signed-loading program bootstrap
-
-**Command sketch.**
-
-```bash
-atman bootstrap program \
-  --input-dir out \
-  --loadings out/ica_loadings.tsv \
-  --groups Case-Control \
-  --n 1000 \
-  --seed 20260418 \
-  --output out/program_bootstrap.tsv
-```
-
-**What it does.** Like `bootstrap module`, but takes signed loadings
-instead of binary membership. Per-subject program score is the
-loading-weighted mean of per-subject protein abundances. Subject-level
-bootstrap returns the sign-stability score that manuscript §3 already
-uses.
-
-**Why we need it.** Current `scripts/ica_program_de.py` does this by
-averaging ICA activations across subjects and bootstrapping. Moving it
-into atman with signed-loading weighting improves the statistic
-(activation averaging loses loading magnitude) and replaces one more
-Python script with a tested Rust run.
-
-**Matches reviewer items.** None directly, cleaner Methods.
-
-**Scope hints.** Generalization of `bootstrap module` with a loading
-weight vector instead of an indicator vector.
-
----
-
 ## P2 — Nice to have
 
 ## Feature-to-review-item matrix
