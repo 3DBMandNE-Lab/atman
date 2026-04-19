@@ -558,6 +558,32 @@ pub fn moderated_f(
     })
 }
 
+/// TREAT p-value (Phipson et al. 2013): test `H₀: |δ| ≤ lfc_threshold`
+/// rather than the point null `H₀: δ = 0`. Implemented as the sum of
+/// one-sided probabilities shifted by the threshold on the standard-error
+/// scale:
+///
+/// ```text
+/// p = P(T > (t − lfc/se) | T ~ t_df) + P(T < (−t − lfc/se) | T ~ t_df)
+/// ```
+///
+/// When `lfc = 0` this reduces to `2 · (1 − T_df(|t|))`, the standard
+/// two-sided moderated-t p-value.
+pub fn treat_p_value(t: f64, se: f64, df_total: f64, lfc_threshold: f64) -> f64 {
+    if !t.is_finite() || !se.is_finite() || se <= 0.0 || !df_total.is_finite() || df_total <= 0.0
+    {
+        return f64::NAN;
+    }
+    let dist = match StudentsT::new(0.0, 1.0, df_total) {
+        Ok(d) => d,
+        Err(_) => return f64::NAN,
+    };
+    let shift = lfc_threshold.abs() / se;
+    let upper = 1.0 - dist.cdf(t - shift);
+    let lower = dist.cdf(-t - shift);
+    (upper + lower).clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -701,6 +727,29 @@ mod tests {
             out.s2_prior,
         );
         let _ = df_non;
+    }
+
+    #[test]
+    fn treat_at_zero_threshold_equals_standard_two_sided_t_p() {
+        let t = 2.5;
+        let se = 1.0;
+        let df = 15.0;
+        let treat_p = super::treat_p_value(t, se, df, 0.0);
+        // Standard two-sided t-test p:
+        let dist = statrs::distribution::StudentsT::new(0.0, 1.0, df).unwrap();
+        let standard_p =
+            2.0 * (1.0 - <statrs::distribution::StudentsT as statrs::distribution::ContinuousCDF<f64, f64>>::cdf(&dist, t.abs()));
+        assert!((treat_p - standard_p).abs() < 1e-12);
+    }
+
+    #[test]
+    fn treat_increases_p_as_threshold_grows() {
+        let t = 2.5;
+        let se = 0.5;
+        let df = 15.0;
+        let p_small = super::treat_p_value(t, se, df, 0.0);
+        let p_large = super::treat_p_value(t, se, df, 0.5);
+        assert!(p_large >= p_small);
     }
 
     #[test]
