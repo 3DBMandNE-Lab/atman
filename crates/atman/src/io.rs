@@ -17,6 +17,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use crate::run_sidecar::{
+    format_iso8601_utc, hash_canonical_inputs, sidecar_path_for, write_run_sidecar,
+};
+
 /// Locate a required column by header name; bail with a readable error when missing.
 pub fn need_col(headers: &StringRecord, name: &str, path: &Path) -> Result<usize> {
     headers

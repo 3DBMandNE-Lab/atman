@@ -148,6 +148,40 @@ fn decompose_ica_emits_loadings_activations_and_stability() {
         // across seeds; require >= 0.5 recovered with top-10 Jaccard >= 0.5.
         assert!(frac >= 0.5, "program {} stability={frac}", row[0]);
     }
+
+    // Sidecar: one-per-invocation provenance JSON next to the loadings TSV.
+    let sidecar_path = tmp.path().join("loadings.tsv.run.json");
+    let sidecar_text = std::fs::read_to_string(&sidecar_path)
+        .expect("decompose ica should write <primary_output>.run.json");
+    let sidecar: serde_json::Value = serde_json::from_str(&sidecar_text).unwrap();
+    assert_eq!(sidecar["command"], "decompose ica");
+    assert_eq!(sidecar["exit_code"], 0);
+    assert_eq!(sidecar["args"]["k"], 2);
+    assert_eq!(sidecar["args"]["n-seeds"], 5);
+    assert_eq!(sidecar["args"]["seed"], 20260418);
+    assert_eq!(sidecar["args"]["seed-stability-threshold"], 0.5);
+    assert_eq!(sidecar["args"]["stability-metric"], "jaccard-top20");
+    assert_eq!(sidecar["args"]["stability-top-n"], 10);
+    assert_eq!(sidecar["args"]["source"], "qc");
+    assert!(sidecar["atman_version"].is_string());
+    assert!(sidecar["atman_git_sha"].is_string());
+    assert!(sidecar["os_arch"].is_string());
+    assert!(sidecar["input_dir_sha256"]
+        .as_str()
+        .map(|s| s.len() == 64)
+        .unwrap_or(false));
+    let started = sidecar["started_at"].as_str().unwrap();
+    let finished = sidecar["finished_at"].as_str().unwrap();
+    assert!(started.ends_with('Z') && started.len() == 20);
+    assert!(finished.ends_with('Z') && finished.len() == 20);
+    assert!(finished.as_bytes() >= started.as_bytes());
+    // Every output file we declared should appear in output_files with a
+    // sha256 prefix.
+    let outputs = sidecar["output_files"].as_object().unwrap();
+    assert_eq!(outputs.len(), 3);
+    for (_, v) in outputs {
+        assert!(v.as_str().unwrap().starts_with("sha256:"));
+    }
 }
 
 #[test]

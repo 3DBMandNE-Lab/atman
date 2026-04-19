@@ -1,11 +1,16 @@
 use anyhow::{bail, Context, Result};
 use atman_core::ica::{fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
+use serde_json::json;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use crate::io::{atomic_write, format_float, read_measurements_long};
+use crate::io::{
+    atomic_write, format_float, hash_canonical_inputs, read_measurements_long, sidecar_path_for,
+    write_run_sidecar,
+};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -111,6 +116,7 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn run_ica(args: IcaArgs) -> Result<()> {
+    let started_at = SystemTime::now();
     if args.n_seeds == 0 {
         bail!("--n-seeds must be at least 1");
     }
@@ -178,6 +184,51 @@ fn run_ica(args: IcaArgs) -> Result<()> {
         args.output_activations.display(),
         args.output_stability.display()
     );
+
+    let finished_at = SystemTime::now();
+    let canonical_inputs: &[&str] = match args.source.as_str() {
+        "qc" => &["qc_measurements.tsv", "samples.tsv", "proteins.tsv"],
+        _ => &["measurements.tsv", "samples.tsv", "proteins.tsv"],
+    };
+    let input_dir_sha256 = hash_canonical_inputs(&args.input_dir, canonical_inputs)?;
+    let sidecar = sidecar_path_for(&args.output_loadings);
+    let stability_metric = match args.stability_metric {
+        StabilityMetric::JaccardTop20 => "jaccard-top20",
+    };
+    write_run_sidecar(
+        &sidecar,
+        "decompose ica",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "k": args.k,
+            "k-selection": args.k_selection,
+            "k-min": args.k_min,
+            "k-max": args.k_max,
+            "n-seeds": args.n_seeds,
+            "seed": args.seed,
+            "seed-stability-threshold": args.seed_stability_threshold,
+            "stability-metric": stability_metric,
+            "stability-top-n": args.stability_top_n,
+            "max-iter": args.max_iter,
+            "tol": args.tol,
+            "source": args.source,
+            "max-missing-fraction": args.max_missing_fraction,
+            "impute": args.impute,
+            "output-loadings": args.output_loadings.display().to_string(),
+            "output-activations": args.output_activations.display().to_string(),
+            "output-stability": args.output_stability.display().to_string(),
+            "cohort": args.cohort,
+        }),
+        &input_dir_sha256,
+        &[
+            args.output_loadings.clone(),
+            args.output_activations.clone(),
+            args.output_stability.clone(),
+        ],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("decompose ica: sidecar={}", sidecar.display());
     Ok(())
 }
 
