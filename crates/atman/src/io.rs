@@ -554,6 +554,17 @@ pub struct DeResultRow {
     pub trimmed_mean_diff: Option<f64>,
     /// Non-empty when the test was skipped.
     pub skip_reason: String,
+    // Appended by the limma eBayes + F-tests feature. Each Option<f64>
+    // renders as an empty TSV cell when `None`.
+    pub s2_trend: Option<f64>,
+    pub s2_prior: Option<f64>,
+    pub s2_posterior: Option<f64>,
+    pub df_prior: Option<f64>,
+    pub df_total: Option<f64>,
+    pub f_statistic: Option<f64>,
+    pub f_p_value: Option<f64>,
+    pub f_bh_q: Option<f64>,
+    pub lfc_threshold: Option<f64>,
 }
 
 pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
@@ -561,7 +572,9 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
         "panel\tassay_id\tgene_symbol\tuniprot\tcomparison\tn_pairs\t\
          mean_a\tmean_b\tmean_diff\tt\tdf\tp_value\tbh_q\tskip_reason\t\
          effect_size\teffect_size_method\tci_low\tci_high\twilcoxon_p\twilcoxon_method\t\
-         median_diff\ttrimmed_mean_diff\n",
+         median_diff\ttrimmed_mean_diff\t\
+         s2_trend\ts2_prior\ts2_posterior\tdf_prior\tdf_total\t\
+         f_statistic\tf_p_value\tf_bh_q\tlfc_threshold\n",
     );
     for r in rows {
         buf.push_str(&r.panel);
@@ -607,6 +620,24 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
         push_opt_f64(&mut buf, r.median_diff);
         buf.push('\t');
         push_opt_f64(&mut buf, r.trimmed_mean_diff);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.s2_trend);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.s2_prior);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.s2_posterior);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.df_prior);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.df_total);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.f_statistic);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.f_p_value);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.f_bh_q);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.lfc_threshold);
         buf.push('\n');
     }
     atomic_write(path, buf.as_bytes())
@@ -622,11 +653,14 @@ pub struct DeReportRow {
     pub n_q_lt_10: usize,
     pub min_q: Option<f64>,
     pub max_abs_effect: Option<f64>,
+    // Appended by the limma eBayes + F-tests feature.
+    pub limma_trend_fallback_used: Option<bool>,
 }
 
 pub fn write_de_report(path: &Path, rows: &[DeReportRow]) -> Result<()> {
     let mut buf = String::from(
-        "comparison\tpanel\tn_tests\tn_skipped\tn_q_lt_05\tn_q_lt_10\tmin_q\tmax_abs_effect\n",
+        "comparison\tpanel\tn_tests\tn_skipped\tn_q_lt_05\tn_q_lt_10\tmin_q\tmax_abs_effect\t\
+         limma_trend_fallback_used\n",
     );
     for r in rows {
         buf.push_str(&r.comparison);
@@ -644,6 +678,12 @@ pub fn write_de_report(path: &Path, rows: &[DeReportRow]) -> Result<()> {
         push_opt_f64(&mut buf, r.min_q);
         buf.push('\t');
         push_opt_f64(&mut buf, r.max_abs_effect);
+        buf.push('\t');
+        match r.limma_trend_fallback_used {
+            Some(true) => buf.push('1'),
+            Some(false) => buf.push('0'),
+            None => {}
+        }
         buf.push('\n');
     }
     atomic_write(path, buf.as_bytes())
@@ -675,5 +715,64 @@ mod tests {
         atomic_write(&p, b"old").unwrap();
         atomic_write(&p, b"new").unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), b"new");
+    }
+
+    #[test]
+    fn de_results_round_trip_preserves_limma_columns() {
+        let d = TempDir::new().unwrap();
+        let p = d.path().join("de_results.tsv");
+        let row = DeResultRow {
+            panel: "P1".into(),
+            assay_id: "A001".into(),
+            gene_symbol: "GENE1".into(),
+            uniprot: "Q00001".into(),
+            comparison: "A-B".into(),
+            n_pairs: 5,
+            mean_a: Some(1.0),
+            mean_b: Some(0.0),
+            mean_diff: Some(1.0),
+            t: Some(2.5),
+            df: Some(10.0),
+            p_value: Some(0.01),
+            bh_q: Some(0.05),
+            effect_size: Some(1.2),
+            effect_size_method: "limma-eBayes-robust-trend".into(),
+            ci_low: Some(0.3),
+            ci_high: Some(1.7),
+            wilcoxon_p: None,
+            wilcoxon_method: "".into(),
+            median_diff: None,
+            trimmed_mean_diff: None,
+            skip_reason: "".into(),
+            // New limma columns:
+            s2_trend: Some(0.5),
+            s2_prior: Some(0.4),
+            s2_posterior: Some(0.45),
+            df_prior: Some(8.0),
+            df_total: Some(18.0),
+            f_statistic: Some(6.25),
+            f_p_value: Some(0.05),
+            f_bh_q: Some(0.1),
+            lfc_threshold: Some(0.0),
+        };
+        write_de_results(&p, &[row]).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let header = text.lines().next().unwrap();
+        for col in [
+            "s2_trend",
+            "s2_prior",
+            "s2_posterior",
+            "df_prior",
+            "df_total",
+            "f_statistic",
+            "f_p_value",
+            "f_bh_q",
+            "lfc_threshold",
+        ] {
+            assert!(header.contains(col), "header missing {col}: {header}");
+        }
+        let body = text.lines().nth(1).unwrap();
+        assert!(body.contains("0.5")); // s2_trend
+        assert!(body.contains("limma-eBayes-robust-trend"));
     }
 }

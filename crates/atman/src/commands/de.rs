@@ -436,6 +436,15 @@ pub fn run(args: Args) -> Result<()> {
                     median_diff: robust.median_diff,
                     trimmed_mean_diff: robust.trimmed_mean_diff,
                     skip_reason: String::new(),
+                    s2_trend: None,
+                    s2_prior: None,
+                    s2_posterior: None,
+                    df_prior: None,
+                    df_total: None,
+                    f_statistic: None,
+                    f_p_value: None,
+                    f_bh_q: None,
+                    lfc_threshold: None,
                 },
                 PairedTResult::Skipped { reason, n_pairs } => DeResultRow {
                     panel: panel.clone(),
@@ -464,6 +473,15 @@ pub fn run(args: Args) -> Result<()> {
                         SkipReason::ZeroVariance => "zero_variance".to_string(),
                         SkipReason::NonFiniteInput => "non_finite_input".to_string(),
                     },
+                    s2_trend: None,
+                    s2_prior: None,
+                    s2_posterior: None,
+                    df_prior: None,
+                    df_total: None,
+                    f_statistic: None,
+                    f_p_value: None,
+                    f_bh_q: None,
+                    lfc_threshold: None,
                 },
             };
             family_p.push(row.p_value);
@@ -516,6 +534,7 @@ pub fn run(args: Args) -> Result<()> {
                 n_q_lt_10: acc.n_q_lt_10,
                 min_q: acc.min_q,
                 max_abs_effect: acc.max_abs_effect,
+                limma_trend_fallback_used: None,
             });
         }
 
