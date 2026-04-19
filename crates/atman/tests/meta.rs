@@ -17,6 +17,17 @@ fn write_de(path: &std::path::Path, rows: &[(&str, f64, f64, f64)]) {
     std::fs::write(path, text).unwrap();
 }
 
+fn write_program_de(path: &std::path::Path, rows: &[(&str, &str, &str, f64, f64, f64)]) {
+    let mut text =
+        String::from("cohort\tprogram\tcategory\tpoint_delta\tci_lo\tci_hi\tp_sign_stable\n");
+    for (cohort, program, category, effect, lo, hi) in rows {
+        text.push_str(&format!(
+            "{cohort}\t{program}\t{category}\t{effect}\t{lo}\t{hi}\t0.05\n"
+        ));
+    }
+    std::fs::write(path, text).unwrap();
+}
+
 #[test]
 fn meta_combines_shared_genes_and_skips_missing_only_genes() {
     let tmp = tempfile::tempdir().unwrap();
@@ -78,4 +89,57 @@ fn meta_reports_sign_inconsistency_and_heterogeneity() {
     let sign_consistency: f64 = fields[18].parse().unwrap();
     assert!(q_heterogeneity > 0.0);
     assert!((sign_consistency - (2.0 / 3.0)).abs() < 1e-12);
+}
+
+#[test]
+fn meta_module_reports_program_sign_consistency() {
+    let tmp = tempfile::tempdir().unwrap();
+    let c1 = tmp.path().join("program1.tsv");
+    let c2 = tmp.path().join("program2.tsv");
+    let c3 = tmp.path().join("program3.tsv");
+    let out = tmp.path().join("module_meta.tsv");
+    write_program_de(
+        &c1,
+        &[
+            ("c1", "A01", "humoral", 1.0, 0.5, 1.5),
+            ("c1", "A02", "synaptic", -1.0, -1.5, -0.5),
+        ],
+    );
+    write_program_de(
+        &c2,
+        &[
+            ("c2", "A01", "humoral", 0.8, 0.3, 1.3),
+            ("c2", "A03", "myeloid", 1.0, 0.5, 1.5),
+        ],
+    );
+    write_program_de(&c3, &[("c3", "A01", "humoral", -0.2, -0.7, 0.3)]);
+
+    let output = run_atman(&[
+        "meta",
+        "--inputs",
+        &format!("{},{},{}", c1.display(), c2.display(), c3.display()),
+        "--level",
+        "module",
+        "--report",
+        "sign-consistency",
+        "--output",
+        out.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = std::fs::read_to_string(out).unwrap();
+    assert!(text.starts_with("program\tcategory\tn_cohorts"));
+    assert!(text.contains("A01\thumoral\t3\t"));
+    assert!(!text.contains("A02\tsynaptic"));
+    assert!(!text.contains("A03\tmyeloid"));
+    let row = text.lines().nth(1).unwrap();
+    let fields: Vec<&str> = row.split('\t').collect();
+    assert_eq!(fields[0], "A01");
+    assert_eq!(fields[2], "3");
+    assert_eq!(fields[16], "2");
+    assert_eq!(fields[17], "1");
+    assert!((fields[15].parse::<f64>().unwrap() - (2.0 / 3.0)).abs() < 1e-12);
 }

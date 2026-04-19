@@ -38,6 +38,8 @@ enum Command {
     Asymmetry(commands::asymmetry::Args),
     /// Bootstrap uncertainty for protein effects.
     Bootstrap(commands::bootstrap::Args),
+    /// Subject-level program coupling with sign-consistency reporting.
+    Coupling(commands::coupling::Args),
     /// Compute LOO robustness and ranking stability from DE outputs.
     Robustness(commands::robustness::Args),
     /// Compute module trajectory scores from per-subject delta table and modules.tsv.
@@ -67,6 +69,7 @@ fn main() -> Result<()> {
         Command::Enrich(args) => commands::enrich::run(args),
         Command::Asymmetry(args) => commands::asymmetry::run(args),
         Command::Bootstrap(args) => commands::bootstrap::run(args),
+        Command::Coupling(args) => commands::coupling::run(args),
         Command::Robustness(args) => commands::robustness::run(args),
         Command::ModuleTrajectory(args) => commands::module_trajectory::run(args),
         Command::ModuleDe(args) => commands::module_de::run(args),

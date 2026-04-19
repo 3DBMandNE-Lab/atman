@@ -2,6 +2,7 @@ use anyhow::{bail, Result};
 
 pub mod asymmetry;
 pub mod bootstrap;
+pub mod coupling;
 pub mod de;
 pub mod enrich;
 pub mod fold_change;
