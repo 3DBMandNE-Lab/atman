@@ -230,42 +230,6 @@ the residuals is a small addition.
 
 ---
 
-### 7. `atman ratio` — log-ratio testing between protein classes
-
-**Command sketch.**
-
-```bash
-atman ratio \
-  --input-dir out \
-  --numerator modules.intrathecal_IgV \
-  --denominator modules.plasma_IgG \
-  --test wilcoxon \
-  --groups MS-nonMS \
-  --output out/ratio_results.tsv
-```
-
-**What it does.** Computes per-subject log-ratio of two module-scored
-quantities, then tests disease-vs-control with Wilcoxon / t-test /
-permutation. Effect size = median log-ratio difference + its
-bootstrap CI.
-
-**Why we need it.** The CSF manuscript's §5.3 plasmablast vs
-plasma-derived humoral finding is currently framed as a Spearman
-coupling, which is vulnerable to reviewer #7's "same Ig proteins load
-both sides, sign reversal is tautological" critique. A log-ratio test
-(intrathecal IgV ÷ plasma-derived IgG, subject-level) matches the
-clinical MS literature's QIgG / IgG-index framing and is immune to
-the sub-component bookkeeping issue. Also relevant for the A04
-lysosomal vs A01 plasma cascade depression framing in §4.4.
-
-**Matches reviewer items.** #7 (A02 bookkeeping) — ratio framing
-sidesteps the subset-definition ambiguity.
-
-**Scope hints.** Log-ratio computation is per-subject; tests are
-standard non-parametric.
-
----
-
 ### 9. `atman bootstrap program` — signed-loading program bootstrap
 
 **Command sketch.**
@@ -315,7 +279,7 @@ output. Makes reviewer #8 a one-liner rather than a manual regression.
 | #2 annotation-constrained alignment circularity | Feature 3 | P1 |
 | #4 forced matched-K sensitivity | Feature 1 (same flag structure) | P0 |
 | #5 multi-seed FastICA stability | Feature 1 | P0 |
-| #7 A02 bookkeeping | Feature 7 (ratio framing sidesteps) | P1 |
+| #7 A02 bookkeeping | Covered by completed ratio command | P1 |
 | #8 r×τ quantitative fit | Feature 12 | P2 |
 | #9 pre-specification provenance | Feature 5 | P1 |
 | #10 sign-test framing | Covered by completed module-level meta support | P1 |

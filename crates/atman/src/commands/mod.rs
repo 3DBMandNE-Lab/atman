@@ -15,6 +15,7 @@ pub mod module_trajectory;
 pub mod null;
 pub mod programs;
 pub mod qc;
+pub mod ratio;
 pub mod report;
 pub mod robustness;
 pub mod score;

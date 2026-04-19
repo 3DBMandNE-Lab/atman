@@ -50,6 +50,8 @@ enum Command {
     ModuleDe(commands::module_de::Args),
     /// Null calibration by label permutation or paired sign flip.
     Null(commands::null::Args),
+    /// Test subject-level log-ratios between two protein or module classes.
+    Ratio(commands::ratio::Args),
     /// Validate canonical Atman TSV inputs.
     Validate(commands::validate::Args),
     /// Generate compact reports from canonical Atman outputs.
@@ -79,6 +81,7 @@ fn main() -> Result<()> {
         Command::ModuleTrajectory(args) => commands::module_trajectory::run(args),
         Command::ModuleDe(args) => commands::module_de::run(args),
         Command::Null(args) => commands::null::run(args),
+        Command::Ratio(args) => commands::ratio::run(args),
         Command::Validate(args) => commands::validate::run(args),
         Command::Report(args) => commands::report::run(args),
         Command::Score(args) => commands::score::run(args),
