@@ -301,22 +301,6 @@ weight vector instead of an indicator vector.
 
 ## P2 — Nice to have
 
-### 10. `atman programs filter` — interpretability filter
-
-```bash
-atman programs filter \
-  --loadings out/ica_loadings.tsv \
-  --annotations out/program_annotations.tsv \
-  --min-annotation-pvalue 0.05 \
-  --min-top-loading 0.5 \
-  --max-keratin-fraction 0.2 \
-  --output out/programs_interpretable.tsv
-```
-
-Flags programs that fail annotation significance, have diffuse loadings,
-or show keratin-contamination. Lets Methods report "N of K programs
-carry interpretable biology" (reviewer #12).
-
 ### 12. `atman de --per-subject-proxy QAlb` — barrier/clearance proxy regression
 
 Auto-detects known physiological proxies in `samples.tsv` (QAlb, Evans
@@ -336,7 +320,7 @@ output. Makes reviewer #8 a one-liner rather than a manual regression.
 | #9 pre-specification provenance | Feature 5 | P1 |
 | #10 sign-test framing | Covered by completed module-level meta support | P1 |
 | #11 platform heterogeneity | Covered by completed within-cohort rank transform | P2 |
-| #12 program interpretability count | Feature 10 | P2 |
+| #12 program interpretability count | Covered by completed programs filter | P2 |
 | #13 category continuum rather than dichotomy | Covered by completed module-level meta support | P1 |
 | Methods reproducibility posture | Features 4, 5, 6 | P1 + P2 |
 

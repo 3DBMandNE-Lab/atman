@@ -13,6 +13,7 @@ pub mod meta;
 pub mod module_de;
 pub mod module_trajectory;
 pub mod null;
+pub mod programs;
 pub mod qc;
 pub mod report;
 pub mod robustness;
