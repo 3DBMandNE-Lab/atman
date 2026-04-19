@@ -14,7 +14,7 @@ dataset so the package can test its raw-to-result reproduction path end to end.
 
 ## Install
 
-From source with stable Rust 1.75 or newer:
+From source with stable Rust 1.94 or newer:
 
 ```bash
 git clone https://github.com/kevinjoseph/atman.git
