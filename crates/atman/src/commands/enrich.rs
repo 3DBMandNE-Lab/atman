@@ -5,6 +5,7 @@ use csv::ReaderBuilder;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use super::enrich_gprofiler::{run_gprofiler, GprofilerArgs};
 use crate::io::atomic_write;
 
 #[derive(ClapArgs, Debug)]
@@ -17,6 +18,8 @@ pub struct Args {
 enum Command {
     /// Over-representation analysis for significant DE genes.
     Ora(OraArgs),
+    /// Live g:Profiler REST wrapper with on-disk cache.
+    Gprofiler(GprofilerArgs),
 }
 
 #[derive(ClapArgs, Debug)]
@@ -62,6 +65,7 @@ struct OraRow {
 pub fn run(args: Args) -> Result<()> {
     match args.command {
         Command::Ora(args) => run_ora(args),
+        Command::Gprofiler(args) => run_gprofiler(args),
     }
 }
 

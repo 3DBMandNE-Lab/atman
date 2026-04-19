@@ -73,6 +73,7 @@ atman module-trajectory  score user-defined modules from per-subject deltas
 atman module-de          aggregate proteins into modules and test at module level
 atman score modules      score modules per sample from canonical measurements
 atman enrich ora         over-representation analysis from DE hits
+atman enrich gprofiler   live g:Profiler REST wrapper with cached responses
 atman meta               combine DE results across cohorts
 ```
 

@@ -32,43 +32,12 @@ assembly, and a sensitivity matrix over metric × top_n × tau ×
 
 ---
 
-### 4. `atman enrich gprofiler` — live g:Profiler REST wrapper
+### ~~4. `atman enrich gprofiler` — live g:Profiler REST wrapper~~ *(shipped 2026-04-19)*
 
-**Command sketch.**
-
-```bash
-atman enrich gprofiler \
-  --de-results out/de_results.tsv \
-  --background out/measured_universe.tsv \
-  --organism hsapiens \
-  --sources GO:BP,GO:MF,GO:CC,KEGG,REAC,WP \
-  --threshold-method fdr \
-  --user-threshold 0.05 \
-  --cache-dir .gprofiler_cache \
-  --ontology-version pinned \
-  --output out/gprofiler_enrichment.tsv
-```
-
-**What it does.** Wraps the g:Profiler REST POST endpoint currently
-called from Python (`scripts/ica_program_enrichment.py`). Canonical TSV
-output with `program, source, native, name, p_value, intersection_size,
-query_size, term_size, effective_domain_size`. A `--cache-dir` + pinned
-ontology version makes re-runs deterministic.
-
-**Why we need it.** The CSF manuscript's M.9 currently calls g:Profiler
-directly from Python with a `urllib.request` POST. This is cited as a
-"live dependency" in M.14 with the acknowledgment that re-runs may vary
-slightly. Atman wrapping the call with a cache + pinned ontology version
-closes that caveat, and lets us cite a single atman command for program
-annotation instead of ad-hoc Python.
-
-**Matches reviewer items.** No direct review item, but strengthens
-Methods reproducibility and removes a live-dependency footnote in M.14.
-
-**Scope hints.** HTTP POST via `reqwest` or similar. JSON body matches
-the g:Profiler REST spec. Rate-limit handling (0.15 s sleep between
-queries is what the Python script does). Cache key = hash of (query
-gene set, background, organism, sources, threshold, ontology version).
+Live POST via `ureq` with on-disk cache keyed by a SHA-256 of the
+canonicalized request (genes, background, organism, sources, threshold
+method, user threshold, pinned ontology version). `--offline` mode
+produces byte-identical runs from a pre-populated cache.
 
 ---
 

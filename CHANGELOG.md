@@ -14,6 +14,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   top-N Jaccard seed stability against the reference seed, plus canonical
   loadings and activations TSVs. Supports `--max-missing-fraction` +
   `--impute mean` for sparse canonical matrices.
+- **g:Profiler REST wrapper (`enrich gprofiler`).** Live POST to the
+  g:Profiler `gost/profile` endpoint with on-disk cache keyed by a SHA-256
+  of the canonicalized request (genes, background, organism, sources,
+  threshold method, user threshold, pinned ontology version). `--offline`
+  mode fails on cache miss so pre-populated caches produce byte-identical
+  runs without a network round-trip. Accepts either a DE-results TSV
+  (single query of significant genes) or a `query\tgene_symbol` TSV
+  (per-program queries for ICA program annotation).
 - **Cross-cohort program alignment (`align programs`).** Single-config and
   `--sweep` mode for Jaccard (top-N), cosine, and Spearman similarity with
   optional reciprocal-best and category-agreement filters. Archetypes are

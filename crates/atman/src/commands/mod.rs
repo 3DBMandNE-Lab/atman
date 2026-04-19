@@ -7,6 +7,7 @@ pub mod coupling;
 pub mod de;
 pub mod decompose;
 pub mod enrich;
+pub mod enrich_gprofiler;
 pub mod fold_change;
 pub mod ingest;
 pub mod ingest_matrix;

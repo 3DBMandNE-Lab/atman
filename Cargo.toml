@@ -20,7 +20,10 @@ clap = { version = "4", features = ["derive"] }
 csv = "1"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 statrs = "0.17"
 tempfile = "3"
 thiserror = "1"
+ureq = { version = "2", default-features = false, features = ["tls"] }
 proptest = "1"
