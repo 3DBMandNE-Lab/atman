@@ -382,7 +382,7 @@ Acceptance:
 - Integration tests cover measured-universe defaults, comparison filtering,
   overlap reporting, and explicit universe files.
 
-### 13. Multi-Cohort Meta-Analysis
+### 13. Multi-Cohort Meta-Analysis (implemented)
 
 Combine results across independently processed cohorts.
 
@@ -390,7 +390,7 @@ Command:
 
 ```bash
 atman meta --inputs cohort1/de_results.tsv,cohort2/de_results.tsv \
-  --method fixed-effect
+  --method fixed-effect --output meta.tsv
 ```
 
 Methods:
@@ -404,6 +404,9 @@ Acceptance:
 
 - Handles missing proteins across cohorts.
 - Reports heterogeneity metrics.
+- Reports fixed-effect, random-effects, Stouffer, and sign-consistency fields.
+- Integration tests cover missing proteins, sign inconsistency, and
+  heterogeneity metrics.
 
 ## Suggested Build Order
 

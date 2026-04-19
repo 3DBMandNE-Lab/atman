@@ -8,6 +8,7 @@ pub mod fold_change;
 pub mod ingest;
 pub mod ingest_matrix;
 pub mod matrix;
+pub mod meta;
 pub mod module_de;
 pub mod module_trajectory;
 pub mod null;

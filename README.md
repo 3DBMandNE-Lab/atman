@@ -71,6 +71,7 @@ atman module-trajectory  score user-defined modules from per-subject deltas
 atman module-de          aggregate proteins into modules and test at module level
 atman score modules      score modules per sample from canonical measurements
 atman enrich ora         over-representation analysis from DE hits
+atman meta               combine DE results across cohorts
 ```
 
 ## Quick Start
@@ -169,6 +170,10 @@ atman enrich ora \
     --gene-sets gene_sets.tsv \
     --comparison "PT2-PT1" \
     --output out/ora.tsv
+
+atman meta \
+    --inputs cohort1/de_results.tsv,cohort2/de_results.tsv \
+    --output meta.tsv
 ```
 
 Common outputs:
@@ -187,6 +192,7 @@ Common outputs:
 - `null/null_summary.tsv`, `null/empirical_p.tsv`
 - `module_scores.tsv`; optional module-score canonical TSVs for downstream DE
 - `ora.tsv`
+- `meta.tsv`
 
 ## Reproducibility Check
 

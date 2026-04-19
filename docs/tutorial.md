@@ -250,7 +250,23 @@ The measured universe defaults to genes present in `de_results.tsv`; pass
 overlap size, odds ratio, Fisher upper-tail p-value, BH q-value, and overlap
 genes.
 
-## 10. Protein bootstrap
+## 10. Meta-analysis
+
+Combine DE results from independently processed cohorts:
+
+```bash
+atman meta \
+    --inputs cohort1/de_results.tsv,cohort2/de_results.tsv \
+    --output meta.tsv
+```
+
+Atman uses `mean_diff` and `t` to recover each cohort's standard error. The
+output reports fixed-effect inverse-variance results, DerSimonian-Laird
+random-effects results, Stouffer p-values, sign consistency, and heterogeneity
+metrics. Proteins missing from one cohort are retained only when at least two
+cohorts have usable effects.
+
+## 11. Protein bootstrap
 
 Subject-level bootstrap uncertainty for protein effects:
 
@@ -270,7 +286,7 @@ not measurement rows. In paired mode, only matched subjects are resampled.
 Output columns include point effect, bootstrap mean effect, confidence
 interval, sign stability, effective sample counts, and skip reason.
 
-## 11. Module bootstrap
+## 12. Module bootstrap
 
 Subject-level bootstrap uncertainty for user-defined module scores:
 
@@ -293,7 +309,7 @@ count, and skip reason.
 
 For unpaired designs, use `--test welch-t`.
 
-## 12. Null calibration
+## 13. Null calibration
 
 Permutation and sign-flip calibration estimate how many discoveries the current
 design produces under a no-effect null:
@@ -316,7 +332,7 @@ Output in `out/null/`:
   by contrast and q threshold
 - `empirical_p.tsv` — per-protein observed p/q values plus empirical p-values
 
-## 13. Asymmetry
+## 14. Asymmetry
 
 ```bash
 atman asymmetry \
@@ -327,7 +343,7 @@ atman asymmetry \
 
 Emits per-pair asymmetry metrics (challenge-vs-rest) at the contrast-family level.
 
-## 14. Robustness
+## 15. Robustness
 
 Robustness consumes the baseline DE table plus one or more rerun DE tables.
 The example below shows the command shape using placeholder LOO outputs:

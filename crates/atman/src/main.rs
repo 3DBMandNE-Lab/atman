@@ -26,6 +26,8 @@ enum Command {
     Qc(commands::qc::Args),
     /// Pivot QC'd long TSV into per-panel Dube-wide CSVs.
     Matrix(commands::matrix::Args),
+    /// Combine DE results across cohorts.
+    Meta(commands::meta::Args),
     /// Compute log2 fold change per panel for the given comparisons.
     FoldChange(commands::fold_change::Args),
     /// Differential abundance with paired-t or moderated variance-shrinkage model.
@@ -59,6 +61,7 @@ fn main() -> Result<()> {
         Command::IngestMatrix(args) => commands::ingest_matrix::run(*args),
         Command::Qc(args) => commands::qc::run(args),
         Command::Matrix(args) => commands::matrix::run(args),
+        Command::Meta(args) => commands::meta::run(args),
         Command::FoldChange(args) => commands::fold_change::run(args),
         Command::De(args) => commands::de::run(args),
         Command::Enrich(args) => commands::enrich::run(args),

@@ -65,6 +65,9 @@ exposed by the Rust binary.
 - **ORA enrichment (`enrich ora`).** Built-in over-representation analysis for
   DE hits with measured-universe defaults, optional explicit universes, Fisher
   upper-tail p-values, odds ratios, and BH q-values.
+- **Meta-analysis (`meta`).** Combine DE results across cohorts with
+  fixed-effect, random-effects, Stouffer, sign-consistency, and heterogeneity
+  summaries.
 
 ### Fixed
 
