@@ -26,39 +26,47 @@ Work one feature end-to-end before starting the next.
    Keep CLI wiring, file I/O, and path handling in
    `crates/atman/src/commands/<name>.rs`.
 
-5. **Seed every randomized routine.** Expose `--seed` (default
+5. **Reuse shared helpers.** Before writing any utility, grep
+   `atman-core::stats` (`mean`, `ranks`, `pearson`, `spearman`,
+   `cosine`, `jaccard_top_n`, `top_abs_indices`) and `atman::io`
+   (`need_col`, `find_col`, `optional_cell`, `format_float`,
+   `escape_tsv`, `sha256_hex`, `atomic_write`). Extend the shared
+   module when something is genuinely missing; add the local copy
+   only when the semantics are truly command-specific.
+
+6. **Seed every randomized routine.** Expose `--seed` (default
    `20260418`) and draw from the in-tree Xoshiro256++ so runs are
    byte-for-byte reproducible across machines.
 
-6. **Write tests at two levels.**
+7. **Write tests at two levels.**
    - Unit tests inside the core module (`#[cfg(test)] mod tests`).
    - One integration test per command under `crates/atman/tests/
      <command>.rs`, invoking the built binary via
      `env!("CARGO_BIN_EXE_atman")` against a tempdir fixture.
 
-7. **Run the full workspace before committing.**
+8. **Run the full workspace before committing.**
    `cargo test --workspace --release` should finish green with every
    test executed.
 
-8. **Smoke-test on real data.** For commands that consume canonical
+9. **Smoke-test on real data.** For commands that consume canonical
    Atman TSVs, run the new command against the Dube fixture
    (`example_data/dube_heat_2023`) after `ingest` + `qc`. This catches
    schema assumptions the synthetic test fixture misses.
 
-9. **Update user-facing docs in the same commit.**
-   - `README.md` commands list
-   - `CHANGELOG.md` under the `## [Unreleased]` heading
-   - Any relevant section in `docs/` (tutorial, analytical-roadmap)
+10. **Update user-facing docs in the same commit.**
+    - `README.md` commands list
+    - `CHANGELOG.md` under the `## [Unreleased]` heading
+    - Any relevant section in `docs/` (tutorial, analytical-roadmap)
 
-10. **Delete shipped requests from this file.** Keep this file
+11. **Delete shipped requests from this file.** Keep this file
     reflecting only what is still open.
 
-11. **Commit cleanly.** One feature per commit. Commit as yourself
+12. **Commit cleanly.** One feature per commit. Commit as yourself
     alone (commandment 9). Imperative subject line under 70 chars,
     body explains *why* in 2–4 sentences, end with `Closes <priority>
     feature <n> …` when applicable.
 
-12. **Validate before advancing.** Confirm the last feature is (a)
+13. **Validate before advancing.** Confirm the last feature is (a)
     tested, (b) committed, (c) removed from this file. Then pick up
     the next.
 
