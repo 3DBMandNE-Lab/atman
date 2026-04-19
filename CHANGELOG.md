@@ -14,6 +14,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   top-N Jaccard seed stability against the reference seed, plus canonical
   loadings and activations TSVs. Supports `--max-missing-fraction` +
   `--impute mean` for sparse canonical matrices.
+- **Pre-registered analysis runner (`run`).** Executes a declarative plan
+  file (YAML or JSON) stage by stage via `sh -c`, captures runtime, exit
+  code, atman version, OS/arch, and SHA-256 hashes of each stage's
+  declared inputs and outputs into `plan_manifest.tsv`. Detects plan
+  content drift via `plan_hash` comparison against the previous manifest
+  and refuses to overwrite unless the plan's `plan_commit` is bumped (or
+  `--allow-drift` is passed). Converts "trust my git log" into a
+  hash-verifiable provenance artifact.
 - **g:Profiler REST wrapper (`enrich gprofiler`).** Live POST to the
   g:Profiler `gost/profile` endpoint with on-disk cache keyed by a SHA-256
   of the canonicalized request (genes, background, organism, sources,

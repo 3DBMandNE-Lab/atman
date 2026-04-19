@@ -48,6 +48,8 @@ enum Command {
     Programs(commands::programs::Args),
     /// Compute LOO robustness and ranking stability from DE outputs.
     Robustness(commands::robustness::Args),
+    /// Execute a pre-registered analysis plan (YAML/JSON) and emit a manifest.
+    Run(commands::run::Args),
     /// Compute module trajectory scores from per-subject delta table and modules.tsv.
     ModuleTrajectory(commands::module_trajectory::Args),
     /// Module-level differential abundance (aggregate proteins into modules, test at module level).
@@ -86,6 +88,7 @@ fn main() -> Result<()> {
         Command::Coupling(args) => commands::coupling::run(args),
         Command::Programs(args) => commands::programs::run(args),
         Command::Robustness(args) => commands::robustness::run(args),
+        Command::Run(args) => commands::run::run(args),
         Command::ModuleTrajectory(args) => commands::module_trajectory::run(args),
         Command::ModuleDe(args) => commands::module_de::run(args),
         Command::Null(args) => commands::null::run(args),

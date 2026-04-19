@@ -41,54 +41,14 @@ produces byte-identical runs from a pre-populated cache.
 
 ---
 
-### 5. `atman run --plan analysis_plan.yaml` — pre-registered analysis runner
+### ~~5. `atman run --plan analysis_plan.yaml` — pre-registered analysis runner~~ *(shipped 2026-04-19)*
 
-**Command sketch.**
-
-```bash
-atman run \
-  --plan analysis_plan.yaml \
-  --input-dir out \
-  --output-dir out/provenance \
-  --emit-manifest
-```
-
-with `analysis_plan.yaml`:
-
-```yaml
-name: csf_crossdisease_v3
-plan_commit: <git-sha-of-this-file>
-stages:
-  - id: de_primary
-    command: atman de --test ols --design "~ condition + age + sex"
-  - id: bootstrap
-    command: atman bootstrap protein --n 1000 --seed 20260418
-  - id: null_permutation
-    command: atman null --n 1000 --seed 20260418
-  - id: ica_decompose
-    command: atman decompose ica --n-seeds 50
-  - id: program_coupling
-    command: atman coupling --pairs pairs.tsv --method spearman
-```
-
-**What it does.** Executes each stage in order, captures `(stage_id,
-command, input_hash, output_hash, runtime, exit_code, atman_version,
-system_info)` into a manifest TSV. Re-running against the same plan
-file checks that input hashes match and refuses to overwrite if the
-plan has drifted without a new SHA.
-
-**Why we need it.** Pre-specification provenance is currently a
-git-log/trust claim in the CSF manuscript. Reviewer raised this as
-essential for the "built-in positive control" framing of §5.3. An atman
-plan manifest with hashes converts "trust my git log" into a citable,
-hash-verifiable artifact.
-
-**Matches reviewer items.** #9 (pre-specification provenance).
-
-**Scope hints.** Plan YAML is declarative; atman shells out or
-dispatches internally. Hash the plan file itself, hash each input
-artifact, hash each output artifact. Manifest is one TSV, append-only
-per run.
+Reads YAML/JSON plan, dispatches each stage via `sh -c`, SHA-256 hashes
+declared inputs and outputs per stage, and writes `plan_manifest.tsv`
+with `plan_hash, stage_id, command, input_hash, output_hash, runtime_s,
+exit_code, atman_version, system, started_at_unix_s`. Plan content drift
+vs a previous manifest is detected and refused unless `plan_commit`
+changes (or `--allow-drift` is passed).
 
 ---
 
@@ -103,7 +63,7 @@ per run.
 | #5 multi-seed FastICA stability | Feature 1 (shipped) | P0 (done) |
 | #7 A02 bookkeeping | Covered by completed ratio command | P1 |
 | #8 r×τ quantitative fit | Covered by completed per-subject proxy regression | P2 |
-| #9 pre-specification provenance | Feature 5 | P1 |
+| #9 pre-specification provenance | Feature 5 (shipped) | P1 (done) |
 | #10 sign-test framing | Covered by completed module-level meta support | P1 |
 | #11 platform heterogeneity | Covered by completed within-cohort rank transform | P2 |
 | #12 program interpretability count | Covered by completed programs filter | P2 |
@@ -118,11 +78,10 @@ per run.
    `atman decompose ica` lands the reviewer-exposed multi-seed FastICA
    stability requirement as a one-line CLI call.
 
-2. **Ship P1 features 3 and 5 in a follow-up release.** These close the
-   annotation-alignment circularity, the pre-specification provenance
-   artifact. Both are implementable in Python as a fallback but reviewers respond
-   better to "cited atman command" than "custom Python script in
-   supplement."
+2. ~~**Ship P1 features 3 and 5 in a follow-up release.**~~ **Shipped
+   2026-04-19.** `atman align programs` (feature 3) closes the
+   annotation-alignment circularity, and `atman run --plan` (feature 5)
+   lands pre-specification provenance as a hash-verifiable manifest.
 
 3. **Features 4, 6, 7, 9 are methods-tightening.** They improve the
    Methods section's reproducibility posture but the paper can ship

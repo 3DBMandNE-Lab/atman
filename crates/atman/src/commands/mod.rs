@@ -22,6 +22,7 @@ pub mod ratio;
 pub mod report;
 pub mod residuals;
 pub mod robustness;
+pub mod run;
 pub mod score;
 pub mod validate;
 pub mod within_cohort_rank;
