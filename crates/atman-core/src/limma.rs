@@ -591,6 +591,246 @@ pub fn treat_p_value(t: f64, se: f64, df_total: f64, lfc_threshold: f64) -> f64 
     (upper + lower).clamp(0.0, 1.0)
 }
 
+/// Per-comparison options for [`limma_fit`].
+#[derive(Clone, Copy, Debug)]
+pub struct LimmaOptions {
+    /// Fit the parametric mean-variance trend before `squeeze_var`.
+    pub trend: bool,
+    /// Use the Winsorized robust F-fit.
+    pub robust: bool,
+    /// TREAT minimum-effect threshold (on the log-fold-change scale).
+    /// `0.0` produces the standard moderated-t p-value.
+    pub lfc_threshold: f64,
+}
+
+/// Per-feature row of [`limma_fit`] output.
+pub struct LimmaRow {
+    pub effects: Vec<f64>,
+    pub ses: Vec<f64>,
+    pub t_stats: Vec<f64>,
+    pub p_values: Vec<f64>,
+    pub f_statistic: Option<f64>,
+    pub f_p_value: Option<f64>,
+    pub s2_sample: f64,
+    pub s2_trend: Option<f64>,
+    pub s2_posterior: f64,
+    pub mean_abundance: f64,
+    pub skipped: bool,
+}
+
+/// Output of [`limma_fit`] for one comparison (= one contrast matrix).
+pub struct LimmaOutput {
+    pub rows: Vec<LimmaRow>,
+    pub df_prior: f64,
+    pub s2_prior: f64,
+    pub df_residual: f64,
+    pub df_total: f64,
+    pub trend_fallback_used: bool,
+}
+
+/// High-level limma fit: run per-feature OLS via `atman-core::de::ols::ols`,
+/// fit a shared Cholesky of X'X, optionally fit a mean-variance trend,
+/// shrink per-feature variances via `squeeze_var` (robust if requested),
+/// then compute moderated t per contrast and moderated F across all
+/// contrasts.
+///
+/// `design` is `n × p`; `y` is `n_features × n`; `contrast_matrix` is
+/// `p × k`.
+///
+/// Returns `None` when the design matrix is singular (no feature can be
+/// fit). Features individually skipped by `ols::ols` have `skipped = true`
+/// and NaN statistics.
+pub fn limma_fit(
+    design: &[Vec<f64>],
+    y: &[Vec<f64>],
+    contrast_matrix: &[Vec<f64>],
+    options: LimmaOptions,
+) -> Option<LimmaOutput> {
+    use crate::de::{ols, OlsOutcome};
+
+    if design.is_empty() || y.is_empty() || contrast_matrix.is_empty() {
+        return None;
+    }
+    let n = design.len();
+    let p = design[0].len();
+    if design.iter().any(|r| r.len() != p) {
+        return None;
+    }
+    if y.iter().any(|row| row.len() != n) {
+        return None;
+    }
+    if contrast_matrix.len() != p {
+        return None;
+    }
+    let k = contrast_matrix[0].len();
+    if contrast_matrix.iter().any(|r| r.len() != k) {
+        return None;
+    }
+
+    // Shared X'X and its Cholesky.
+    let mut xtx = vec![vec![0.0_f64; p]; p];
+    for row in design {
+        for i in 0..p {
+            for j in 0..p {
+                xtx[i][j] += row[i] * row[j];
+            }
+        }
+    }
+    let xtx_l = cholesky_lower(&xtx)?;
+
+    // Per-feature OLS.
+    let mut s2_sample = Vec::with_capacity(y.len());
+    let mut means = Vec::with_capacity(y.len());
+    let mut betas = Vec::with_capacity(y.len());
+    let mut skipped = Vec::with_capacity(y.len());
+    let mut df_res = 0.0_f64;
+    for feat_y in y {
+        match ols(design, feat_y, 2) {
+            OlsOutcome::Computed(fit) => {
+                betas.push(fit.beta.clone());
+                s2_sample.push(fit.sigma2);
+                let mean: f64 = feat_y.iter().sum::<f64>() / n as f64;
+                means.push(mean);
+                skipped.push(false);
+                df_res = fit.df;
+            }
+            OlsOutcome::Skipped { .. } => {
+                betas.push(vec![f64::NAN; p]);
+                s2_sample.push(f64::NAN);
+                means.push(f64::NAN);
+                skipped.push(true);
+            }
+        }
+    }
+    if skipped.iter().all(|b| *b) {
+        return None;
+    }
+    if df_res <= 0.0 {
+        return None;
+    }
+
+    // Trend.
+    let mut trend_fallback_used = false;
+    let s2_trend: Option<Vec<f64>> = if options.trend {
+        match fit_parametric_trend(&means, &s2_sample) {
+            Some(v) => Some(v),
+            None => {
+                trend_fallback_used = true;
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Ratios s² / s²_trend (or s² itself if no trend).
+    let ratios: Vec<f64> = s2_sample
+        .iter()
+        .enumerate()
+        .map(|(i, v)| match &s2_trend {
+            Some(t) if t[i].is_finite() && t[i] > 0.0 => v / t[i],
+            _ => *v,
+        })
+        .collect();
+
+    // eBayes prior fit.
+    let prior = if options.robust {
+        fit_f_dist_robust(&ratios, df_res)
+            .map(|o| (o.df_prior, o.s2_prior))
+            .or_else(|| fit_f_dist(&ratios, df_res))
+    } else {
+        fit_f_dist(&ratios, df_res)
+    };
+    // `trend_fallback_used` reflects whether the trend fit itself was
+    // requested-and-unfit. A successful trend fit that subsequently finds
+    // no evidence for residual prior variance (Var(log ratios) <=
+    // trigamma(df_res/2)) is NOT a trend fallback — the trend was applied,
+    // there's just nothing to shrink against. Let squeeze_var degrade
+    // gracefully to pass-through in that case.
+    let squeeze = squeeze_var(
+        &ratios,
+        df_res,
+        prior,
+    );
+    let df_prior = squeeze.df_prior;
+    let s2_prior = squeeze.s2_prior;
+    let df_total = if df_prior.is_finite() {
+        df_res + df_prior
+    } else {
+        df_res
+    };
+
+    // Per-feature statistics.
+    let mut rows = Vec::with_capacity(y.len());
+    for (i, beta) in betas.iter().enumerate() {
+        if skipped[i] {
+            rows.push(LimmaRow {
+                effects: vec![f64::NAN; k],
+                ses: vec![f64::NAN; k],
+                t_stats: vec![f64::NAN; k],
+                p_values: vec![f64::NAN; k],
+                f_statistic: None,
+                f_p_value: None,
+                s2_sample: f64::NAN,
+                s2_trend: s2_trend.as_ref().and_then(|t| if t[i].is_finite() { Some(t[i]) } else { None }),
+                s2_posterior: f64::NAN,
+                mean_abundance: f64::NAN,
+                skipped: true,
+            });
+            continue;
+        }
+        // Scale s² back to the original scale (posterior of the trend-scaled
+        // ratio times s²_trend, when a trend is present).
+        let s2_post_feature = match &s2_trend {
+            Some(t) if t[i].is_finite() && t[i] > 0.0 => squeeze.s2_posterior[i] * t[i],
+            _ => squeeze.s2_posterior[i],
+        };
+        let mut effects = Vec::with_capacity(k);
+        let mut ses = Vec::with_capacity(k);
+        let mut t_stats = Vec::with_capacity(k);
+        let mut p_values = Vec::with_capacity(k);
+        for j in 0..k {
+            let contrast: Vec<f64> = contrast_matrix.iter().map(|row| row[j]).collect();
+            let mt = moderated_t(beta, &contrast, &xtx_l, s2_post_feature, df_total);
+            let p_treat = treat_p_value(mt.t, mt.se, df_total, options.lfc_threshold);
+            effects.push(mt.effect);
+            ses.push(mt.se);
+            t_stats.push(mt.t);
+            p_values.push(p_treat);
+        }
+        let (f_stat, f_p) = if k >= 2 {
+            match moderated_f(beta, contrast_matrix, &xtx_l, s2_post_feature, df_total) {
+                Some(mf) => (Some(mf.f), Some(mf.p_value)),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+        rows.push(LimmaRow {
+            effects,
+            ses,
+            t_stats,
+            p_values,
+            f_statistic: f_stat,
+            f_p_value: f_p,
+            s2_sample: s2_sample[i],
+            s2_trend: s2_trend.as_ref().and_then(|t| if t[i].is_finite() { Some(t[i]) } else { None }),
+            s2_posterior: s2_post_feature,
+            mean_abundance: means[i],
+            skipped: false,
+        });
+    }
+
+    Some(LimmaOutput {
+        rows,
+        df_prior,
+        s2_prior,
+        df_residual: df_res,
+        df_total,
+        trend_fallback_used,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,5 +1086,46 @@ mod tests {
                 "at μ={m} trend={got} want={want}"
             );
         }
+    }
+
+    #[test]
+    fn limma_fit_on_trivial_two_group_design_produces_finite_stats() {
+        // Design: 10 samples, 2 groups (first 5 are control, next 5 case).
+        // 20 features: half have a planted effect, half are null.
+        let n = 10;
+        let design: Vec<Vec<f64>> = (0..n)
+            .map(|i| if i < 5 { vec![1.0, 0.0] } else { vec![1.0, 1.0] })
+            .collect();
+        let mut y: Vec<Vec<f64>> = Vec::new();
+        for f in 0..20 {
+            let effect = if f < 10 { 1.0 } else { 0.0 };
+            let mut row = Vec::new();
+            for (i, _) in design.iter().enumerate() {
+                let group = if i < 5 { 0.0 } else { 1.0 };
+                // Deterministic pseudo-random noise.
+                let noise = ((f * 31 + i * 7) as f64).sin();
+                row.push(group * effect + 0.1 * noise);
+            }
+            y.push(row);
+        }
+        // Contrast: the second coefficient (case vs control).
+        let contrast_matrix = vec![vec![0.0], vec![1.0]];
+        let out = super::limma_fit(
+            &design,
+            &y,
+            &contrast_matrix,
+            super::LimmaOptions {
+                trend: true,
+                robust: true,
+                lfc_threshold: 0.0,
+            },
+        )
+        .expect("ok");
+        assert_eq!(out.rows.len(), 20);
+        for row in &out.rows {
+            assert!(row.t_stats[0].is_finite() || row.skipped);
+        }
+        // Fallback flag must be false on this well-behaved fixture.
+        assert!(!out.trend_fallback_used);
     }
 }
