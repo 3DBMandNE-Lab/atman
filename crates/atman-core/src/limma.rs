@@ -8,6 +8,8 @@
 //! Reference: Smyth 2004 (eBayes), Phipson et al. 2013 (TREAT),
 //! Phipson et al. 2016 (robust), Ritchie et al. 2015 (limma v3).
 
+use crate::de::cholesky_lower;
+
 /// Digamma ψ(x) = d/dx ln Γ(x). Asymptotic expansion for x ≥ 10,
 /// recurrence `ψ(x) = ψ(x+1) - 1/x` for smaller x. The x ≥ 10 cutoff
 /// keeps the truncated series (through 1/x⁸) under ~1e-10 absolute
@@ -279,6 +281,89 @@ pub fn fit_f_dist_robust(s2: &[f64], df_res: f64) -> Option<FitFDistOutput> {
     Some(FitFDistOutput { df_prior, s2_prior })
 }
 
+/// Fit a parametric mean–variance trend `log(s²) = a + b · log(μ) + c · log(μ)²`
+/// by ordinary least squares across features. Returns the per-feature
+/// fitted `s²_trend = exp(a + b·log μ + c·log² μ)`.
+///
+/// `means` and `s2` must have equal length and contain only finite
+/// positive values (features with non-positive variance or mean are
+/// dropped from the fit; their trend value is filled with the sample
+/// mean of valid `s2`).
+///
+/// Returns `None` when fewer than 3 usable features remain (the
+/// quadratic has 3 coefficients; caller falls back to no trend).
+pub fn fit_parametric_trend(means: &[f64], s2: &[f64]) -> Option<Vec<f64>> {
+    if means.len() != s2.len() {
+        return None;
+    }
+    let mut xtx = vec![vec![0.0_f64; 3]; 3];
+    let mut xty = vec![0.0_f64; 3];
+    let mut n_used = 0_usize;
+    for (m, v) in means.iter().zip(s2.iter()) {
+        if !m.is_finite() || !v.is_finite() || *m <= 0.0 || *v <= 0.0 {
+            continue;
+        }
+        let lm = m.ln();
+        let lv = v.ln();
+        let row = [1.0, lm, lm * lm];
+        for i in 0..3 {
+            xty[i] += row[i] * lv;
+            for j in 0..3 {
+                xtx[i][j] += row[i] * row[j];
+            }
+        }
+        n_used += 1;
+    }
+    if n_used < 3 {
+        return None;
+    }
+    let l = cholesky_lower(&xtx)?;
+    // Forward-solve L z = Xᵀy.
+    let mut z = [0.0_f64; 3];
+    for i in 0..3 {
+        let mut s = xty[i];
+        for k in 0..i {
+            s -= l[i][k] * z[k];
+        }
+        z[i] = s / l[i][i];
+    }
+    // Back-solve Lᵀ β = z.
+    let mut beta = [0.0_f64; 3];
+    for i in (0..3).rev() {
+        let mut s = z[i];
+        for k in (i + 1)..3 {
+            s -= l[k][i] * beta[k];
+        }
+        beta[i] = s / l[i][i];
+    }
+
+    // Predict per feature.
+    let mut trend = Vec::with_capacity(means.len());
+    let mut fallback_sum = 0.0;
+    let mut fallback_n = 0_usize;
+    for v in s2 {
+        if v.is_finite() && *v > 0.0 {
+            fallback_sum += v.ln();
+            fallback_n += 1;
+        }
+    }
+    let fallback = if fallback_n > 0 {
+        (fallback_sum / fallback_n as f64).exp()
+    } else {
+        f64::NAN
+    };
+    for m in means {
+        if !m.is_finite() || *m <= 0.0 {
+            trend.push(fallback);
+            continue;
+        }
+        let lm = m.ln();
+        let lv = beta[0] + beta[1] * lm + beta[2] * lm * lm;
+        trend.push(lv.exp());
+    }
+    Some(trend)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,5 +507,27 @@ mod tests {
             out.s2_prior,
         );
         let _ = df_non;
+    }
+
+    #[test]
+    fn fit_parametric_trend_recovers_known_quadratic() {
+        // Construct mean vs variance under log(s²) = 1.0 - 2.0 * log(μ) + 0.5 * log(μ)²
+        let means: Vec<f64> = (1..=100).map(|i| i as f64 / 10.0 + 0.1).collect();
+        let s2: Vec<f64> = means
+            .iter()
+            .map(|m| {
+                let lm = m.ln();
+                (1.0 - 2.0 * lm + 0.5 * lm * lm).exp()
+            })
+            .collect();
+        let trend = super::fit_parametric_trend(&means, &s2).expect("ok");
+        for (m, got) in means.iter().zip(trend.iter()) {
+            let lm = m.ln();
+            let want = (1.0 - 2.0 * lm + 0.5 * lm * lm).exp();
+            assert!(
+                (got / want - 1.0).abs() < 1e-6,
+                "at μ={m} trend={got} want={want}"
+            );
+        }
     }
 }
