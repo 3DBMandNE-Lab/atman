@@ -622,6 +622,16 @@ pub struct LimmaRow {
 pub struct LimmaOutput {
     pub rows: Vec<LimmaRow>,
     pub df_prior: f64,
+    /// Prior variance.
+    ///
+    /// When `options.trend` was `true`, the prior was fit on the
+    /// per-feature ratios `s² / s²_trend`, so this value is on the
+    /// **ratio scale** (dimensionless). The per-feature
+    /// `LimmaRow.s2_posterior` has been rescaled back to the original
+    /// variance scale via `s2_posterior_ratio * s2_trend[i]`; the
+    /// top-level `s2_prior` is left in ratio units because there is no
+    /// single trend value to multiply by. When `options.trend` was
+    /// `false`, `s2_prior` is on the original variance scale.
     pub s2_prior: f64,
     pub df_residual: f64,
     pub df_total: f64,
