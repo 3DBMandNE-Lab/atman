@@ -1,4 +1,0 @@
-tool	PR2-PR1_n_q_lt_005	PT1-PR1_n_q_lt_005	PT2-PR2_n_q_lt_005	PT2-PT1_n_q_lt_005	PR2-PR1_n_q_lt_010	PT1-PR1_n_q_lt_010	PT2-PR2_n_q_lt_010	PT2-PT1_n_q_lt_010	runtime_s
-OlinkAnalyze_ttest	1	14	6	0	2	33	44	3	10.807853937149048
-atman	2	36	37	7	7	62	277	8	0.104
-limma	0	11	3	0	0	15	150	5	0.324282169342041

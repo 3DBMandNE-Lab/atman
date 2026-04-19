@@ -1,9 +1,0 @@
-comparison	loo_index	top_k	overlap_count	jaccard_index
-PR2-PR1	1	20	20	1
-PR2-PR1	2	20	20	1
-PT1-PR1	1	20	20	1
-PT1-PR1	2	20	20	1
-PT2-PR2	1	20	20	1
-PT2-PR2	2	20	20	1
-PT2-PT1	1	20	20	1
-PT2-PT1	2	20	20	1
