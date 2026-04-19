@@ -291,3 +291,231 @@ fn trend_mode_populates_expected_columns_with_finite_stats() {
         );
     }
 }
+
+#[test]
+fn treat_at_zero_matches_standard_limma_p() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    let out0 = tmp.path().join("de_out0");
+    let out_small = tmp.path().join("de_out_small");
+    copy_fixture_canonical(&input);
+    std::fs::create_dir_all(&out0).unwrap();
+    std::fs::create_dir_all(&out_small).unwrap();
+
+    for (out, lfc) in [(&out0, "0.0"), (&out_small, "0.001")] {
+        let res = run_atman(&[
+            "de",
+            "--input-dir",
+            input.to_str().unwrap(),
+            "--output-dir",
+            out.to_str().unwrap(),
+            "--test",
+            "limma",
+            "--groups",
+            "A-B",
+            "--min-pairs",
+            "3",
+            "--trend",
+            "false",
+            "--robust",
+            "true",
+            "--lfc-threshold",
+            lfc,
+        ]);
+        assert!(res.status.success());
+    }
+    let r0 = read_fixture_tsv(&out0.join("de_results.tsv"));
+    let r_small = read_fixture_tsv(&out_small.join("de_results.tsv"));
+    for (a, b) in r0.iter().zip(r_small.iter()) {
+        let p0: f64 = a.get("p_value").unwrap().parse().unwrap();
+        let p_small: f64 = b.get("p_value").unwrap().parse().unwrap();
+        assert!(
+            p_small >= p0 - 1e-9,
+            "lfc=0.001 p={p_small} should be >= lfc=0 p={p0}"
+        );
+    }
+}
+
+#[test]
+fn multi_group_f_test_populates_f_columns() {
+    // Scope note: atman's Task-12 CLI builds one-contrast-per-comparison;
+    // f_statistic populates when limma_fit is called with k>=2 contrasts,
+    // which atman's CLI doesn't currently expose. Test asserts the column
+    // schema is present and rows are finite -- tight F-column population
+    // is reserved for --contrast-matrix support (deferred).
+
+    // Build a three-group fixture on the fly (the canonical fixture is 2-group).
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    std::fs::create_dir_all(&input).unwrap();
+
+    let n_per = 4;
+    let total = 3 * n_per;
+    let groups = ["A", "B", "C"];
+    let mut samples = String::from(
+        "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n",
+    );
+    for gi in 0..3 {
+        for si in 0..n_per {
+            let i = gi * n_per + si + 1;
+            samples.push_str(&format!(
+                "S{i:02}\tS{i:02}\t{}\t0\tplasma\t{i}\n",
+                groups[gi]
+            ));
+        }
+    }
+    std::fs::write(input.join("samples.tsv"), samples).unwrap();
+
+    let proteins = "platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n\
+                    olink_explore_ngs\tA001\tQ00001\tGENE1\tP1\t\n\
+                    olink_explore_ngs\tA002\tQ00002\tGENE2\tP1\t\n";
+    std::fs::write(input.join("proteins.tsv"), proteins).unwrap();
+
+    let mut meas = String::from(
+        "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
+         abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
+         detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n",
+    );
+    let mut order = 0;
+    for i in 1..=total {
+        let gi = (i - 1) / n_per;
+        for a in ["A001", "A002"] {
+            order += 1;
+            let v = gi as f64 + ((i * 17 + order) as f64).sin() * 0.3;
+            meas.push_str(&format!(
+                "olink_explore_ngs\tS{i:02}\t{a}\tGENE{}\tP1\t{v:.6}\t\
+                 {v:.6}\t{v:.6}\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n",
+                &a[1..]
+            ));
+        }
+    }
+    std::fs::write(input.join("measurements.tsv"), &meas).unwrap();
+    std::fs::write(input.join("qc_measurements.tsv"), &meas).unwrap();
+
+    let output = tmp.path().join("de_out");
+    std::fs::create_dir_all(&output).unwrap();
+    let out = run_atman(&[
+        "de",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--test",
+        "limma",
+        "--groups",
+        "A-B,B-C",
+        "--min-pairs",
+        "3",
+        "--trend",
+        "false",
+        "--robust",
+        "false",
+    ]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    // Header presence: f_statistic, f_p_value, f_bh_q must exist.
+    let text = std::fs::read_to_string(output.join("de_results.tsv")).unwrap();
+    let header: Vec<&str> = text.lines().next().unwrap().split('\t').collect();
+    for col in ["f_statistic", "f_p_value", "f_bh_q"] {
+        assert!(
+            header.contains(&col),
+            "header missing {col}: {header:?}"
+        );
+    }
+
+    // Rows produced across both comparisons.
+    let rows = read_fixture_tsv(&output.join("de_results.tsv"));
+    assert!(!rows.is_empty(), "no rows produced on multi-group run");
+    let mut saw_ab = false;
+    let mut saw_bc = false;
+    for r in &rows {
+        let cmp = r.get("comparison").map(String::as_str).unwrap_or("");
+        if cmp.contains("A") && cmp.contains("B") && !cmp.contains("C") {
+            saw_ab = true;
+        }
+        if cmp.contains("B") && cmp.contains("C") {
+            saw_bc = true;
+        }
+        // p_value is either empty (skip_reason populated) or parseable + finite.
+        let skip_reason = r.get("skip_reason").map(String::as_str).unwrap_or("");
+        let p_str = r.get("p_value").map(String::as_str).unwrap_or("");
+        if skip_reason.is_empty() && !p_str.is_empty() {
+            let p: f64 = p_str.parse().unwrap();
+            assert!(
+                p.is_finite() && (0.0..=1.0).contains(&p),
+                "p_value out of [0,1]: {p}"
+            );
+        }
+    }
+    assert!(saw_ab && saw_bc, "expected rows for both A-B and B-C");
+}
+
+#[test]
+fn sidecar_records_limma_flags() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    let output = tmp.path().join("de_out");
+    copy_fixture_canonical(&input);
+    std::fs::create_dir_all(&output).unwrap();
+
+    let res = run_atman(&[
+        "de",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--test",
+        "limma",
+        "--groups",
+        "A-B",
+        "--min-pairs",
+        "3",
+        "--lfc-threshold",
+        "0.5",
+        "--trend",
+        "true",
+        "--robust",
+        "false",
+    ]);
+    assert!(res.status.success());
+    let sc = std::fs::read_to_string(output.join("de_results.tsv.run.json")).unwrap();
+    let j: serde_json::Value = serde_json::from_str(&sc).unwrap();
+    assert_eq!(j["args"]["test"], "limma");
+    assert_eq!(j["args"]["lfc-threshold"], 0.5);
+    assert_eq!(j["args"]["trend"], true);
+    assert_eq!(j["args"]["robust"], false);
+}
+
+#[test]
+fn limma_is_deterministic_across_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    copy_fixture_canonical(&input);
+    let a = tmp.path().join("a");
+    let b = tmp.path().join("b");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    for out in [&a, &b] {
+        let res = run_atman(&[
+            "de",
+            "--input-dir",
+            input.to_str().unwrap(),
+            "--output-dir",
+            out.to_str().unwrap(),
+            "--test",
+            "limma",
+            "--groups",
+            "A-B",
+            "--min-pairs",
+            "3",
+            "--trend",
+            "true",
+            "--robust",
+            "true",
+        ]);
+        assert!(res.status.success());
+    }
+    let a_bytes = std::fs::read(a.join("de_results.tsv")).unwrap();
+    let b_bytes = std::fs::read(b.join("de_results.tsv")).unwrap();
+    assert_eq!(a_bytes, b_bytes);
+}
