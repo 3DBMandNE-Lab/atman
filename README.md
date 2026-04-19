@@ -234,7 +234,7 @@ adapters/                canonical TSV adapter helpers and templates
 adapters/examples/       tiny synthetic non-Olink matrix examples
 docs/tutorial.md         package tutorial using the bundled Dube fixture
 docs/analytical-roadmap.md
-                         planned analytical capability build-out
+                         implemented analytical capability roadmap
 example_data/dube_heat_2023/
                          Dube et al. 2023 Olink Explore fixture data
 ```

@@ -4,7 +4,7 @@ All notable changes to Atman are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] — 2026-04-XX
+## [1.0.0] — 2026-04-19
 
 First public release of Atman as a standalone proteomics command-line tool.
 Covers the built-in Olink Explore NPX reproduction path, the canonical TSV
@@ -77,7 +77,7 @@ exposed by the Rust binary.
 
 ### Notes
 
-- 86 tests in `cargo test --workspace --release`, including an integration
+- 104 tests in `cargo test --workspace --release`, including an integration
   test that diffs every output against the published Dube reference files.
 - No Python runtime is required for the Atman CLI.
 

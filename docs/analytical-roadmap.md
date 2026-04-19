@@ -408,7 +408,7 @@ Acceptance:
 - Integration tests cover missing proteins, sign inconsistency, and
   heterogeneity metrics.
 
-## Suggested Build Order
+## Implemented Build Order
 
 1. `atman validate`
 2. `atman report qc`
@@ -424,13 +424,14 @@ Acceptance:
 12. ORA enrichment
 13. Meta-analysis
 
-## First Milestone Definition
+## Release Readiness Status
 
-Milestone 1 is complete when:
+Atman now covers the standalone release surface targeted by this roadmap:
 
-- `atman validate` exists.
-- `atman report qc` exists.
-- The Dube fixture and tiny non-Olink fixture both pass validation.
-- The README documents canonical TSV validation.
-- CI runs validation tests.
-- No Python runtime is required for core validation/reporting.
+- Canonical validation and QC reporting are implemented.
+- Olink and matrix ingest paths are covered by integration tests and adapter
+  fixtures.
+- Differential abundance, uncertainty, robustness, module, enrichment, and
+  meta-analysis commands are implemented.
+- The core CLI does not require Python, notebooks, services, or external
+  workflow infrastructure.

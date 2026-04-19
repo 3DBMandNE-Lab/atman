@@ -346,7 +346,7 @@ Emits per-pair asymmetry metrics (challenge-vs-rest) at the contrast-family leve
 ## 15. Robustness
 
 Robustness consumes the baseline DE table plus one or more rerun DE tables.
-The example below shows the command shape using placeholder LOO outputs:
+The example below shows the command shape with two leave-one-out DE outputs:
 
 ```bash
 atman robustness \
