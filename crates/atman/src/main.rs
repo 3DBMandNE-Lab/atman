@@ -30,6 +30,8 @@ enum Command {
     FoldChange(commands::fold_change::Args),
     /// Differential abundance with paired-t or moderated variance-shrinkage model.
     De(commands::de::Args),
+    /// Gene-set enrichment analyses over DE results.
+    Enrich(commands::enrich::Args),
     /// Compare matched contrast pairs for provocation-dependent asymmetry.
     Asymmetry(commands::asymmetry::Args),
     /// Bootstrap uncertainty for protein effects.
@@ -59,6 +61,7 @@ fn main() -> Result<()> {
         Command::Matrix(args) => commands::matrix::run(args),
         Command::FoldChange(args) => commands::fold_change::run(args),
         Command::De(args) => commands::de::run(args),
+        Command::Enrich(args) => commands::enrich::run(args),
         Command::Asymmetry(args) => commands::asymmetry::run(args),
         Command::Bootstrap(args) => commands::bootstrap::run(args),
         Command::Robustness(args) => commands::robustness::run(args),

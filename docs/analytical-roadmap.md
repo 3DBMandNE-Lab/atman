@@ -359,14 +359,14 @@ Acceptance:
 - Integration tests cover all scoring methods, coverage reporting, and DE over
   canonical module scores.
 
-### 12. Enrichment
+### 12. Enrichment (implemented)
 
 Add simple built-in over-representation analysis first.
 
 Command:
 
 ```bash
-atman enrich ora --de-results out/de_results.tsv --gene-sets gene_sets.tsv
+atman enrich ora --de-results out/de_results.tsv --gene-sets gene_sets.tsv --output ora.tsv
 ```
 
 Inputs:
@@ -378,6 +378,9 @@ Acceptance:
 
 - Uses the measured protein universe by default.
 - Reports set size, overlap size, odds ratio, p-value, and BH q-value.
+- Optional explicit universe file.
+- Integration tests cover measured-universe defaults, comparison filtering,
+  overlap reporting, and explicit universe files.
 
 ### 13. Multi-Cohort Meta-Analysis
 

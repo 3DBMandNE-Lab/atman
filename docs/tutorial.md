@@ -231,7 +231,26 @@ reports declared genes, observed genes, and per-sample coverage. When
 `--canonical-output-dir` is supplied, Atman writes canonical TSVs that can be
 used directly with `atman de`.
 
-## 9. Protein bootstrap
+## 9. ORA enrichment
+
+Over-representation analysis consumes DE hits and user-supplied gene sets:
+
+```bash
+atman enrich ora \
+    --de-results out/de_results.tsv \
+    --gene-sets gene_sets.tsv \
+    --comparison "PT2-PT1" \
+    --q 0.05 \
+    --output out/ora.tsv
+```
+
+`gene_sets.tsv` is tab-separated with `set_name` and `gene_symbol` columns.
+The measured universe defaults to genes present in `de_results.tsv`; pass
+`--universe measured_genes.tsv` to override it. Output includes set size,
+overlap size, odds ratio, Fisher upper-tail p-value, BH q-value, and overlap
+genes.
+
+## 10. Protein bootstrap
 
 Subject-level bootstrap uncertainty for protein effects:
 
@@ -251,7 +270,7 @@ not measurement rows. In paired mode, only matched subjects are resampled.
 Output columns include point effect, bootstrap mean effect, confidence
 interval, sign stability, effective sample counts, and skip reason.
 
-## 10. Module bootstrap
+## 11. Module bootstrap
 
 Subject-level bootstrap uncertainty for user-defined module scores:
 
@@ -274,7 +293,7 @@ count, and skip reason.
 
 For unpaired designs, use `--test welch-t`.
 
-## 11. Null calibration
+## 12. Null calibration
 
 Permutation and sign-flip calibration estimate how many discoveries the current
 design produces under a no-effect null:
@@ -297,7 +316,7 @@ Output in `out/null/`:
   by contrast and q threshold
 - `empirical_p.tsv` — per-protein observed p/q values plus empirical p-values
 
-## 12. Asymmetry
+## 13. Asymmetry
 
 ```bash
 atman asymmetry \
@@ -308,7 +327,7 @@ atman asymmetry \
 
 Emits per-pair asymmetry metrics (challenge-vs-rest) at the contrast-family level.
 
-## 13. Robustness
+## 14. Robustness
 
 Robustness consumes the baseline DE table plus one or more rerun DE tables.
 The example below shows the command shape using placeholder LOO outputs:

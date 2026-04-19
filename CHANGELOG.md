@@ -62,6 +62,9 @@ exposed by the Rust binary.
 - **Module scoring (`score modules`).** Per-sample module scores with mean,
   median, z-score, and PC1 methods, coverage reporting, and optional canonical
   outputs for downstream DE.
+- **ORA enrichment (`enrich ora`).** Built-in over-representation analysis for
+  DE hits with measured-universe defaults, optional explicit universes, Fisher
+  upper-tail p-values, odds ratios, and BH q-values.
 
 ### Fixed
 

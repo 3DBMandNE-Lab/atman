@@ -3,6 +3,7 @@ use anyhow::{bail, Result};
 pub mod asymmetry;
 pub mod bootstrap;
 pub mod de;
+pub mod enrich;
 pub mod fold_change;
 pub mod ingest;
 pub mod ingest_matrix;
