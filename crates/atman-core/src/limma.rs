@@ -204,18 +204,21 @@ pub fn squeeze_var(
     }
 }
 
-/// `fit_f_dist` output wrapper — exposes `(df_prior, s²_prior)` plus
-/// the internal Winsorized sample mean/variance so call sites can sanity
-/// check or record diagnostics.
+/// Output of [`fit_f_dist_robust`]: the Winsorized-fit prior degrees of
+/// freedom and prior variance. Same shape as the `(df_prior, s²_prior)`
+/// tuple returned by [`fit_f_dist`], wrapped in a named struct so call
+/// sites can record the robust-vs-non-robust provenance.
 pub struct FitFDistOutput {
     pub df_prior: f64,
     pub s2_prior: f64,
 }
 
 /// Robust variant of [`fit_f_dist`] per Phipson et al. 2016: Winsorize
-/// `z = log(s²)` at the 5th and 95th percentiles (lower tail) and 10th
-/// and 90th (upper tail) before refitting. This down-weights per-feature
-/// outlier variances that would otherwise pull `s²_prior` upward.
+/// `z = log(s²)` before refitting, using limma's default
+/// `winsor.tail.p = c(0.05, 0.1)` — clamp the bottom 5% of values to the
+/// 5th-percentile cutoff and the top 10% to the 90th-percentile cutoff.
+/// This down-weights per-feature outlier variances that would otherwise
+/// pull `s²_prior` upward.
 ///
 /// Default Winsor tails match limma's `winsor.tail.p = c(0.05, 0.1)`.
 ///
@@ -298,7 +301,7 @@ pub fn fit_parametric_trend(means: &[f64], s2: &[f64]) -> Option<Vec<f64>> {
         return None;
     }
     let mut xtx = vec![vec![0.0_f64; 3]; 3];
-    let mut xty = vec![0.0_f64; 3];
+    let mut xty = [0.0_f64; 3];
     let mut n_used = 0_usize;
     for (m, v) in means.iter().zip(s2.iter()) {
         if !m.is_finite() || !v.is_finite() || *m <= 0.0 || *v <= 0.0 {
@@ -515,8 +518,8 @@ pub fn moderated_f(
     for a in 0..k {
         for b in 0..k {
             let mut s = 0.0;
-            for i in 0..p {
-                s += z_mat[i][a] * z_mat[i][b];
+            for row in z_mat.iter().take(p) {
+                s += row[a] * row[b];
             }
             m[a][b] = s;
         }
@@ -560,15 +563,18 @@ pub fn moderated_f(
 
 /// TREAT p-value (Phipson et al. 2013): test `H₀: |δ| ≤ lfc_threshold`
 /// rather than the point null `H₀: δ = 0`. Implemented as the sum of
-/// one-sided probabilities shifted by the threshold on the standard-error
-/// scale:
+/// one-sided probabilities of `|β̂| > |t|·se` under the worst-case edge
+/// of the composite null (δ = +lfc or δ = −lfc); by symmetry both give
+/// the same p-value:
 ///
 /// ```text
-/// p = P(T > (t − lfc/se) | T ~ t_df) + P(T < (−t − lfc/se) | T ~ t_df)
+/// p = P(T > |t| − lfc/se | T ~ t_df) + P(T < −|t| − lfc/se | T ~ t_df)
 /// ```
 ///
 /// When `lfc = 0` this reduces to `2 · (1 − T_df(|t|))`, the standard
-/// two-sided moderated-t p-value.
+/// two-sided moderated-t p-value. The formula is symmetric in the sign
+/// of `t` (a test statistic of `+t` and `−t` yield identical p-values),
+/// as required for a two-sided test.
 pub fn treat_p_value(t: f64, se: f64, df_total: f64, lfc_threshold: f64) -> f64 {
     if !t.is_finite() || !se.is_finite() || se <= 0.0 || !df_total.is_finite() || df_total <= 0.0
     {
@@ -578,9 +584,10 @@ pub fn treat_p_value(t: f64, se: f64, df_total: f64, lfc_threshold: f64) -> f64 
         Ok(d) => d,
         Err(_) => return f64::NAN,
     };
+    let abs_t = t.abs();
     let shift = lfc_threshold.abs() / se;
-    let upper = 1.0 - dist.cdf(t - shift);
-    let lower = dist.cdf(-t - shift);
+    let upper = 1.0 - dist.cdf(abs_t - shift);
+    let lower = dist.cdf(-abs_t - shift);
     (upper + lower).clamp(0.0, 1.0)
 }
 
@@ -750,6 +757,21 @@ mod tests {
         let p_small = super::treat_p_value(t, se, df, 0.0);
         let p_large = super::treat_p_value(t, se, df, 0.5);
         assert!(p_large >= p_small);
+    }
+
+    #[test]
+    fn treat_p_value_is_symmetric_in_sign_of_t() {
+        // TREAT tests |δ|; by symmetry p(+t) must equal p(−t) for any
+        // (se, df, lfc_threshold). Regression guard for a sign bug in an
+        // earlier draft where negative `t` silently returned 1.0.
+        for &(se, df, lfc) in &[(1.0_f64, 15.0_f64, 0.0_f64), (0.5, 15.0, 0.5), (2.0, 30.0, 0.2)] {
+            let p_pos = super::treat_p_value(2.5, se, df, lfc);
+            let p_neg = super::treat_p_value(-2.5, se, df, lfc);
+            assert!(
+                (p_pos - p_neg).abs() < 1e-12,
+                "treat_p_value not symmetric: p(+2.5)={p_pos}, p(-2.5)={p_neg}"
+            );
+        }
     }
 
     #[test]
