@@ -14,6 +14,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   top-N Jaccard seed stability against the reference seed, plus canonical
   loadings and activations TSVs. Supports `--max-missing-fraction` +
   `--impute mean` for sparse canonical matrices.
+- **Cross-cohort program alignment (`align programs`).** Single-config and
+  `--sweep` mode for Jaccard (top-N), cosine, and Spearman similarity with
+  optional reciprocal-best and category-agreement filters. Archetypes are
+  connected components of the filtered bipartite graph across all cohort
+  pairs. Sweep mode emits an `(metric, top_n, tau, category_constraint)`
+  sensitivity matrix so the annotation-constrained vs unconstrained
+  comparison is citable rather than ad-hoc.
 
 ## [1.0.0] — 2026-04-19
 

@@ -26,6 +26,8 @@ enum Command {
     Qc(commands::qc::Args),
     /// Pivot QC'd long TSV into per-panel Dube-wide CSVs.
     Matrix(commands::matrix::Args),
+    /// Cross-cohort program alignment with optional sensitivity sweep.
+    Align(commands::align::Args),
     /// Multi-seed ICA decomposition with stability reporting.
     Decompose(commands::decompose::Args),
     /// Combine DE results across cohorts.
@@ -73,6 +75,7 @@ fn main() -> Result<()> {
         Command::IngestMatrix(args) => commands::ingest_matrix::run(*args),
         Command::Qc(args) => commands::qc::run(args),
         Command::Matrix(args) => commands::matrix::run(args),
+        Command::Align(args) => commands::align::run(args),
         Command::Decompose(args) => commands::decompose::run(args),
         Command::Meta(args) => commands::meta::run(args),
         Command::FoldChange(args) => commands::fold_change::run(args),

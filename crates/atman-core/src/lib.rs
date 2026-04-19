@@ -4,6 +4,7 @@
 //! the transformations required to reproduce the Dube et al. Scientific Data
 //! 2023 published filtered NPX + log2 fold-change files.
 
+pub mod align;
 pub mod de;
 pub mod errors;
 pub mod fold_change;

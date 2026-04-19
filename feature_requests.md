@@ -21,51 +21,14 @@ preferred for reproducibility posture but not blocking.
 
 ## P1 — High-leverage, implementable in Python if atman doesn't ship soon
 
-### 3. `atman align programs` with sensitivity sweep
+### ~~3. `atman align programs` with sensitivity sweep~~ *(shipped 2026-04-19)*
 
-**Command sketch.**
-
-```bash
-atman align programs \
-  --loadings cohort_a/ica_loadings.tsv,cohort_b/ica_loadings.tsv,... \
-  --annotations cohort_a/program_annotations.tsv,... \
-  --metric jaccard \
-  --top-n 40 \
-  --tau 0.15 \
-  --reciprocal-best \
-  --category-constraint \
-  --output out/archetypes.tsv
-
-atman align programs sweep \
-  --loadings ... \
-  --metrics jaccard:top_n=[20,40,60]:tau=[0.10,0.15,0.20,0.25],cosine:tau=[0.20,0.30,0.40],spearman:tau=[0.20,0.30,0.40] \
-  --compare-constrained-vs-unconstrained \
-  --output-matrix out/alignment_sensitivity.tsv
-```
-
-**What it does.** Cross-cohort program-to-program matching by top-N
-Jaccard / full-vector Spearman / cosine, with optional reciprocal-best
-constraint and optional category-agreement constraint (from an
-`annotations.tsv` that maps program → category). Sweep mode runs all
-metric × threshold combinations and returns a matrix of
-`(metric, top_n, threshold, n_multi_cohort_archetypes,
-n_universal_archetypes, category_recovery_per_archetype)`.
-
-**Why we need it.** The CSF manuscript currently has three bespoke Python
-scripts for this (`ica_program_alignment.py`,
-`ica_annotation_constrained_alignment.py`,
-`ica_alignment_sensitivity.py`). Reviewer raised the circularity concern
-— the annotation-constrained criterion is load-bearing — and demanded
-the unconstrained vs constrained sweep be shown in main text. An atman
-command makes the whole apparatus a single citation rather than three.
-
-**Matches reviewer items.** #2 (annotation-constrained alignment
-circularity).
-
-**Scope hints.** Annotations input is cohort-agnostic: one TSV of
-`program, category, top_annotation, top_annotation_p_value` per cohort.
-Category-agreement constraint is boolean. Sweep is a nested loop over
-metric/threshold combinations.
+Single-config and `--sweep` mode with Jaccard/cosine/Spearman similarity,
+reciprocal-best and category-agreement filters, union-find archetype
+assembly, and a sensitivity matrix over metric × top_n × tau ×
+`--compare-constrained-vs-unconstrained`. Replaces
+`ica_program_alignment.py`, `ica_annotation_constrained_alignment.py`,
+`ica_alignment_sensitivity.py` with one atman command.
 
 ---
 
@@ -166,7 +129,7 @@ per run.
 
 | Review item | Addressed by | Priority |
 |---|---|---|
-| #2 annotation-constrained alignment circularity | Feature 3 | P1 |
+| #2 annotation-constrained alignment circularity | Feature 3 (shipped) | P1 (done) |
 | #4 forced matched-K sensitivity | Feature 1 (shipped) | P0 (done) |
 | #5 multi-seed FastICA stability | Feature 1 (shipped) | P0 (done) |
 | #7 A02 bookkeeping | Covered by completed ratio command | P1 |

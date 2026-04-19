@@ -56,6 +56,7 @@ needed, and emit Atman's TSV schema.
 ```text
 atman ingest             raw Olink Explore long CSV -> canonical TSVs
 atman ingest-matrix      wide protein matrix + metadata -> canonical TSVs
+atman align programs     cross-cohort program alignment + sensitivity sweep
 atman decompose ica      multi-seed FastICA with seed-stability reporting
 atman validate           check canonical TSV schema, keys, and sample support
 atman qc                 apply QC masking rules
