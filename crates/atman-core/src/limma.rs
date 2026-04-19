@@ -201,6 +201,84 @@ pub fn squeeze_var(
     }
 }
 
+/// `fit_f_dist` output wrapper — exposes `(df_prior, s²_prior)` plus
+/// the internal Winsorized sample mean/variance so call sites can sanity
+/// check or record diagnostics.
+pub struct FitFDistOutput {
+    pub df_prior: f64,
+    pub s2_prior: f64,
+}
+
+/// Robust variant of [`fit_f_dist`] per Phipson et al. 2016: Winsorize
+/// `z = log(s²)` at the 5th and 95th percentiles (lower tail) and 10th
+/// and 90th (upper tail) before refitting. This down-weights per-feature
+/// outlier variances that would otherwise pull `s²_prior` upward.
+///
+/// Default Winsor tails match limma's `winsor.tail.p = c(0.05, 0.1)`.
+///
+/// Implementation mirrors `fitFDistRobustly` in limma, simplified to
+/// match the MVP's "one robust pass with fixed tails" scope.
+pub fn fit_f_dist_robust(s2: &[f64], df_res: f64) -> Option<FitFDistOutput> {
+    let mut log_s2: Vec<f64> = s2
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(f64::ln)
+        .collect();
+    if log_s2.len() < 3 {
+        return None;
+    }
+    log_s2.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let n = log_s2.len();
+    let lower_tail = 0.05_f64;
+    let upper_tail = 0.10_f64;
+    let lower_idx = ((lower_tail * n as f64).floor() as usize).min(n - 1);
+    let upper_idx = (n.saturating_sub(1))
+        .saturating_sub(((upper_tail * n as f64).floor()) as usize);
+    if upper_idx <= lower_idx {
+        return None;
+    }
+    let lower_val = log_s2[lower_idx];
+    let upper_val = log_s2[upper_idx];
+    // Winsorize in place.
+    for v in log_s2.iter_mut() {
+        if *v < lower_val {
+            *v = lower_val;
+        } else if *v > upper_val {
+            *v = upper_val;
+        }
+    }
+
+    let n_f = n as f64;
+    let mean = log_s2.iter().sum::<f64>() / n_f;
+    let var = log_s2
+        .iter()
+        .map(|z| {
+            let d = z - mean;
+            d * d
+        })
+        .sum::<f64>()
+        / (n_f - 1.0);
+
+    let t_res = trigamma(df_res / 2.0);
+    let excess = var - t_res;
+    if excess <= 0.0 {
+        return None;
+    }
+    let df_prior = 2.0 * trigamma_inverse(excess);
+    if !df_prior.is_finite() || df_prior <= 0.0 {
+        return None;
+    }
+    let log_s2_prior = mean - digamma(df_res / 2.0) + digamma(df_prior / 2.0)
+        + (df_res / df_prior).ln();
+    let s2_prior = log_s2_prior.exp();
+    if !s2_prior.is_finite() || s2_prior <= 0.0 {
+        return None;
+    }
+    Some(FitFDistOutput { df_prior, s2_prior })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,5 +390,37 @@ mod tests {
             assert_eq!(got, want);
         }
         assert!(out.df_prior.is_infinite()); // no shrinkage
+    }
+
+    #[test]
+    fn fit_f_dist_robust_down_weights_planted_outlier() {
+        // Construct a clean sample that recovers (df_prior=6, s²_prior=1),
+        // then plant one huge outlier. Non-robust fit shifts; robust stays
+        // close to the clean values.
+        let df_res = 8.0;
+        let df_prior_true = 6.0;
+        let s2_prior_true = 1.0;
+        let mean_target = super::digamma(df_res / 2.0) - super::digamma(df_prior_true / 2.0)
+            + (df_prior_true * s2_prior_true / df_res).ln();
+        let var_target =
+            super::trigamma(df_res / 2.0) + super::trigamma(df_prior_true / 2.0);
+        let spread = var_target.sqrt();
+        let mut s2 = Vec::with_capacity(100);
+        for i in 0..100 {
+            let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+            s2.push((mean_target + sign * spread).exp());
+        }
+        // Plant one huge outlier.
+        s2[0] = 1e6;
+
+        let (df_non, s2_non) = super::fit_f_dist(&s2, df_res).expect("ok");
+        let out = super::fit_f_dist_robust(&s2, df_res).expect("ok");
+        // Robust fit is closer to the truth than the non-robust fit.
+        assert!(
+            (out.s2_prior - s2_prior_true).abs() < (s2_non - s2_prior_true).abs(),
+            "robust s²_prior {} should be closer to {s2_prior_true} than non-robust {s2_non}",
+            out.s2_prior,
+        );
+        let _ = df_non;
     }
 }
