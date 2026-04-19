@@ -2,7 +2,15 @@
 name = "atman-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+description = "Core data model and statistical routines for the Atman proteomics CLI"
+authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 csv = { workspace = true }

@@ -19,8 +19,8 @@ FROM rust:1.75-slim-bookworm AS builder
 
 WORKDIR /src
 
-# Cache-friendly dependency layer: resolve the dependency graph with
-# placeholder source files, then overlay real sources.
+# Cache-friendly dependency layer: resolve the dependency graph with minimal
+# temporary source files, then overlay real sources.
 COPY Cargo.toml Cargo.lock ./
 COPY crates/atman-core/Cargo.toml crates/atman-core/Cargo.toml
 COPY crates/atman/Cargo.toml crates/atman/Cargo.toml

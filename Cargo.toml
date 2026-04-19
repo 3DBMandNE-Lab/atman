@@ -9,6 +9,10 @@ rust-version = "1.75"
 license = "MIT OR Apache-2.0"
 authors = ["Kevin Joseph"]
 repository = "https://github.com/kevinjoseph/atman"
+homepage = "https://github.com/kevinjoseph/atman"
+readme = "README.md"
+keywords = ["proteomics", "olink", "bioinformatics", "cli"]
+categories = ["command-line-utilities", "science"]
 
 [workspace.dependencies]
 anyhow = "1"
