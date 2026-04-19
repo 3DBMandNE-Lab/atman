@@ -301,6 +301,41 @@ pub enum OlsOutcome {
     Skipped { reason: SkipReason, n: usize },
 }
 
+/// Lower-triangular Cholesky factor `L` of a symmetric positive-definite
+/// matrix `a`, such that `a = L · Lᵀ`. Returns `None` when `a` is not SPD
+/// (a non-positive pivot is encountered).
+///
+/// `a` is expected to be `n × n` row-major. Only the lower triangle is
+/// read; the upper triangle is ignored.
+pub(crate) fn cholesky_lower(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
+    let n = a.len();
+    if n == 0 {
+        return Some(Vec::new());
+    }
+    if a.iter().any(|row| row.len() != n) {
+        return None;
+    }
+    let mut l = vec![vec![0.0_f64; n]; n];
+    for j in 0..n {
+        let diag_sum: f64 = l[j].iter().take(j).map(|v| v * v).sum();
+        let diag = a[j][j] - diag_sum;
+        if !diag.is_finite() || diag <= 0.0 {
+            return None;
+        }
+        l[j][j] = diag.sqrt();
+        for i in (j + 1)..n {
+            let off_sum: f64 = l[i]
+                .iter()
+                .zip(l[j].iter())
+                .take(j)
+                .map(|(li, lj)| li * lj)
+                .sum();
+            l[i][j] = (a[i][j] - off_sum) / l[j][j];
+        }
+    }
+    Some(l)
+}
+
 pub fn ols(design: &[Vec<f64>], y: &[f64], min_samples: usize) -> OlsOutcome {
     let n = design.len();
     if n != y.len() {
@@ -366,27 +401,12 @@ pub fn ols(design: &[Vec<f64>], y: &[f64], min_samples: usize) -> OlsOutcome {
     }
 
     // Cholesky: XᵀX = L Lᵀ (lower-triangular `l`).
-    let mut l = vec![vec![0.0f64; p]; p];
-    for j in 0..p {
-        let diag_sum: f64 = l[j].iter().take(j).map(|v| v * v).sum();
-        let diag = xtx[j][j] - diag_sum;
-        if !diag.is_finite() || diag <= 0.0 {
-            return OlsOutcome::Skipped {
-                reason: SkipReason::ZeroVariance,
-                n,
-            };
-        }
-        l[j][j] = diag.sqrt();
-        for i in (j + 1)..p {
-            let off_sum: f64 = l[i]
-                .iter()
-                .zip(l[j].iter())
-                .take(j)
-                .map(|(li, lj)| li * lj)
-                .sum();
-            l[i][j] = (xtx[i][j] - off_sum) / l[j][j];
-        }
-    }
+    let Some(l) = cholesky_lower(&xtx) else {
+        return OlsOutcome::Skipped {
+            reason: SkipReason::ZeroVariance,
+            n,
+        };
+    };
 
     // Forward-solve L z = Xᵀy.
     let mut z = vec![0.0f64; p];
@@ -1417,5 +1437,29 @@ mod tests {
         let y = vec![1.0, 2.0, 3.0];
         let r = ols(&design, &y, 3);
         assert!(matches!(r, OlsOutcome::Skipped { .. }));
+    }
+
+    #[test]
+    fn cholesky_lower_factors_known_spd_matrix() {
+        // A = L Lᵀ with L = [[2, 0], [6, 1]] ⇒ A = [[4, 12], [12, 37]]
+        let a = vec![vec![4.0, 12.0], vec![12.0, 37.0]];
+        let l = super::cholesky_lower(&a).expect("SPD");
+        assert!((l[0][0] - 2.0).abs() < 1e-12);
+        assert!((l[1][0] - 6.0).abs() < 1e-12);
+        assert!((l[1][1] - 1.0).abs() < 1e-12);
+        assert!(l[0][1].abs() < 1e-12); // upper triangle must be zero
+    }
+
+    #[test]
+    fn cholesky_lower_returns_none_for_non_spd() {
+        let a = vec![vec![1.0, 2.0], vec![2.0, 1.0]]; // indefinite
+        assert!(super::cholesky_lower(&a).is_none());
+    }
+
+    #[test]
+    fn cholesky_lower_handles_empty_matrix() {
+        let a: Vec<Vec<f64>> = Vec::new();
+        let l = super::cholesky_lower(&a).expect("empty is OK");
+        assert!(l.is_empty());
     }
 }
