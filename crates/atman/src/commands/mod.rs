@@ -17,6 +17,7 @@ pub mod programs;
 pub mod qc;
 pub mod ratio;
 pub mod report;
+pub mod residuals;
 pub mod robustness;
 pub mod score;
 pub mod validate;

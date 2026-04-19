@@ -200,36 +200,6 @@ per run.
 
 ---
 
-### 6. `atman residuals` — explicit covariate-adjusted residual matrix export
-
-**Command sketch.**
-
-```bash
-atman residuals \
-  --input-dir out \
-  --design "~ age + sex" \
-  --output out/residuals_long.tsv \
-  --output-wide out/residuals_wide.tsv
-```
-
-**What it does.** Per-protein OLS fit with the requested nuisance
-covariates, returns per-subject covariate-adjusted residuals. Long
-format (`subject_id, gene_symbol, residual`) + wide format
-(`gene_symbol` rows × `subject_id` columns, zero-filled at detection
-threshold).
-
-**Why we need it.** `scripts/build_module_deltas.py` does this in Python
-and feeds it into ICA. Making residuals a first-class atman output
-means `atman decompose ica` can consume it directly and the Methods
-section cites one atman command instead of custom Python.
-
-**Matches reviewer items.** No direct review item; cleaner Methods.
-
-**Scope hints.** `atman de --test ols` already fits the model; exposing
-the residuals is a small addition.
-
----
-
 ### 9. `atman bootstrap program` — signed-loading program bootstrap
 
 **Command sketch.**
@@ -286,7 +256,7 @@ output. Makes reviewer #8 a one-liner rather than a manual regression.
 | #11 platform heterogeneity | Covered by completed within-cohort rank transform | P2 |
 | #12 program interpretability count | Covered by completed programs filter | P2 |
 | #13 category continuum rather than dichotomy | Covered by completed module-level meta support | P1 |
-| Methods reproducibility posture | Features 4, 5, 6 | P1 + P2 |
+| Methods reproducibility posture | Features 4, 5 plus completed residuals | P1 + P2 |
 
 ---
 

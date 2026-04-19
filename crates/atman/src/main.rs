@@ -56,6 +56,8 @@ enum Command {
     Validate(commands::validate::Args),
     /// Generate compact reports from canonical Atman outputs.
     Report(commands::report::Args),
+    /// Export nuisance-covariate-adjusted residual matrices.
+    Residuals(commands::residuals::Args),
     /// Score biological modules from canonical Atman measurements.
     Score(commands::score::Args),
     /// Rank-transform measurements within each cohort/input directory.
@@ -84,6 +86,7 @@ fn main() -> Result<()> {
         Command::Ratio(args) => commands::ratio::run(args),
         Command::Validate(args) => commands::validate::run(args),
         Command::Report(args) => commands::report::run(args),
+        Command::Residuals(args) => commands::residuals::run(args),
         Command::Score(args) => commands::score::run(args),
         Command::WithinCohortRank(args) => commands::within_cohort_rank::run(args),
     }
