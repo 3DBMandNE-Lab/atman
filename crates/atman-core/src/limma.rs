@@ -108,12 +108,15 @@ pub fn trigamma_inverse(y: f64) -> f64 {
 /// ```text
 /// z_i  = log(s²_i)
 /// m    = mean(z)
-/// v    = Var(z)
+/// v    = Var(z)   // MLE estimator (matches limma's `fitFDist`): Σ(z - m)² / n
 /// Solve
 ///   Var[z] = trigamma(df_res/2) + trigamma(df_prior/2)
 ///   E  [z] = digamma (df_res/2) - digamma (df_prior/2) + log(df_prior · s²_prior / df_res)
 /// for (df_prior, s²_prior).
 /// ```
+///
+/// Variance of `z` uses the MLE estimator (divide by `n`, not `n-1`) to match
+/// limma 3.x `fitFDist`, which computes `var(e) * (length(e)-1) / length(e)`.
 ///
 /// Returns `None` if the sample contains fewer than 2 positive finite
 /// variances, or if the variance-of-z matches `trigamma(df_res/2)` (no
@@ -131,6 +134,7 @@ pub fn fit_f_dist(s2: &[f64], df_res: f64) -> Option<(f64, f64)> {
     }
     let n = log_s2.len() as f64;
     let mean = log_s2.iter().sum::<f64>() / n;
+    // MLE estimator (matches limma's `fitFDist`): divide by n, not (n - 1).
     let var = log_s2
         .iter()
         .map(|z| {
@@ -138,7 +142,7 @@ pub fn fit_f_dist(s2: &[f64], df_res: f64) -> Option<(f64, f64)> {
             d * d
         })
         .sum::<f64>()
-        / (n - 1.0);
+        / n;
 
     let t_res = trigamma(df_res / 2.0);
     let excess = var - t_res;
@@ -222,6 +226,9 @@ pub struct FitFDistOutput {
 ///
 /// Default Winsor tails match limma's `winsor.tail.p = c(0.05, 0.1)`.
 ///
+/// Variance of the Winsorized `z` uses the MLE estimator (divide by `n`,
+/// not `n-1`) to match limma's `fitFDist` convention.
+///
 /// Implementation mirrors `fitFDistRobustly` in limma, simplified to
 /// match the MVP's "one robust pass with fixed tails" scope.
 pub fn fit_f_dist_robust(s2: &[f64], df_res: f64) -> Option<FitFDistOutput> {
@@ -258,6 +265,7 @@ pub fn fit_f_dist_robust(s2: &[f64], df_res: f64) -> Option<FitFDistOutput> {
 
     let n_f = n as f64;
     let mean = log_s2.iter().sum::<f64>() / n_f;
+    // MLE estimator (matches limma's `fitFDist`): divide by n, not (n - 1).
     let var = log_s2
         .iter()
         .map(|z| {
@@ -265,7 +273,7 @@ pub fn fit_f_dist_robust(s2: &[f64], df_res: f64) -> Option<FitFDistOutput> {
             d * d
         })
         .sum::<f64>()
-        / (n_f - 1.0);
+        / n_f;
 
     let t_res = trigamma(df_res / 2.0);
     let excess = var - t_res;
