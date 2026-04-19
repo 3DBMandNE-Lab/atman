@@ -1,6 +1,6 @@
 # Atman
 
-[![CI](https://github.com/kevinjoseph/atman/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kevinjoseph/atman/actions/workflows/ci.yml)
+[![CI](https://github.com/kevinj24fr/atman/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kevinj24fr/atman/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
 
 Atman is a standalone Rust command-line tool for reproducible proteomics
@@ -17,7 +17,7 @@ dataset so the package can test its raw-to-result reproduction path end to end.
 From source with stable Rust 1.94 or newer:
 
 ```bash
-git clone https://github.com/kevinjoseph/atman.git
+git clone https://github.com/kevinj24fr/atman.git
 cd atman
 cargo install --path crates/atman
 ```

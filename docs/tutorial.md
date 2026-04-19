@@ -12,7 +12,7 @@ that directory.
 ## 0. Install and verify
 
 ```bash
-git clone https://github.com/kevinjoseph/atman.git
+git clone https://github.com/kevinj24fr/atman.git
 cd atman
 cargo install --path crates/atman
 atman --help
