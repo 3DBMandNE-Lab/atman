@@ -34,19 +34,31 @@ pub fn sidecar_path_for(primary_output: &Path) -> PathBuf {
 /// hashed so the same canonical directory hashes identically regardless of
 /// where on disk it lives.
 pub fn hash_canonical_inputs(input_dir: &Path, filenames: &[&str]) -> Result<String> {
-    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut entries: Vec<(&str, PathBuf)> = Vec::with_capacity(filenames.len());
     for name in filenames {
-        let path = input_dir.join(name);
+        entries.push((*name, input_dir.join(name)));
+    }
+    let refs: Vec<(&str, &Path)> = entries.iter().map(|(n, p)| (*n, p.as_path())).collect();
+    hash_labeled_inputs(&refs)
+}
+
+/// SHA-256 of a sorted `<label>\t<sha256(contents)>\n` concatenation over
+/// arbitrary input files. Use when inputs are not a single canonical
+/// directory (e.g. `align programs` takes per-cohort loadings TSVs).
+/// Missing files are skipped.
+pub fn hash_labeled_inputs(entries: &[(&str, &Path)]) -> Result<String> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for (label, path) in entries {
         if !path.exists() {
             continue;
         }
-        let bytes = std::fs::read(&path).with_context(|| format!("reading {:?}", path))?;
-        entries.push(((*name).to_string(), sha256_hex(&bytes)));
+        let bytes = std::fs::read(path).with_context(|| format!("reading {:?}", path))?;
+        pairs.push(((*label).to_string(), sha256_hex(&bytes)));
     }
-    entries.sort();
+    pairs.sort();
     let mut concat = String::new();
-    for (name, hash) in &entries {
-        concat.push_str(name);
+    for (label, hash) in &pairs {
+        concat.push_str(label);
         concat.push('\t');
         concat.push_str(hash);
         concat.push('\n');

@@ -15,8 +15,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use crate::io::{atomic_write, escape_tsv, sha256_hex};
+use crate::io::{
+    atomic_write, escape_tsv, hash_labeled_inputs, sha256_hex, sidecar_path_for,
+    write_run_sidecar,
+};
 
 const DEFAULT_ENDPOINT: &str = "https://biit.cs.ut.ee/gprofiler/api/gost/profile/";
 
@@ -95,6 +99,7 @@ struct CanonicalRequest {
 }
 
 pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
+    let started_at = SystemTime::now();
     if !(args.user_threshold.is_finite() && (0.0..=1.0).contains(&args.user_threshold)) {
         bail!("--user-threshold must be in [0, 1]");
     }
@@ -183,6 +188,42 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
         args.cache_dir.display(),
         args.output.display()
     );
+
+    let finished_at = SystemTime::now();
+    let mut input_entries: Vec<(&str, &Path)> =
+        vec![("background", args.background.as_path())];
+    if let Some(p) = args.de_results.as_ref() {
+        input_entries.push(("de-results", p.as_path()));
+    }
+    if let Some(p) = args.query_tsv.as_ref() {
+        input_entries.push(("query-tsv", p.as_path()));
+    }
+    let input_dir_sha256 = hash_labeled_inputs(&input_entries)?;
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "enrich gprofiler",
+        json!({
+            "de-results": args.de_results.as_ref().map(|p| p.display().to_string()),
+            "comparison": args.comparison,
+            "query-tsv": args.query_tsv.as_ref().map(|p| p.display().to_string()),
+            "background": args.background.display().to_string(),
+            "organism": args.organism,
+            "sources": args.sources,
+            "threshold-method": args.threshold_method,
+            "user-threshold": args.user_threshold,
+            "cache-dir": args.cache_dir.display().to_string(),
+            "ontology-version": args.ontology_version,
+            "offline": args.offline,
+            "endpoint": args.endpoint,
+            "output": args.output.display().to_string(),
+        }),
+        &input_dir_sha256,
+        &[args.output.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("enrich gprofiler: sidecar={}", sidecar.display());
     Ok(())
 }
 

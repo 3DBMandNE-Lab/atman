@@ -2,11 +2,15 @@ use anyhow::{bail, Context, Result};
 use atman_core::stats::{mean, pearson, ranks};
 use clap::{Args as ClapArgs, ValueEnum};
 use csv::ReaderBuilder;
+use serde_json::json;
 use statrs::distribution::{ContinuousCDF, Normal};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use crate::io::{atomic_write, need_col};
+use crate::io::{
+    atomic_write, hash_labeled_inputs, need_col, sidecar_path_for, write_run_sidecar,
+};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -78,6 +82,7 @@ struct CouplingRow {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     if args.report != "sign-consistency" {
         bail!("coupling supports --report sign-consistency");
     }
@@ -103,6 +108,33 @@ pub fn run(args: Args) -> Result<()> {
         args.output.display(),
         args.output_summary.display()
     );
+
+    let finished_at = SystemTime::now();
+    let input_dir_sha256 = hash_labeled_inputs(&[
+        ("activations", args.activations.as_path()),
+        ("pairs", args.pairs.as_path()),
+    ])?;
+    let sidecar = sidecar_path_for(&args.output);
+    let method = match args.method {
+        Method::Spearman => "spearman",
+    };
+    write_run_sidecar(
+        &sidecar,
+        "coupling",
+        json!({
+            "activations": args.activations.display().to_string(),
+            "pairs": args.pairs.display().to_string(),
+            "method": method,
+            "report": args.report,
+            "output": args.output.display().to_string(),
+            "output-summary": args.output_summary.display().to_string(),
+        }),
+        &input_dir_sha256,
+        &[args.output.clone(), args.output_summary.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("coupling: sidecar={}", sidecar.display());
     Ok(())
 }
 

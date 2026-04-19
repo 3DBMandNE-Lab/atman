@@ -8,14 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Per-invocation run-sidecar (`<primary_output>.run.json`).** New shared
+- **Per-invocation run-sidecar (`<primary_output>.run.json`).** Shared
   helper `atman::io::write_run_sidecar` emits a JSON sidecar next to the
   primary output of each subcommand, capturing the atman version and git SHA,
   the fully-resolved argument dict (including defaults), a SHA-256 hash of
   the canonical input TSVs, SHA-256 hashes of every output file, ISO-8601
   UTC start/finish timestamps, and the build target triple. Moves "what
   parameters produced this file?" from "read the driver script" to "cat one
-  JSON." Initial rollout: `decompose ica`; additional commands follow.
+  JSON." Wired across: `decompose ica`, `align programs`, `coupling`,
+  `null`, `enrich gprofiler`, `de`, `bootstrap protein`, `bootstrap module`,
+  `bootstrap program`, `meta`, `ratio`, `validate` (when `--report` is
+  set), `report qc`, and `ingest-matrix`.
 - **Multi-seed FastICA decomposition (`decompose ica`).** Pure-Rust FastICA
   (log-cosh contrast, symmetric decorrelation) with deterministic
   Xoshiro256++ seeding. Runs `--n-seeds` decompositions per cohort and reports

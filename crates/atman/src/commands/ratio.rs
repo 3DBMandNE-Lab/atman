@@ -2,11 +2,16 @@ use anyhow::{bail, Result};
 use atman_core::stats::mean;
 use atman_core::Sample;
 use clap::{Args as ClapArgs, ValueEnum};
+use serde_json::json;
 use statrs::distribution::{ContinuousCDF, Normal, StudentsT};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
-use crate::io::{atomic_write, read_measurements_long, read_samples};
+use crate::io::{
+    atomic_write, hash_canonical_inputs, read_measurements_long, read_samples, sidecar_path_for,
+    write_run_sidecar,
+};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -61,6 +66,7 @@ struct SubjectRatio {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     if args.n_bootstrap == 0 {
         bail!("--n-bootstrap must be at least 1");
     }
@@ -149,6 +155,39 @@ pub fn run(args: Args) -> Result<()> {
         ratios.len(),
         args.output.display()
     );
+
+    let finished_at = SystemTime::now();
+    let input_dir_sha256 = hash_canonical_inputs(
+        &args.input_dir,
+        &[
+            "qc_measurements.tsv",
+            "measurements.tsv",
+            "samples.tsv",
+            "proteins.tsv",
+        ],
+    )?;
+    let sidecar = sidecar_path_for(&args.output);
+    let test_label = test_name(args.test);
+    write_run_sidecar(
+        &sidecar,
+        "ratio",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "numerator": args.numerator,
+            "denominator": args.denominator,
+            "groups": args.groups,
+            "test": test_label,
+            "n-bootstrap": args.n_bootstrap,
+            "seed": args.seed,
+            "n-permutations": args.n_permutations,
+            "output": args.output.display().to_string(),
+        }),
+        &input_dir_sha256,
+        &[args.output.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("ratio: sidecar={}", sidecar.display());
     Ok(())
 }
 

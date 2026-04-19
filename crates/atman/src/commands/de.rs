@@ -7,14 +7,17 @@ use atman_core::de::{
 use atman_core::stats::mean;
 use atman_core::Sample;
 use clap::Args as ClapArgs;
+use serde_json::json;
 use statrs::distribution::{ContinuousCDF, Normal, StudentsT};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use super::parse_comparisons;
 use crate::io::{
-    atomic_write, read_measurements_long, read_proteins, read_samples, write_de_report,
-    write_de_results, DeReportRow, DeResultRow,
+    atomic_write, hash_canonical_inputs, read_measurements_long, read_proteins, read_samples,
+    sidecar_path_for, write_de_report, write_de_results, write_run_sidecar, DeReportRow,
+    DeResultRow,
 };
 
 #[derive(ClapArgs, Debug)]
@@ -92,6 +95,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     let mut args = args;
     apply_per_subject_proxy(&mut args)?;
     if args.test != "paired-t"
@@ -538,20 +542,25 @@ pub fn run(args: Args) -> Result<()> {
             .then_with(|| a.gene_symbol.cmp(&b.gene_symbol))
     });
 
-    write_de_results(&args.output_dir.join("de_results.tsv"), &all_rows)?;
-    write_de_report(&args.output_dir.join("de_report.tsv"), &report_rows)?;
+    let results_path = args.output_dir.join("de_results.tsv");
+    let report_path = args.output_dir.join("de_report.tsv");
+    let covariates_path = args.output_dir.join("de_covariates.tsv");
+    let proxy_path = args.output_dir.join("de_proxy_summary.tsv");
+    let design_path = args.output_dir.join("de_design.tsv");
+    write_de_results(&results_path, &all_rows)?;
+    write_de_report(&report_path, &report_rows)?;
+    let mut outputs: Vec<PathBuf> = vec![results_path.clone(), report_path.clone()];
     if (args.test == "ols" || args.test == "mixed") && !covariate_rows.is_empty() {
-        write_covariate_rows(&args.output_dir.join("de_covariates.tsv"), &covariate_rows)?;
+        write_covariate_rows(&covariates_path, &covariate_rows)?;
+        outputs.push(covariates_path.clone());
     }
     if let Some(proxy) = args.per_subject_proxy.as_deref() {
-        write_proxy_summary(
-            &args.output_dir.join("de_proxy_summary.tsv"),
-            proxy,
-            &covariate_rows,
-        )?;
+        write_proxy_summary(&proxy_path, proxy, &covariate_rows)?;
+        outputs.push(proxy_path.clone());
     }
     if args.test == "ols" || args.test == "mixed" {
-        write_design_rows(&args.output_dir.join("de_design.tsv"), &design_rows)?;
+        write_design_rows(&design_path, &design_rows)?;
+        outputs.push(design_path.clone());
     }
 
     let computed = all_rows.iter().filter(|r| r.p_value.is_some()).count();
@@ -570,6 +579,42 @@ pub fn run(args: Args) -> Result<()> {
             .map(|s| s.label.as_str())
             .unwrap_or(""),
     );
+
+    let finished_at = SystemTime::now();
+    let input_dir_sha256 = hash_canonical_inputs(
+        &args.input_dir,
+        &[
+            "qc_measurements.tsv",
+            "measurements.tsv",
+            "samples.tsv",
+            "proteins.tsv",
+        ],
+    )?;
+    let sidecar = sidecar_path_for(&results_path);
+    write_run_sidecar(
+        &sidecar,
+        "de",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "output-dir": args.output_dir.display().to_string(),
+            "test": args.test,
+            "paired-by": args.paired_by,
+            "covariates": args.covariates,
+            "design": args.design,
+            "contrast": args.contrast,
+            "per-subject-proxy": args.per_subject_proxy,
+            "fixed": args.fixed,
+            "random": args.random,
+            "groups": args.groups,
+            "min-pairs": args.min_pairs,
+            "moderation-prior-df": args.moderation_prior_df,
+        }),
+        &input_dir_sha256,
+        &outputs,
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("de: sidecar={}", sidecar.display());
     Ok(())
 }
 

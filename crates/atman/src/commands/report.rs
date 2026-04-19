@@ -1,10 +1,15 @@
 use anyhow::{Context, Result};
 use atman_core::{MeasurementRecord, ProteinIdentity, Sample};
 use clap::{Args as ClapArgs, Subcommand};
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use crate::io::{atomic_write, read_measurements_long, read_proteins, read_samples};
+use crate::io::{
+    atomic_write, hash_canonical_inputs, read_measurements_long, read_proteins, read_samples,
+    sidecar_path_for, write_run_sidecar,
+};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -44,6 +49,7 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn run_qc(args: QcArgs) -> Result<()> {
+    let started_at = SystemTime::now();
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
@@ -67,6 +73,42 @@ fn run_qc(args: QcArgs) -> Result<()> {
         measurements.len(),
         warnings
     );
+
+    let finished_at = SystemTime::now();
+    let qc_summary_path = args.output_dir.join("qc_summary.tsv");
+    let sample_qc_path = args.output_dir.join("sample_qc.tsv");
+    let protein_qc_path = args.output_dir.join("protein_qc.tsv");
+    let condition_counts_path = args.output_dir.join("condition_counts.tsv");
+    let input_dir_sha256 = hash_canonical_inputs(
+        &args.input_dir,
+        &[
+            "qc_measurements.tsv",
+            "measurements.tsv",
+            "samples.tsv",
+            "proteins.tsv",
+        ],
+    )?;
+    let sidecar = sidecar_path_for(&qc_summary_path);
+    write_run_sidecar(
+        &sidecar,
+        "report qc",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "output-dir": args.output_dir.display().to_string(),
+            "min-subjects": args.min_subjects,
+            "sparse-threshold": args.sparse_threshold,
+        }),
+        &input_dir_sha256,
+        &[
+            qc_summary_path.clone(),
+            sample_qc_path.clone(),
+            protein_qc_path.clone(),
+            condition_counts_path.clone(),
+        ],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("report qc: sidecar={}", sidecar.display());
     Ok(())
 }
 

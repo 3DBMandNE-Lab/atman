@@ -4,10 +4,12 @@ use atman_core::align::{
 };
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use csv::ReaderBuilder;
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use crate::io::atomic_write;
+use crate::io::{atomic_write, hash_labeled_inputs, sidecar_path_for, write_run_sidecar};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -104,6 +106,7 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn run_programs(args: ProgramsArgs) -> Result<()> {
+    let started_at = SystemTime::now();
     let paths: Vec<PathBuf> = args
         .loadings
         .split(',')
@@ -187,7 +190,7 @@ fn run_programs(args: ProgramsArgs) -> Result<()> {
         }
     }
 
-    if args.sweep {
+    let primary_output = if args.sweep {
         let matrix_path = args
             .output_matrix
             .as_ref()
@@ -204,6 +207,7 @@ fn run_programs(args: ProgramsArgs) -> Result<()> {
             args.compare_constrained_vs_unconstrained,
             matrix_path,
         )?;
+        matrix_path.clone()
     } else {
         let output = args
             .output
@@ -226,7 +230,55 @@ fn run_programs(args: ProgramsArgs) -> Result<()> {
             summary.n_universal,
             summary.category_recovery
         );
+        output.clone()
+    };
+
+    let finished_at = SystemTime::now();
+    let mut labeled: Vec<(String, PathBuf)> = Vec::new();
+    for (ci, path) in paths.iter().enumerate() {
+        labeled.push((format!("loadings_{}", cohort_labels[ci]), path.clone()));
     }
+    for (ci, ap) in annotation_paths.iter().enumerate() {
+        if let Some(p) = ap {
+            labeled.push((format!("annotations_{}", cohort_labels[ci]), p.clone()));
+        }
+    }
+    let refs: Vec<(&str, &Path)> = labeled
+        .iter()
+        .map(|(l, p)| (l.as_str(), p.as_path()))
+        .collect();
+    let input_dir_sha256 = hash_labeled_inputs(&refs)?;
+    let sidecar = sidecar_path_for(&primary_output);
+    let metric = match args.metric {
+        SingleMetric::Jaccard => "jaccard",
+        SingleMetric::Cosine => "cosine",
+        SingleMetric::Spearman => "spearman",
+    };
+    write_run_sidecar(
+        &sidecar,
+        "align programs",
+        json!({
+            "loadings": args.loadings,
+            "cohorts": args.cohorts,
+            "annotations": args.annotations,
+            "label-col": args.label_col,
+            "metric": metric,
+            "top-n": args.top_n,
+            "tau": args.tau,
+            "reciprocal-best": args.reciprocal_best,
+            "category-constraint": args.category_constraint,
+            "output": args.output.as_ref().map(|p| p.display().to_string()),
+            "sweep": args.sweep,
+            "metrics": args.metrics,
+            "compare-constrained-vs-unconstrained": args.compare_constrained_vs_unconstrained,
+            "output-matrix": args.output_matrix.as_ref().map(|p| p.display().to_string()),
+        }),
+        &input_dir_sha256,
+        &[primary_output.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("align programs: sidecar={}", sidecar.display());
     Ok(())
 }
 

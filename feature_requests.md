@@ -1,7 +1,8 @@
 # Atman feature requests
 
-No open requests. All filed items from the 2026-04-19 CSF cross-disease
-batch shipped the same day.
+No open requests. The 2026-04-19 CSF cross-disease batch shipped the same
+day, and the follow-on P0 run-sidecar request (universal invocation
+provenance across every subcommand) shipped immediately after.
 
 ## How to implement a feature request
 

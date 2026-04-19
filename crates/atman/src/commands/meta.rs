@@ -2,11 +2,15 @@ use anyhow::{bail, Context, Result};
 use atman_core::de::bh_fdr;
 use clap::{Args as ClapArgs, ValueEnum};
 use csv::ReaderBuilder;
+use serde_json::json;
 use statrs::distribution::{ContinuousCDF, Normal};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use crate::io::{atomic_write, need_col};
+use crate::io::{
+    atomic_write, hash_labeled_inputs, need_col, sidecar_path_for, write_run_sidecar,
+};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -74,6 +78,7 @@ struct MetaRow {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     if args.method != "fixed-effect" && args.method != "random-effects" && args.method != "all" {
         bail!("meta supports --method fixed-effect, random-effects, or all");
     }
@@ -93,7 +98,10 @@ pub fn run(args: Args) -> Result<()> {
         bail!("meta requires at least two input de_results.tsv files");
     }
     if args.level == Level::Module {
-        return run_module_meta(&inputs, &args.output, &args.method);
+        run_module_meta(&inputs, &args.output, &args.method)?;
+        let finished_at = SystemTime::now();
+        write_meta_sidecar(&args, &inputs, started_at, finished_at)?;
+        return Ok(());
     }
     let mut effects: BTreeMap<Key, Vec<CohortEffect>> = BTreeMap::new();
     for path in &inputs {
@@ -133,6 +141,49 @@ pub fn run(args: Args) -> Result<()> {
         rows.len(),
         args.method
     );
+
+    let finished_at = SystemTime::now();
+    write_meta_sidecar(&args, &inputs, started_at, finished_at)?;
+    Ok(())
+}
+
+fn write_meta_sidecar(
+    args: &Args,
+    inputs: &[PathBuf],
+    started_at: SystemTime,
+    finished_at: SystemTime,
+) -> Result<()> {
+    let labeled: Vec<(String, PathBuf)> = inputs
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (format!("input_{:02}", i + 1), p.clone()))
+        .collect();
+    let refs: Vec<(&str, &Path)> = labeled
+        .iter()
+        .map(|(l, p)| (l.as_str(), p.as_path()))
+        .collect();
+    let input_dir_sha256 = hash_labeled_inputs(&refs)?;
+    let sidecar = sidecar_path_for(&args.output);
+    let level = match args.level {
+        Level::Protein => "protein",
+        Level::Module => "module",
+    };
+    write_run_sidecar(
+        &sidecar,
+        "meta",
+        json!({
+            "inputs": args.inputs,
+            "output": args.output.display().to_string(),
+            "method": args.method,
+            "level": level,
+            "report": args.report,
+        }),
+        &input_dir_sha256,
+        &[args.output.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("meta: sidecar={}", sidecar.display());
     Ok(())
 }
 

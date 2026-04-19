@@ -1,10 +1,12 @@
 use anyhow::{bail, Context, Result};
 use atman_core::Platform;
 use clap::{Args as ClapArgs, ValueEnum};
+use serde_json::json;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use crate::io::atomic_write;
+use crate::io::{atomic_write, hash_labeled_inputs, sidecar_path_for, write_run_sidecar};
 
 const MEASUREMENT_HEADER: &[&str] = &[
     "platform",
@@ -129,6 +131,7 @@ struct ProteinRow {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     let platform: Platform = args.platform.parse().map_err(anyhow::Error::msg)?;
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
@@ -176,6 +179,62 @@ pub fn run(args: Args) -> Result<()> {
         proteins.len(),
         measurements.len()
     );
+
+    let finished_at = SystemTime::now();
+    let mut input_entries: Vec<(&str, &Path)> = vec![
+        ("matrix", args.matrix.as_path()),
+        ("samples", args.samples.as_path()),
+    ];
+    if let Some(p) = args.proteins.as_ref() {
+        input_entries.push(("proteins", p.as_path()));
+    }
+    let input_dir_sha256 = hash_labeled_inputs(&input_entries)?;
+    let measurements_out = args.output_dir.join("measurements.tsv");
+    let proteins_out = args.output_dir.join("proteins.tsv");
+    let samples_out = args.output_dir.join("samples.tsv");
+    let mut outputs: Vec<PathBuf> = vec![
+        measurements_out.clone(),
+        proteins_out.clone(),
+        samples_out.clone(),
+    ];
+    if !args.no_copy_measurements_to_qc {
+        outputs.push(args.output_dir.join("qc_measurements.tsv"));
+    }
+    let orientation = match args.orientation {
+        Orientation::ProteinsRows => "proteins-rows",
+        Orientation::SamplesRows => "samples-rows",
+    };
+    let sidecar = sidecar_path_for(&measurements_out);
+    write_run_sidecar(
+        &sidecar,
+        "ingest-matrix",
+        json!({
+            "matrix": args.matrix.display().to_string(),
+            "samples": args.samples.display().to_string(),
+            "proteins": args.proteins.as_ref().map(|p| p.display().to_string()),
+            "output-dir": args.output_dir.display().to_string(),
+            "orientation": orientation,
+            "platform": args.platform,
+            "abundance-unit": args.abundance_unit,
+            "assay-id-col": args.assay_id_col,
+            "gene-col": args.gene_col,
+            "uniprot-col": args.uniprot_col,
+            "panel": args.panel,
+            "panel-col": args.panel_col,
+            "sample-id-col": args.sample_id_col,
+            "subject-id-col": args.subject_id_col,
+            "condition-col": args.condition_col,
+            "sample-type-col": args.sample_type_col,
+            "is-control-col": args.is_control_col,
+            "log2-transform": args.log2_transform,
+            "no-copy-measurements-to-qc": args.no_copy_measurements_to_qc,
+        }),
+        &input_dir_sha256,
+        &outputs,
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("ingest-matrix: sidecar={}", sidecar.display());
     Ok(())
 }
 

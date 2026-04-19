@@ -5,12 +5,17 @@ use atman_core::de::{bh_fdr, paired_t, welch_t, PairedTResult, SkipReason};
 use atman_core::stats::mean;
 use atman_core::Sample;
 use clap::Args as ClapArgs;
+use serde_json::json;
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use super::parse_comparisons;
-use crate::io::{atomic_write, read_measurements_long, read_proteins, read_samples};
+use crate::io::{
+    atomic_write, hash_canonical_inputs, read_measurements_long, read_proteins, read_samples,
+    sidecar_path_for, write_run_sidecar,
+};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -96,6 +101,7 @@ struct SummaryRow {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     if args.test != "welch-t" && args.test != "paired-t" {
         bail!("null supports --test welch-t or paired-t");
     }
@@ -214,8 +220,10 @@ pub fn run(args: Args) -> Result<()> {
             .then_with(|| a.gene_symbol.cmp(&b.gene_symbol))
     });
 
-    write_summary(&args.output_dir.join("null_summary.tsv"), &summary_rows)?;
-    write_empirical(&args.output_dir.join("empirical_p.tsv"), &empirical_rows)?;
+    let summary_path = args.output_dir.join("null_summary.tsv");
+    let empirical_path = args.output_dir.join("empirical_p.tsv");
+    write_summary(&summary_path, &summary_rows)?;
+    write_empirical(&empirical_path, &empirical_rows)?;
     eprintln!(
         "null: test={} comparisons={} proteins={} n={} seed={}",
         args.test,
@@ -224,6 +232,37 @@ pub fn run(args: Args) -> Result<()> {
         args.n,
         args.seed
     );
+
+    let finished_at = SystemTime::now();
+    let input_dir_sha256 = hash_canonical_inputs(
+        &args.input_dir,
+        &[
+            "qc_measurements.tsv",
+            "measurements.tsv",
+            "samples.tsv",
+            "proteins.tsv",
+        ],
+    )?;
+    let sidecar = sidecar_path_for(&summary_path);
+    write_run_sidecar(
+        &sidecar,
+        "null",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "output-dir": args.output_dir.display().to_string(),
+            "groups": args.groups,
+            "test": args.test,
+            "n": args.n,
+            "min-pairs": args.min_pairs,
+            "seed": args.seed,
+            "q-thresholds": args.q_thresholds,
+        }),
+        &input_dir_sha256,
+        &[summary_path.clone(), empirical_path.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("null: sidecar={}", sidecar.display());
     Ok(())
 }
 

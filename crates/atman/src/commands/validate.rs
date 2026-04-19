@@ -1,11 +1,16 @@
 use anyhow::{Context, Result};
 use atman_core::Platform;
 use clap::Args as ClapArgs;
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use super::parse_comparisons;
-use crate::io::{atomic_write, read_measurements_long, read_samples};
+use crate::io::{
+    atomic_write, hash_canonical_inputs, read_measurements_long, read_samples,
+    sidecar_path_for, write_run_sidecar,
+};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -96,6 +101,7 @@ struct RawTable {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     let mut findings = Findings::default();
     validate_dir(&args, &mut findings)?;
 
@@ -110,6 +116,33 @@ pub fn run(args: Args) -> Result<()> {
 
     if let Some(path) = &args.report {
         write_report(path, &findings)?;
+        let finished_at = SystemTime::now();
+        let input_dir_sha256 = hash_canonical_inputs(
+            &args.input_dir,
+            &[
+                "qc_measurements.tsv",
+                "measurements.tsv",
+                "samples.tsv",
+                "proteins.tsv",
+            ],
+        )?;
+        let sidecar = sidecar_path_for(path);
+        write_run_sidecar(
+            &sidecar,
+            "validate",
+            json!({
+                "input-dir": args.input_dir.display().to_string(),
+                "report": path.display().to_string(),
+                "groups": args.groups,
+                "min-pairs": args.min_pairs,
+                "strict": args.strict,
+            }),
+            &input_dir_sha256,
+            &[path.clone()],
+            started_at,
+            finished_at,
+        )?;
+        eprintln!("validate: sidecar={}", sidecar.display());
     }
 
     let fails = findings.error_count() > 0 || (args.strict && findings.warning_count() > 0);

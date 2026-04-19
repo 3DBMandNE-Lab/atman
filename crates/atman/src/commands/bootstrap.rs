@@ -3,11 +3,16 @@ use atman_core::stats::mean;
 use atman_core::Sample;
 use clap::{Args as ClapArgs, Subcommand};
 use csv::ReaderBuilder;
+use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use super::parse_comparisons;
-use crate::io::{atomic_write, read_measurements_long, read_proteins, read_samples};
+use crate::io::{
+    atomic_write, hash_canonical_inputs, hash_labeled_inputs, read_measurements_long,
+    read_proteins, read_samples, sidecar_path_for, write_run_sidecar,
+};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -228,6 +233,7 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn run_protein(args: ProteinArgs) -> Result<()> {
+    let started_at = SystemTime::now();
     if args.test != "welch-t" && args.test != "paired-t" {
         bail!("bootstrap protein supports --test welch-t or paired-t");
     }
@@ -352,10 +358,43 @@ fn run_protein(args: ProteinArgs) -> Result<()> {
         args.n,
         args.seed
     );
+
+    let finished_at = SystemTime::now();
+    let input_dir_sha256 = hash_canonical_inputs(
+        &args.input_dir,
+        &[
+            "qc_measurements.tsv",
+            "measurements.tsv",
+            "samples.tsv",
+            "proteins.tsv",
+        ],
+    )?;
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "bootstrap protein",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "output": args.output.display().to_string(),
+            "groups": args.groups,
+            "test": args.test,
+            "n": args.n,
+            "min-pairs": args.min_pairs,
+            "seed": args.seed,
+            "ci-low": args.ci_low,
+            "ci-high": args.ci_high,
+        }),
+        &input_dir_sha256,
+        &[args.output.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("bootstrap protein: sidecar={}", sidecar.display());
     Ok(())
 }
 
 fn run_module(args: ModuleArgs) -> Result<()> {
+    let started_at = SystemTime::now();
     if args.test != "welch-t" && args.test != "paired-t" {
         bail!("bootstrap module supports --test welch-t or paired-t");
     }
@@ -493,10 +532,46 @@ fn run_module(args: ModuleArgs) -> Result<()> {
         args.n,
         args.seed
     );
+
+    let finished_at = SystemTime::now();
+    let qc_path = args.input_dir.join("qc_measurements.tsv");
+    let raw_path = args.input_dir.join("measurements.tsv");
+    let samples_path = args.input_dir.join("samples.tsv");
+    let proteins_path = args.input_dir.join("proteins.tsv");
+    let input_dir_sha256 = hash_labeled_inputs(&[
+        ("qc_measurements.tsv", qc_path.as_path()),
+        ("measurements.tsv", raw_path.as_path()),
+        ("samples.tsv", samples_path.as_path()),
+        ("proteins.tsv", proteins_path.as_path()),
+        ("modules_tsv", args.modules_tsv.as_path()),
+    ])?;
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "bootstrap module",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "modules-tsv": args.modules_tsv.display().to_string(),
+            "output": args.output.display().to_string(),
+            "groups": args.groups,
+            "test": args.test,
+            "n": args.n,
+            "min-pairs": args.min_pairs,
+            "seed": args.seed,
+            "ci-low": args.ci_low,
+            "ci-high": args.ci_high,
+        }),
+        &input_dir_sha256,
+        &[args.output.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("bootstrap module: sidecar={}", sidecar.display());
     Ok(())
 }
 
 fn run_program(args: ProgramArgs) -> Result<()> {
+    let started_at = SystemTime::now();
     if args.test != "welch-t" && args.test != "paired-t" {
         bail!("bootstrap program supports --test welch-t or paired-t");
     }
@@ -647,6 +722,41 @@ fn run_program(args: ProgramArgs) -> Result<()> {
         args.n,
         args.seed
     );
+
+    let finished_at = SystemTime::now();
+    let qc_path = args.input_dir.join("qc_measurements.tsv");
+    let raw_path = args.input_dir.join("measurements.tsv");
+    let samples_path = args.input_dir.join("samples.tsv");
+    let proteins_path = args.input_dir.join("proteins.tsv");
+    let input_dir_sha256 = hash_labeled_inputs(&[
+        ("qc_measurements.tsv", qc_path.as_path()),
+        ("measurements.tsv", raw_path.as_path()),
+        ("samples.tsv", samples_path.as_path()),
+        ("proteins.tsv", proteins_path.as_path()),
+        ("loadings", args.loadings.as_path()),
+    ])?;
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "bootstrap program",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "loadings": args.loadings.display().to_string(),
+            "output": args.output.display().to_string(),
+            "groups": args.groups,
+            "test": args.test,
+            "n": args.n,
+            "min-pairs": args.min_pairs,
+            "seed": args.seed,
+            "ci-low": args.ci_low,
+            "ci-high": args.ci_high,
+        }),
+        &input_dir_sha256,
+        &[args.output.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("bootstrap program: sidecar={}", sidecar.display());
     Ok(())
 }
 

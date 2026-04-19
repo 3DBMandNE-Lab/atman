@@ -216,6 +216,25 @@ tables:
 The DE sanity test also verifies that canonical heat-shock proteins increase
 in both acute heat comparisons.
 
+### Run sidecars
+
+Every analysis subcommand that writes output files also writes a
+`<primary_output>.run.json` sidecar next to its main artifact (e.g.
+`loadings.tsv.run.json` alongside `loadings.tsv`). The sidecar captures:
+
+- the atman binary version and git SHA,
+- the fully-resolved argument dict (including defaults),
+- a SHA-256 hash of the canonical input TSVs the command actually read,
+- SHA-256 hashes of every output file from this invocation,
+- ISO-8601 UTC start/finish timestamps and build target triple.
+
+Reviewers can reproduce a run from the sidecar alone — no need to chase
+the driver script. Commands with sidecar output: `ingest-matrix`,
+`validate` (when `--report` is set), `report qc`, `decompose ica`,
+`align programs`, `coupling`, `null`, `enrich gprofiler`, `de`, `bootstrap
+protein`, `bootstrap module`, `bootstrap program`, `meta`, and `ratio`.
+The plan-level `atman run` manifest already covers its own provenance.
+
 ## Data Model
 
 Atman writes a small canonical TSV dataset between commands. This schema is
