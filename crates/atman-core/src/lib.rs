@@ -10,6 +10,7 @@ pub mod errors;
 pub mod fold_change;
 pub mod ica;
 pub mod ingest;
+pub mod limma;
 pub mod matrix;
 pub mod qc;
 pub mod sample_id;
