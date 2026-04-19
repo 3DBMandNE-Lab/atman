@@ -232,6 +232,7 @@ crates/atman-core/       core data model and algorithms
 crates/atman/            CLI, command orchestration, and file IO
 adapters/                canonical TSV adapter helpers and templates
 adapters/examples/       tiny synthetic non-Olink matrix examples
+CITATION.cff             citation metadata for release archives
 docs/tutorial.md         package tutorial using the bundled Dube fixture
 docs/release-checklist.md
                          standalone release checklist

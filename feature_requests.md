@@ -324,16 +324,6 @@ index, ventricular volume, `Q_{IgG}`) and includes them as continuous
 regressors with a compartmental-physics summary section in the DE
 output. Makes reviewer #8 a one-liner rather than a manual regression.
 
-### 13. Archive deposit + `CITATION.cff` + Zenodo DOI
-
-Not a CLI feature — but atman v1.0.0 with a Zenodo DOI and a
-`CITATION.cff` at repo root lets Methods cite a single versioned
-reference for the pipeline. Currently the CSF manuscript says
-"implementation in other languages is straightforward"; a DOI-tagged
-atman release makes that concrete.
-
----
-
 ## Feature-to-review-item matrix
 
 | Review item | Addressed by | Priority |
@@ -348,7 +338,7 @@ atman release makes that concrete.
 | #11 platform heterogeneity | Covered by completed within-cohort rank transform | P2 |
 | #12 program interpretability count | Feature 10 | P2 |
 | #13 category continuum rather than dichotomy | Covered by completed module-level meta support | P1 |
-| Methods reproducibility posture | Features 4, 5, 6, 13 | P1 + P2 |
+| Methods reproducibility posture | Features 4, 5, 6 | P1 + P2 |
 
 ---
 
