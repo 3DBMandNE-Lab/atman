@@ -8,6 +8,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **limma-grade eBayes + F-tests (`atman de --test limma`).** Pure-Rust
+  port of limma 3.x's core `eBayes` path: moderated t-statistic with
+  empirical-Bayes variance shrinkage, parametric-quadratic mean–variance
+  trend (`--trend`), one-pass Winsorized robust prior fit (`--robust`),
+  TREAT minimum-effect testing (`--lfc-threshold`). Numerically matches
+  `limma::eBayes(trend=FALSE, robust=FALSE)` within `1e-4` on the
+  100-feature × 20-sample regression fixture (F001 spot-check diff
+  2e-8). Output drops into `de_results.tsv` via nine additive columns
+  (`s2_trend`, `s2_prior`, `s2_posterior`, `df_prior`, `df_total`,
+  `f_statistic`, `f_p_value`, `f_bh_q`, `lfc_threshold`); `de_report.tsv`
+  gains `limma_trend_fallback_used`. Sign convention matches the rest
+  of `atman de` (`mean_a − mean_b` for `A-B`). Trend-mode and `robust=true`
+  numerical parity against R are deferred follow-ups — see the design
+  spec's out-of-scope section.
 - **Per-invocation run-sidecar (`<primary_output>.run.json`).** Shared
   helper `atman::io::write_run_sidecar` emits a JSON sidecar next to the
   primary output of each subcommand, capturing the atman version and git SHA,

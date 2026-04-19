@@ -137,6 +137,23 @@ atman de \
     --random "1|subject_id" \
     --min-pairs 5
 
+# limma-grade eBayes with parametric mean-variance trend and robust prior.
+atman de \
+    --input-dir out --output-dir out_limma \
+    --test limma \
+    --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
+    --paired-by participant \
+    --trend true --robust true \
+    --min-pairs 5
+
+# TREAT (minimum-effect test) at log2-FC threshold 0.5.
+atman de \
+    --input-dir out --output-dir out_limma_treat \
+    --test limma \
+    --groups "PT1-PR1" \
+    --lfc-threshold 0.5 \
+    --min-pairs 5
+
 atman bootstrap protein \
     --input-dir out \
     --groups "PT2-PT1" \
