@@ -9,8 +9,9 @@
 //! Phipson et al. 2016 (robust), Ritchie et al. 2015 (limma v3).
 
 /// Digamma ψ(x) = d/dx ln Γ(x). Asymptotic expansion for x ≥ 10,
-/// recurrence `ψ(x) = ψ(x+1) - 1/x` for smaller x (the x ≥ 10 cutoff
-/// keeps the truncated asymptotic series below ~1e-12 absolute error).
+/// recurrence `ψ(x) = ψ(x+1) - 1/x` for smaller x. The x ≥ 10 cutoff
+/// keeps the truncated series (through 1/x⁸) under ~1e-10 absolute
+/// error across tested values.
 pub fn digamma(x: f64) -> f64 {
     if !x.is_finite() || x <= 0.0 {
         return f64::NAN;
