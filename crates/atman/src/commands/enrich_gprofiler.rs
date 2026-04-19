@@ -13,11 +13,10 @@ use clap::Args as ClapArgs;
 use csv::ReaderBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::io::atomic_write;
+use crate::io::{atomic_write, escape_tsv, sha256_hex};
 
 const DEFAULT_ENDPOINT: &str = "https://biit.cs.ut.ee/gprofiler/api/gost/profile/";
 
@@ -251,14 +250,7 @@ fn cache_key(req: &CanonicalRequest) -> String {
         Value::String(req.ontology_version.clone()),
     );
     let canonical = serde_json::to_string(&map).expect("serialize cache key");
-    let mut hasher = Sha256::new();
-    hasher.update(canonical.as_bytes());
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(64);
-    for byte in digest {
-        hex.push_str(&format!("{byte:02x}"));
-    }
-    hex
+    sha256_hex(canonical.as_bytes())
 }
 
 fn read_gene_list(path: &Path) -> Result<Vec<String>> {
@@ -462,10 +454,6 @@ fn write_rows(path: &Path, rows: &[GprofilerRow]) -> Result<()> {
         ));
     }
     atomic_write(path, out.as_bytes())
-}
-
-fn escape_tsv(value: &str) -> String {
-    value.replace(['\t', '\n', '\r'], " ")
 }
 
 #[cfg(test)]

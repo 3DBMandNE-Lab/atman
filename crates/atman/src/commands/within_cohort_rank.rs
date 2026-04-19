@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use atman_core::stats::ranks;
 use atman_core::{Abundance, AssayId, MeasurementRecord, Platform};
 use clap::Args as ClapArgs;
 use std::collections::BTreeMap;
@@ -81,21 +82,3 @@ fn assay_key(platform: Platform, assay_id: &AssayId) -> (String, String) {
     (platform.as_str().to_string(), assay_id.0.clone())
 }
 
-fn ranks(values: &[f64]) -> Vec<f64> {
-    let mut indexed: Vec<(usize, f64)> = values.iter().copied().enumerate().collect();
-    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    let mut ranks = vec![0.0; values.len()];
-    let mut i = 0;
-    while i < indexed.len() {
-        let mut j = i + 1;
-        while j < indexed.len() && indexed[j].1 == indexed[i].1 {
-            j += 1;
-        }
-        let rank = (i + 1 + j) as f64 / 2.0;
-        for k in i..j {
-            ranks[indexed[k].0] = rank;
-        }
-        i = j;
-    }
-    ranks
-}

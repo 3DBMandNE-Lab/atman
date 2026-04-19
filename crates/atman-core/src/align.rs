@@ -6,8 +6,10 @@
 //! reciprocal-best and category-agreement filters, and assemble archetypes
 //! as connected components of the filtered bipartite graph.
 
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+
+use crate::stats;
+pub use crate::stats::jaccard_top_n;
 
 /// Similarity metrics.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -46,12 +48,14 @@ pub struct AlignedProgram {
     pub values: Vec<f64>,
 }
 
-/// Compute pairwise-cohort similarity between two program vectors.
+/// Compute pairwise-cohort similarity between two program vectors. Cosine and
+/// Spearman return the *absolute* correlation so sign-ambiguous ICA programs
+/// match regardless of signing.
 pub fn similarity(a: &[f64], b: &[f64], metric: AlignMetric, top_n: usize) -> f64 {
     match metric {
-        AlignMetric::Jaccard => jaccard_top_n(a, b, top_n),
-        AlignMetric::Cosine => cosine(a, b),
-        AlignMetric::Spearman => spearman(a, b),
+        AlignMetric::Jaccard => stats::jaccard_top_n(a, b, top_n),
+        AlignMetric::Cosine => stats::cosine(a, b).unwrap_or(0.0).abs(),
+        AlignMetric::Spearman => stats::spearman(a, b).unwrap_or(0.0).abs(),
     }
 }
 
@@ -170,91 +174,6 @@ pub fn archetypes_union_find(n: usize, edges: &[(usize, usize)]) -> Vec<usize> {
     (0..n).map(|i| find(&mut parent, i)).collect()
 }
 
-/// Jaccard similarity between top-N |value| index sets.
-pub fn jaccard_top_n(a: &[f64], b: &[f64], top_n: usize) -> f64 {
-    let set_a = top_abs_indices(a, top_n);
-    let set_b = top_abs_indices(b, top_n);
-    let inter: usize = set_a.iter().filter(|i| set_b.contains(i)).count();
-    let union = set_a.len() + set_b.len() - inter;
-    if union == 0 {
-        0.0
-    } else {
-        inter as f64 / union as f64
-    }
-}
-
-fn top_abs_indices(values: &[f64], top_n: usize) -> BTreeSet<usize> {
-    let mut indexed: Vec<(usize, f64)> = values
-        .iter()
-        .enumerate()
-        .map(|(i, v)| (i, v.abs()))
-        .collect();
-    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-    let keep = indexed.len().min(top_n);
-    indexed.into_iter().take(keep).map(|(i, _)| i).collect()
-}
-
-/// Cosine similarity over the full shared-universe vectors (absolute value,
-/// so sign ambiguity of ICA doesn't collapse matches). Zero if either norm is 0.
-pub fn cosine(a: &[f64], b: &[f64]) -> f64 {
-    let mut dot = 0.0_f64;
-    let mut na = 0.0_f64;
-    let mut nb = 0.0_f64;
-    for (x, y) in a.iter().zip(b.iter()) {
-        dot += x * y;
-        na += x * x;
-        nb += y * y;
-    }
-    if na == 0.0 || nb == 0.0 {
-        return 0.0;
-    }
-    (dot / (na.sqrt() * nb.sqrt())).abs()
-}
-
-/// Spearman rank correlation over the shared universe (absolute).
-pub fn spearman(a: &[f64], b: &[f64]) -> f64 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let ra = ranks(a);
-    let rb = ranks(b);
-    let mean_x: f64 = ra.iter().sum::<f64>() / ra.len() as f64;
-    let mean_y: f64 = rb.iter().sum::<f64>() / rb.len() as f64;
-    let mut sxx = 0.0_f64;
-    let mut syy = 0.0_f64;
-    let mut sxy = 0.0_f64;
-    for (x, y) in ra.iter().zip(rb.iter()) {
-        let dx = x - mean_x;
-        let dy = y - mean_y;
-        sxx += dx * dx;
-        syy += dy * dy;
-        sxy += dx * dy;
-    }
-    if sxx == 0.0 || syy == 0.0 {
-        return 0.0;
-    }
-    (sxy / (sxx.sqrt() * syy.sqrt())).abs()
-}
-
-fn ranks(values: &[f64]) -> Vec<f64> {
-    let mut indexed: Vec<(usize, f64)> = values.iter().copied().enumerate().collect();
-    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
-    let mut out = vec![0.0; values.len()];
-    let mut i = 0;
-    while i < indexed.len() {
-        let mut j = i + 1;
-        while j < indexed.len() && indexed[j].1 == indexed[i].1 {
-            j += 1;
-        }
-        let rank = (i + 1 + j) as f64 / 2.0;
-        for k in i..j {
-            out[indexed[k].0] = rank;
-        }
-        i = j;
-    }
-    out
-}
-
 /// Given a set of programs across cohorts already aligned to a shared label
 /// universe, produce archetype ids (connected components of the accepted-edge
 /// graph over all cohort pairs).
@@ -366,24 +285,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn jaccard_top_n_simple() {
-        let a = vec![0.9, 0.1, -0.8, 0.2];
-        let b = vec![0.85, 0.15, 0.0, -0.78];
-        assert!((jaccard_top_n(&a, &b, 2) - 1.0 / 3.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn cosine_is_absolute() {
-        let a = vec![1.0, 2.0, 3.0];
-        let b = vec![-1.0, -2.0, -3.0];
-        assert!((cosine(&a, &b) - 1.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn spearman_monotonic() {
+    fn similarity_delegates_to_metric() {
+        // Perfect monotone pair -> |spearman| = 1.
         let a = vec![1.0, 2.0, 3.0, 4.0];
         let b = vec![10.0, 20.0, 30.0, 40.0];
-        assert!((spearman(&a, &b) - 1.0).abs() < 1e-12);
+        assert!((similarity(&a, &b, AlignMetric::Spearman, 4) - 1.0).abs() < 1e-12);
+        // Anti-aligned cosine still reports |cosine| = 1 for archetype matching.
+        let c = vec![1.0, 2.0, 3.0];
+        let d = vec![-1.0, -2.0, -3.0];
+        assert!((similarity(&c, &d, AlignMetric::Cosine, 3) - 1.0).abs() < 1e-12);
     }
 
     #[test]

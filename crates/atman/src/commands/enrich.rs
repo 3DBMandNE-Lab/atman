@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use super::enrich_gprofiler::{run_gprofiler, GprofilerArgs};
-use crate::io::atomic_write;
+use crate::io::{atomic_write, need_col};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -231,12 +231,6 @@ fn read_universe(path: &Path) -> Result<BTreeSet<String>> {
     }
 }
 
-fn need_col(headers: &csv::StringRecord, name: &str, path: &Path) -> Result<usize> {
-    headers
-        .iter()
-        .position(|h| h == name)
-        .with_context(|| format!("missing column {:?} in {:?}", name, path))
-}
 
 fn fisher_upper_tail(overlap: usize, hits: usize, set_size: usize, universe: usize) -> f64 {
     let max_k = hits.min(set_size);

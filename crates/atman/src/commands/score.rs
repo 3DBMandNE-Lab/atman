@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use atman_core::stats::mean;
 use atman_core::Sample;
 use clap::{Args as ClapArgs, Subcommand};
 use csv::ReaderBuilder;
@@ -417,9 +418,6 @@ fn read_modules(path: &Path) -> Result<BTreeMap<String, BTreeSet<String>>> {
     Ok(out)
 }
 
-fn mean(values: &[f64]) -> f64 {
-    values.iter().sum::<f64>() / values.len() as f64
-}
 
 fn sample_sd(values: &[f64], mean: f64) -> f64 {
     (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64).sqrt()

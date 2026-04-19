@@ -9,11 +9,70 @@ use atman_core::{
     fold_change::FoldChangePanel, matrix::DubeWidePanel, Abundance, AssayId, Batch, DetectionLimit,
     MeasurementRecord, Platform, ProteinIdentity, QcFlag, Sample,
 };
+use csv::StringRecord;
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     io::Write,
     path::{Path, PathBuf},
 };
+
+/// Locate a required column by header name; bail with a readable error when missing.
+pub fn need_col(headers: &StringRecord, name: &str, path: &Path) -> Result<usize> {
+    headers
+        .iter()
+        .position(|h| h == name)
+        .ok_or_else(|| anyhow!("missing column {:?} in {:?}", name, path))
+}
+
+/// Locate the first matching column from a list of candidate names.
+pub fn find_col(headers: &StringRecord, names: &[&str]) -> Option<usize> {
+    names
+        .iter()
+        .find_map(|name| headers.iter().position(|h| h == *name))
+}
+
+/// Fetch an optional cell value, treating empty strings as absent.
+pub fn optional_cell<'a>(row: &'a StringRecord, col: Option<usize>) -> Option<&'a str> {
+    col.and_then(|idx| row.get(idx))
+        .filter(|value| !value.is_empty())
+}
+
+/// Format an `f64` with 6 decimal places; handles `NaN` and preserves zero as `"0"`.
+pub fn format_float(value: f64) -> String {
+    if !value.is_finite() {
+        return if value.is_nan() {
+            "NaN".to_string()
+        } else if value > 0.0 {
+            "Inf".to_string()
+        } else {
+            "-Inf".to_string()
+        };
+    }
+    if value == 0.0 {
+        "0".to_string()
+    } else {
+        format!("{value:.6}")
+    }
+}
+
+/// Replace tab / newline / carriage-return characters with spaces so the value
+/// fits safely into a TSV cell.
+pub fn escape_tsv(value: &str) -> String {
+    value.replace(['\t', '\n', '\r'], " ")
+}
+
+/// SHA-256 of a byte slice as lower-case hex.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
 
 /// Atomic file write: write to a sibling tempfile, then rename over target.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {

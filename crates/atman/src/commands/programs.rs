@@ -1,10 +1,10 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args as ClapArgs, Subcommand};
-use csv::{ReaderBuilder, StringRecord};
+use csv::ReaderBuilder;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::io::atomic_write;
+use crate::io::{atomic_write, escape_tsv, find_col, format_float, need_col, optional_cell};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -248,40 +248,10 @@ fn is_keratin_like(label: &str) -> bool {
     upper.starts_with("KRT") || upper.contains("KERATIN")
 }
 
-fn need_col(headers: &StringRecord, name: &str, path: &Path) -> Result<usize> {
-    headers
-        .iter()
-        .position(|h| h == name)
-        .with_context(|| format!("{:?} missing required column {:?}", path, name))
-}
-
-fn find_col(headers: &StringRecord, names: &[&str]) -> Option<usize> {
-    names
-        .iter()
-        .find_map(|name| headers.iter().position(|h| h == *name))
-}
-
-fn optional_cell(row: &StringRecord, col: Option<usize>) -> Option<&str> {
-    col.and_then(|idx| row.get(idx))
-        .filter(|value| !value.is_empty())
-}
-
 fn flag(value: bool) -> &'static str {
     if value {
         "1"
     } else {
         "0"
     }
-}
-
-fn format_float(value: f64) -> String {
-    if value == 0.0 {
-        "0".to_string()
-    } else {
-        format!("{value:.6}")
-    }
-}
-
-fn escape_tsv(value: &str) -> String {
-    value.replace(['\t', '\n', '\r'], " ")
 }

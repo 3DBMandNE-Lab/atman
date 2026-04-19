@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use atman_core::de::{bh_fdr, paired_t, welch_t, PairedTResult, SkipReason};
+use atman_core::stats::mean;
 use atman_core::Sample;
 use clap::Args as ClapArgs;
 use statrs::distribution::{ContinuousCDF, StudentsT};
@@ -596,9 +597,6 @@ fn push_opt(buf: &mut String, value: Option<f64>) {
     }
 }
 
-fn mean(values: &[f64]) -> f64 {
-    values.iter().sum::<f64>() / values.len() as f64
-}
 
 fn quantile_usize_sorted(values: &[usize], q: f64) -> usize {
     let idx = ((values.len() - 1) as f64 * q).round() as usize;

@@ -13,6 +13,7 @@ pub mod ingest;
 pub mod matrix;
 pub mod qc;
 pub mod sample_id;
+pub mod stats;
 pub mod types;
 
 pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};

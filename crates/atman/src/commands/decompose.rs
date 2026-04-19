@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::io::{atomic_write, read_measurements_long};
+use crate::io::{atomic_write, format_float, read_measurements_long};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -561,13 +561,3 @@ fn threshold_fraction(_threshold: f64) -> f64 {
     0.9
 }
 
-fn format_float(value: f64) -> String {
-    if !value.is_finite() {
-        return "NaN".to_string();
-    }
-    if value == 0.0 {
-        "0".to_string()
-    } else {
-        format!("{value:.6}")
-    }
-}

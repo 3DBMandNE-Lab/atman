@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use atman_core::stats::mean;
 use atman_core::Sample;
 use clap::{Args as ClapArgs, Subcommand};
 use csv::ReaderBuilder;
@@ -1014,9 +1015,6 @@ fn subject_means(input: Option<&BTreeMap<String, Vec<f64>>>) -> BTreeMap<String,
         .collect()
 }
 
-fn mean(values: &[f64]) -> f64 {
-    values.iter().sum::<f64>() / values.len() as f64
-}
 
 fn bootstrap_mean(values: &[f64], rng: &mut Rng64) -> f64 {
     let mut total = 0.0;

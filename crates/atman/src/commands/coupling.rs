@@ -1,11 +1,12 @@
 use anyhow::{bail, Context, Result};
+use atman_core::stats::{mean, pearson, ranks};
 use clap::{Args as ClapArgs, ValueEnum};
 use csv::ReaderBuilder;
 use statrs::distribution::{ContinuousCDF, Normal};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::io::atomic_write;
+use crate::io::{atomic_write, need_col};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -200,7 +201,7 @@ fn compute_pair(pair: &PairSpec, activations: &[Activation]) -> Result<CouplingR
         );
     }
 
-    let rho = spearman(&xs, &ys)?;
+    let rho = spearman_strict(&xs, &ys)?;
     let (ci_lo, ci_hi, p_value) = fisher_interval_and_p(rho, xs.len())?;
     let sign_match = match pair.hypothesized_sign {
         Sign::Positive => rho > 0.0,
@@ -221,49 +222,12 @@ fn compute_pair(pair: &PairSpec, activations: &[Activation]) -> Result<CouplingR
     })
 }
 
-fn spearman(xs: &[f64], ys: &[f64]) -> Result<f64> {
+fn spearman_strict(xs: &[f64], ys: &[f64]) -> Result<f64> {
     if xs.len() != ys.len() {
         bail!("spearman inputs have different lengths");
     }
     pearson(&ranks(xs), &ranks(ys))
-}
-
-fn ranks(values: &[f64]) -> Vec<f64> {
-    let mut indexed: Vec<(usize, f64)> = values.iter().copied().enumerate().collect();
-    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    let mut ranks = vec![0.0; values.len()];
-    let mut i = 0;
-    while i < indexed.len() {
-        let mut j = i + 1;
-        while j < indexed.len() && indexed[j].1 == indexed[i].1 {
-            j += 1;
-        }
-        let rank = (i + 1 + j) as f64 / 2.0;
-        for k in i..j {
-            ranks[indexed[k].0] = rank;
-        }
-        i = j;
-    }
-    ranks
-}
-
-fn pearson(xs: &[f64], ys: &[f64]) -> Result<f64> {
-    let mean_x = mean(xs);
-    let mean_y = mean(ys);
-    let mut sxx = 0.0;
-    let mut syy = 0.0;
-    let mut sxy = 0.0;
-    for (x, y) in xs.iter().zip(ys.iter()) {
-        let dx = x - mean_x;
-        let dy = y - mean_y;
-        sxx += dx * dx;
-        syy += dy * dy;
-        sxy += dx * dy;
-    }
-    if sxx == 0.0 || syy == 0.0 {
-        bail!("correlation undefined for constant activation vector");
-    }
-    Ok((sxy / (sxx.sqrt() * syy.sqrt())).clamp(-1.0, 1.0))
+        .ok_or_else(|| anyhow::anyhow!("correlation undefined for constant activation vector"))
 }
 
 fn fisher_interval_and_p(rho: f64, n: usize) -> Result<(f64, f64, f64)> {
@@ -344,10 +308,6 @@ fn combination(n: usize, k: usize) -> f64 {
     (1..=k).fold(1.0, |acc, i| acc * (n + 1 - i) as f64 / i as f64)
 }
 
-fn mean(values: &[f64]) -> f64 {
-    values.iter().sum::<f64>() / values.len() as f64
-}
-
 fn parse_programs(input: &str) -> Result<Vec<String>> {
     let programs: Vec<String> = input
         .split(';')
@@ -381,9 +341,3 @@ impl Sign {
     }
 }
 
-fn need_col(headers: &csv::StringRecord, name: &str, path: &Path) -> Result<usize> {
-    headers
-        .iter()
-        .position(|h| h == name)
-        .with_context(|| format!("missing column {:?} in {:?}", name, path))
-}

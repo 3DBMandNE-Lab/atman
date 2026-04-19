@@ -1,12 +1,13 @@
 use anyhow::{anyhow, bail, Context, Result};
 use atman_core::de::{ols, OlsOutcome};
+use atman_core::stats::mean;
 use atman_core::{MeasurementRecord, Sample};
 use clap::Args as ClapArgs;
-use csv::{ReaderBuilder, StringRecord};
+use csv::ReaderBuilder;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::io::{atomic_write, read_measurements_long, read_samples};
+use crate::io::{atomic_write, need_col, read_measurements_long, read_samples};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -363,16 +364,7 @@ fn write_wide(path: &Path, rows: &[ResidualRow]) -> Result<()> {
     atomic_write(path, out.as_bytes())
 }
 
-fn need_col(headers: &StringRecord, name: &str, path: &Path) -> Result<usize> {
-    headers
-        .iter()
-        .position(|h| h == name)
-        .with_context(|| format!("{:?} missing required column {:?}", path, name))
-}
 
-fn mean(values: &[f64]) -> f64 {
-    values.iter().sum::<f64>() / values.len() as f64
-}
 
 fn fmt(value: f64) -> String {
     if value.abs() < 5e-13 {

@@ -10,6 +10,8 @@
 
 use std::cmp::Ordering;
 
+pub use crate::stats::jaccard_top_n;
+
 /// Deterministic Xoshiro256++ PRNG seeded via SplitMix64.
 pub struct Xoshiro256pp {
     state: [u64; 4],
@@ -410,35 +412,6 @@ pub fn select_k_cumulative_variance(
     chosen.clamp(k_min.max(1), k_max.max(k_min.max(1)))
 }
 
-/// Jaccard similarity between the top-`n` |loading| index sets.
-pub fn jaccard_top_n(a: &[f64], b: &[f64], top_n: usize) -> f64 {
-    let set_a = top_abs_indices(a, top_n);
-    let set_b = top_abs_indices(b, top_n);
-    if set_a.is_empty() && set_b.is_empty() {
-        return 0.0;
-    }
-    let inter = set_a.iter().filter(|i| set_b.contains(i)).count();
-    let union = set_a.len() + set_b.len() - inter;
-    if union == 0 {
-        0.0
-    } else {
-        inter as f64 / union as f64
-    }
-}
-
-fn top_abs_indices(values: &[f64], top_n: usize) -> Vec<usize> {
-    let mut indexed: Vec<(usize, f64)> = values
-        .iter()
-        .enumerate()
-        .map(|(i, v)| (i, v.abs()))
-        .collect();
-    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-    let keep = indexed.len().min(top_n);
-    let mut out: Vec<usize> = indexed.into_iter().take(keep).map(|(i, _)| i).collect();
-    out.sort_unstable();
-    out
-}
-
 /// Symmetric decorrelation: W <- (W W^T)^{-1/2} W, in place.
 fn symmetric_decorrelate(w: &mut Vec<Vec<f64>>) {
     let k = w.len();
@@ -523,15 +496,6 @@ mod tests {
         assert!((vals[0] - 3.0).abs() < 1e-10);
         assert!((vals[1] - 2.0).abs() < 1e-10);
         assert!((vals[2] - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn jaccard_top_n_handles_basic_cases() {
-        let a = vec![0.9, 0.1, -0.8, 0.2];
-        let b = vec![0.85, 0.15, 0.0, -0.78];
-        // top-2 of a: {0, 2}; top-2 of b: {0, 3}. intersection=1, union=3.
-        let j = jaccard_top_n(&a, &b, 2);
-        assert!((j - 1.0 / 3.0).abs() < 1e-12);
     }
 
     #[test]

@@ -12,12 +12,11 @@
 use anyhow::{bail, Context, Result};
 use clap::Args as ClapArgs;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use crate::io::atomic_write;
+use crate::io::{atomic_write, escape_tsv, sha256_hex};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -72,7 +71,7 @@ pub fn run(args: Args) -> Result<()> {
     if plan.stages.is_empty() {
         bail!("plan {:?} has no stages", args.plan);
     }
-    let plan_hash = sha256_bytes(plan_text.as_bytes());
+    let plan_hash = sha256_hex(plan_text.as_bytes());
     std::fs::create_dir_all(&args.output_dir).with_context(|| {
         format!("creating output dir {:?}", args.output_dir)
     })?;
@@ -213,35 +212,21 @@ fn hash_paths(cwd: &Path, paths: &[String]) -> String {
         })
         .collect();
     parts.sort();
-    let mut hasher = Sha256::new();
+    let mut buf = Vec::new();
     for (path, file_hash) in parts {
-        hasher.update(path.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(file_hash.as_bytes());
-        hasher.update(b"\n");
+        buf.extend_from_slice(path.as_bytes());
+        buf.push(0);
+        buf.extend_from_slice(file_hash.as_bytes());
+        buf.push(b'\n');
     }
-    hex(hasher.finalize().as_slice())
+    sha256_hex(&buf)
 }
 
 fn hash_file_or_missing(path: &Path) -> String {
     match std::fs::read(path) {
-        Ok(bytes) => sha256_bytes(&bytes),
+        Ok(bytes) => sha256_hex(&bytes),
         Err(_) => "MISSING".to_string(),
     }
-}
-
-fn sha256_bytes(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex(hasher.finalize().as_slice())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push_str(&format!("{b:02x}"));
-    }
-    out
 }
 
 fn check_manifest_consistency(manifest_path: &Path, new_plan_hash: &str, plan: &Plan) -> Result<()> {
@@ -295,9 +280,6 @@ fn write_manifest(path: &Path, rows: &[ManifestRow]) -> Result<()> {
     atomic_write(path, out.as_bytes())
 }
 
-fn escape_tsv(value: &str) -> String {
-    value.replace(['\t', '\n', '\r'], " ")
-}
 
 #[cfg(test)]
 mod tests {
@@ -337,7 +319,7 @@ stages:
     fn plan_hash_is_stable() {
         let a = "name: x\nstages:\n  - id: a\n    command: echo hi\n";
         let b = "name: x\nstages:\n  - id: a\n    command: echo hi\n";
-        assert_eq!(sha256_bytes(a.as_bytes()), sha256_bytes(b.as_bytes()));
+        assert_eq!(sha256_hex(a.as_bytes()), sha256_hex(b.as_bytes()));
     }
 
     #[test]

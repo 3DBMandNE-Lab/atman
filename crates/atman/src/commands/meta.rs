@@ -6,7 +6,7 @@ use statrs::distribution::{ContinuousCDF, Normal};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::io::atomic_write;
+use crate::io::{atomic_write, need_col};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -459,12 +459,6 @@ fn parse_f64(input: &str) -> Option<f64> {
     value.is_finite().then_some(value)
 }
 
-fn need_col(headers: &csv::StringRecord, name: &str, path: &Path) -> Result<usize> {
-    headers
-        .iter()
-        .position(|h| h == name)
-        .with_context(|| format!("missing column {:?} in {:?}", name, path))
-}
 
 fn write_rows(path: &Path, rows: &[MetaRow]) -> Result<()> {
     let mut out = String::from(
