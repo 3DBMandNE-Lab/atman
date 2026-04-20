@@ -20,7 +20,7 @@ use crate::io::{
     DeResultRow,
 };
 
-#[derive(ClapArgs, Debug)]
+#[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
     /// Directory containing qc_measurements.tsv, samples.tsv, proteins.tsv.
     #[arg(long)]
