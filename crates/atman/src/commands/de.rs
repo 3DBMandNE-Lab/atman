@@ -158,6 +158,13 @@ pub struct Args {
     /// 1.00 — any directional disagreement drops the grade.
     #[arg(long, default_value_t = 1.00)]
     ensemble_sign_fraction: f64,
+
+    /// Name of the categorical factor (a sample metadata column
+    /// referenced by `--design`) whose omnibus F-test is emitted to
+    /// `de_omnibus.tsv`. Requires `--test ols` and a `--design` that
+    /// includes the factor. At least 3 levels required.
+    #[arg(long)]
+    omnibus_factor: Option<String>,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -249,6 +256,19 @@ pub fn run(args: Args) -> Result<()> {
              got --test {:?}",
             args.test
         );
+    }
+    if args.omnibus_factor.is_some() {
+        if args.test != "ols" {
+            anyhow::bail!(
+                "--omnibus-factor currently requires --test ols; got --test {:?}",
+                args.test
+            );
+        }
+        if args.design.is_none() {
+            anyhow::bail!(
+                "--omnibus-factor requires --design (so the factor has an encoded column group)"
+            );
+        }
     }
     if args.test == "ensemble" {
         for frac in [
@@ -399,6 +419,7 @@ pub fn run(args: Args) -> Result<()> {
     // gene, covariate) with beta, se, t, p for the non-intercept and
     // non-group columns.
     let mut covariate_rows: Vec<CovariateRow> = Vec::new();
+    let mut omnibus_rows: Vec<OmnibusRow> = Vec::new();
     let mut design_rows: Vec<DesignReportRow> = Vec::new();
 
     if args.test == "limma" {
@@ -502,6 +523,46 @@ pub fn run(args: Args) -> Result<()> {
                     }
                 }
                 let fit = ols(&rows, &y, args.min_pairs);
+                // Omnibus F-test on the --omnibus-factor's columns,
+                // captured before the fit is consumed downstream. The
+                // factor is identified by matching design_labels
+                // starting with its name (mirrors how categorical
+                // one-hot columns are labelled in OlsDesign).
+                if let (OlsOutcome::Computed(f), Some(factor_name)) =
+                    (&fit, args.omnibus_factor.as_deref())
+                {
+                    let factor_cols: Vec<usize> = design
+                        .design_labels
+                        .iter()
+                        .enumerate()
+                        .filter(|(idx, l)| {
+                            *idx != 0 && *idx != design.group_col && l.starts_with(factor_name)
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                    if factor_cols.len() >= 2 {
+                        if let Some(om) = atman_core::de::omnibus_f_test(
+                            &rows,
+                            &f.beta,
+                            &factor_cols,
+                            f.sigma2,
+                            f.df,
+                        ) {
+                            omnibus_rows.push(OmnibusRow {
+                                panel: panel.clone(),
+                                assay_id: assay_id.clone(),
+                                gene_symbol: gene.clone(),
+                                factor: factor_name.to_string(),
+                                comparison: comparison_label.clone(),
+                                f_statistic: om.f_statistic,
+                                df_num: om.df_num,
+                                df_den: om.df_den,
+                                p_value: om.p_value,
+                                bh_q: None,
+                            });
+                        }
+                    }
+                }
                 // Compute raw group means for schema compatibility with
                 // paired-t / welch-t.
                 let (mean_a_raw, mean_b_raw) = raw_group_means(&y, &rows, design.group_col);
@@ -726,6 +787,42 @@ pub fn run(args: Args) -> Result<()> {
         write_design_rows(&design_path, &design_rows)?;
         outputs.push(design_path.clone());
     }
+    if !omnibus_rows.is_empty() {
+        // BH-adjust omnibus p-values within each (comparison, panel).
+        use std::collections::BTreeMap;
+        let mut indices_by_group: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+        for (i, r) in omnibus_rows.iter().enumerate() {
+            indices_by_group
+                .entry((r.comparison.clone(), r.panel.clone()))
+                .or_default()
+                .push(i);
+        }
+        for indices in indices_by_group.values() {
+            let ps: Vec<Option<f64>> = indices
+                .iter()
+                .map(|&i| {
+                    let v = omnibus_rows[i].p_value;
+                    if v.is_finite() {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let qs = atman_core::bh_fdr(&ps);
+            for (j, &i) in indices.iter().enumerate() {
+                omnibus_rows[i].bh_q = qs[j];
+            }
+        }
+        let omnibus_path = args.output_dir.join("de_omnibus.tsv");
+        write_omnibus_rows(&omnibus_path, &omnibus_rows)?;
+        outputs.push(omnibus_path.clone());
+        eprintln!(
+            "de: omnibus factor={:?} rows={}",
+            args.omnibus_factor.as_deref().unwrap_or(""),
+            omnibus_rows.len()
+        );
+    }
 
     let computed = all_rows.iter().filter(|r| r.p_value.is_some()).count();
     let skipped = all_rows.len() - computed;
@@ -779,6 +876,7 @@ pub fn run(args: Args) -> Result<()> {
             "peptide-metadata": args.peptide_metadata.as_ref().map(|p| p.display().to_string()),
             "ridge-lambda": args.ridge_lambda,
             "min-peptides": args.min_peptides,
+            "omnibus-factor": args.omnibus_factor,
         }),
         &input_dir_sha256,
         &outputs,
@@ -1351,6 +1449,57 @@ struct OlsDesign {
     group_col: usize,
     design_labels: Vec<String>,
     report_rows: Vec<DesignReportRow>,
+}
+
+/// Row shape for de_omnibus.tsv — per (comparison × protein) omnibus
+/// F-test of the user-specified factor's columns.
+struct OmnibusRow {
+    panel: String,
+    assay_id: String,
+    gene_symbol: String,
+    factor: String,
+    comparison: String,
+    f_statistic: f64,
+    df_num: usize,
+    df_den: f64,
+    p_value: f64,
+    bh_q: Option<f64>,
+}
+
+fn write_omnibus_rows(path: &Path, rows: &[OmnibusRow]) -> Result<()> {
+    let mut buf = String::from(
+        "panel\tassay_id\tgene_symbol\tfactor\tcomparison\tf_statistic\tdf_num\tdf_den\tp_value\tbh_q\n",
+    );
+    for r in rows {
+        buf.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            r.panel,
+            r.assay_id,
+            r.gene_symbol,
+            r.factor,
+            r.comparison,
+            format_opt(r.f_statistic),
+            r.df_num,
+            format_opt(r.df_den),
+            format_opt(r.p_value),
+            r.bh_q.map(format_opt).unwrap_or_default(),
+        ));
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+fn format_opt(v: f64) -> String {
+    if !v.is_finite() {
+        if v.is_nan() {
+            "NaN".into()
+        } else if v > 0.0 {
+            "Inf".into()
+        } else {
+            "-Inf".into()
+        }
+    } else {
+        format!("{v}")
+    }
 }
 
 /// Row shape for de_covariates.tsv — per (comparison × protein × covariate
