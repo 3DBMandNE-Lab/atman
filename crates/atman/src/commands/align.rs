@@ -2,6 +2,9 @@ use anyhow::{bail, Context, Result};
 use atman_core::align::{
     build_archetypes, summarize_archetypes, AlignMetric, AlignedProgram,
 };
+use atman_core::align_bootstrap::{
+    align_bootstrap, BootstrapParams, BootstrapRow, CohortMatrix,
+};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use csv::ReaderBuilder;
 use serde_json::json;
@@ -9,7 +12,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::io::{atomic_write, hash_labeled_inputs, sidecar_path_for, write_run_sidecar};
+use crate::io::{
+    atomic_write, hash_labeled_inputs, read_measurements_long, sidecar_path_for,
+    write_run_sidecar,
+};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -21,6 +27,9 @@ pub struct Args {
 enum Command {
     /// Cross-cohort program alignment and sweep mode.
     Programs(ProgramsArgs),
+    /// Subject-level bootstrap of cross-cohort archetype alignment
+    /// producing per-archetype universality probabilities.
+    Bootstrap(BootstrapArgs),
 }
 
 #[derive(ClapArgs, Debug)]
@@ -102,7 +111,389 @@ impl From<SingleMetric> for AlignMetric {
 pub fn run(args: Args) -> Result<()> {
     match args.command {
         Command::Programs(args) => run_programs(args),
+        Command::Bootstrap(args) => run_bootstrap(args),
     }
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct BootstrapArgs {
+    /// Comma-separated list of canonical Atman directories, one per
+    /// cohort. Each must contain `qc_measurements.tsv`, `samples.tsv`,
+    /// `proteins.tsv`. All cohorts share the same protein universe
+    /// (intersection across cohorts is enforced).
+    #[arg(long)]
+    cohorts: String,
+
+    /// Comma-separated cohort labels (same order as --cohorts).
+    /// Defaults to directory basenames.
+    #[arg(long)]
+    labels: Option<String>,
+
+    /// Number of ICA components per cohort.
+    #[arg(long)]
+    k: usize,
+
+    /// Number of bootstrap iterations.
+    #[arg(long, default_value_t = 100)]
+    n_boot: usize,
+
+    /// Top-level seed. Per-iteration sub-seeds derive deterministically
+    /// from SplitMix64`(seed, iter)`.
+    #[arg(long, default_value_t = 20260418)]
+    seed: u64,
+
+    /// Cosine similarity threshold for the alignment step that groups
+    /// bootstrap programs into archetypes.
+    #[arg(long, default_value_t = 0.30)]
+    cosine_tau: f64,
+
+    /// Floor cosine similarity between a point-estimate archetype's
+    /// representative loading and a bootstrap program for that
+    /// bootstrap archetype to be counted as a match.
+    #[arg(long, default_value_t = 0.50)]
+    match_tau: f64,
+
+    /// Top-N loadings used by the Jaccard branch of the alignment
+    /// (unused for cosine metric; kept for API symmetry).
+    #[arg(long, default_value_t = 40)]
+    top_n: usize,
+
+    /// FastICA max iterations per seed per cohort.
+    #[arg(long, default_value_t = 300)]
+    max_iter: usize,
+
+    /// FastICA convergence tolerance.
+    #[arg(long, default_value_t = 1e-4)]
+    tol: f64,
+
+    /// Refuse when any cohort has fewer than this many subjects.
+    #[arg(long, default_value_t = 20)]
+    min_subjects: usize,
+
+    /// Drop assays with more than this fraction of missing samples
+    /// per cohort (matches `decompose ica`).
+    #[arg(long, default_value_t = 0.0)]
+    max_missing_fraction: f64,
+
+    /// Imputation for residual missingness: `none` (fail), `mean`.
+    #[arg(long, default_value = "none")]
+    impute: String,
+
+    /// Canonical input filename to read. `qc` (default) or `raw`.
+    #[arg(long, default_value = "qc")]
+    source: String,
+
+    /// Output TSV path. Summary with one row per point-estimate
+    /// archetype.
+    #[arg(long)]
+    output: PathBuf,
+}
+
+fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
+    let started_at = SystemTime::now();
+    if args.k == 0 {
+        bail!("--k must be >= 1");
+    }
+    if args.n_boot == 0 {
+        bail!("--n-boot must be >= 1");
+    }
+    if args.min_subjects < 2 {
+        bail!("--min-subjects must be >= 2");
+    }
+    if !(0.0..=1.0).contains(&args.cosine_tau) {
+        bail!("--cosine-tau must be in [0, 1]");
+    }
+    if !(0.0..=1.0).contains(&args.match_tau) {
+        bail!("--match-tau must be in [0, 1]");
+    }
+    let cohort_dirs: Vec<PathBuf> = args
+        .cohorts
+        .split(',')
+        .map(|s| PathBuf::from(s.trim()))
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect();
+    if cohort_dirs.len() < 2 {
+        bail!("--cohorts must list at least 2 cohort directories");
+    }
+    let labels: Vec<String> = match &args.labels {
+        Some(s) => s.split(',').map(|s| s.trim().to_string()).collect(),
+        None => cohort_dirs
+            .iter()
+            .map(|p| file_stem(p).to_string())
+            .collect(),
+    };
+    if labels.len() != cohort_dirs.len() {
+        bail!(
+            "--labels has {} entries but --cohorts has {}",
+            labels.len(),
+            cohort_dirs.len()
+        );
+    }
+    let impute_mean = match args.impute.as_str() {
+        "none" => false,
+        "mean" => true,
+        other => bail!("--impute {other:?}; expected none or mean"),
+    };
+
+    let matrices: Vec<CohortMatrix> = cohort_dirs
+        .iter()
+        .zip(labels.iter())
+        .map(|(dir, label)| {
+            load_cohort_matrix(
+                dir,
+                label,
+                &args.source,
+                args.max_missing_fraction,
+                impute_mean,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // Enforce common protein universe across cohorts by intersecting
+    // their label sets and restricting each matrix to the
+    // intersection in a canonical order.
+    let matrices = intersect_cohorts(matrices)?;
+
+    eprintln!(
+        "align bootstrap: cohorts={} k={} n_boot={} cosine_tau={} match_tau={} seed={}",
+        matrices.len(),
+        args.k,
+        args.n_boot,
+        args.cosine_tau,
+        args.match_tau,
+        args.seed
+    );
+
+    let params = BootstrapParams {
+        k: args.k,
+        n_boot: args.n_boot,
+        seed: args.seed,
+        top_n: args.top_n,
+        cosine_tau: args.cosine_tau,
+        match_tau: args.match_tau,
+        max_iter: args.max_iter,
+        tol: args.tol,
+        min_subjects: args.min_subjects,
+    };
+    let rows: Vec<BootstrapRow> =
+        align_bootstrap(&matrices, params).map_err(|e| anyhow::anyhow!(e))?;
+
+    if let Some(parent) = args.output.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("creating output dir {:?}", parent)
+        })?;
+    }
+    write_bootstrap_summary(&args.output, &rows)?;
+    eprintln!(
+        "align bootstrap: wrote {} archetypes to {}",
+        rows.len(),
+        args.output.display()
+    );
+
+    let finished_at = SystemTime::now();
+    // Hash each cohort's canonical input directory separately.
+    let mut labeled: Vec<(String, PathBuf)> = Vec::new();
+    for (dir, label) in cohort_dirs.iter().zip(labels.iter()) {
+        let file = match args.source.as_str() {
+            "qc" => "qc_measurements.tsv",
+            _ => "measurements.tsv",
+        };
+        labeled.push((format!("{}_{}", label, file), dir.join(file)));
+        labeled.push((format!("{}_samples", label), dir.join("samples.tsv")));
+        labeled.push((format!("{}_proteins", label), dir.join("proteins.tsv")));
+    }
+    let refs: Vec<(&str, &Path)> = labeled
+        .iter()
+        .map(|(l, p)| (l.as_str(), p.as_path()))
+        .collect();
+    let input_dir_sha256 = hash_labeled_inputs(&refs)?;
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "align bootstrap",
+        json!({
+            "cohorts": args.cohorts,
+            "labels": args.labels,
+            "k": args.k,
+            "n-boot": args.n_boot,
+            "seed": args.seed,
+            "cosine-tau": args.cosine_tau,
+            "match-tau": args.match_tau,
+            "top-n": args.top_n,
+            "max-iter": args.max_iter,
+            "tol": args.tol,
+            "min-subjects": args.min_subjects,
+            "max-missing-fraction": args.max_missing_fraction,
+            "impute": args.impute,
+            "source": args.source,
+            "output": args.output.display().to_string(),
+        }),
+        &input_dir_sha256,
+        &[args.output.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("align bootstrap: sidecar={}", sidecar.display());
+    Ok(())
+}
+
+fn load_cohort_matrix(
+    dir: &Path,
+    label: &str,
+    source: &str,
+    max_missing_fraction: f64,
+    impute_mean: bool,
+) -> Result<CohortMatrix> {
+    let file = match source {
+        "qc" => "qc_measurements.tsv",
+        "raw" => "measurements.tsv",
+        other => bail!("--source {other:?}; expected qc or raw"),
+    };
+    let records = read_measurements_long(&dir.join(file))?;
+    if records.is_empty() {
+        bail!("no measurements in {:?}", dir.join(file));
+    }
+    // Abundance by (assay, sample). Only rows with finite values not
+    // dropped by QC contribute.
+    let mut abundance: BTreeMap<(String, String), f64> = BTreeMap::new();
+    let mut sample_order: Vec<String> = Vec::new();
+    let mut seen_samples: BTreeSet<String> = BTreeSet::new();
+    let mut assays: BTreeSet<String> = BTreeSet::new();
+    for r in &records {
+        if r.dropped_by_qc {
+            continue;
+        }
+        let v = r.abundance.as_f64();
+        if !v.is_finite() {
+            continue;
+        }
+        let sid = r.sample_id.clone();
+        let aid = r.assay_id.0.clone();
+        if seen_samples.insert(sid.clone()) {
+            sample_order.push(sid.clone());
+        }
+        assays.insert(aid.clone());
+        abundance.insert((aid, sid), v);
+    }
+    if sample_order.len() < 2 {
+        bail!("cohort {label:?}: need >= 2 samples");
+    }
+    let n = sample_order.len();
+    let mut kept: Vec<String> = Vec::new();
+    for a in &assays {
+        let present = sample_order
+            .iter()
+            .filter(|s| abundance.contains_key(&(a.clone(), (*s).clone())))
+            .count();
+        let missing_frac = 1.0 - present as f64 / n as f64;
+        if missing_frac <= max_missing_fraction + 1e-12 {
+            kept.push(a.clone());
+        }
+    }
+    if kept.is_empty() {
+        bail!(
+            "cohort {label:?}: no assays retained at --max-missing-fraction={max_missing_fraction}"
+        );
+    }
+
+    let mut data = vec![vec![0.0_f64; kept.len()]; n];
+    for (j, a) in kept.iter().enumerate() {
+        let mut vals: Vec<Option<f64>> = Vec::with_capacity(n);
+        let mut sum = 0.0_f64;
+        let mut count = 0usize;
+        for s in &sample_order {
+            let v = abundance.get(&(a.clone(), s.clone())).copied();
+            if let Some(x) = v {
+                sum += x;
+                count += 1;
+            }
+            vals.push(v);
+        }
+        let mean = if count > 0 { sum / count as f64 } else { 0.0 };
+        for (i, v) in vals.iter().enumerate() {
+            match v {
+                Some(x) => data[i][j] = *x,
+                None => {
+                    if impute_mean {
+                        data[i][j] = mean;
+                    } else {
+                        bail!(
+                            "cohort {label:?}: assay {} missing sample {}; rerun with --impute mean",
+                            a,
+                            sample_order[i]
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(CohortMatrix {
+        label: label.to_string(),
+        data,
+        protein_labels: kept,
+    })
+}
+
+/// Restrict each cohort's matrix to the intersection of protein label
+/// sets, in a canonical (sorted) order.
+fn intersect_cohorts(mut matrices: Vec<CohortMatrix>) -> Result<Vec<CohortMatrix>> {
+    if matrices.is_empty() {
+        return Ok(matrices);
+    }
+    let mut universe: BTreeSet<String> =
+        matrices[0].protein_labels.iter().cloned().collect();
+    for m in matrices.iter().skip(1) {
+        let s: BTreeSet<String> = m.protein_labels.iter().cloned().collect();
+        universe = universe.intersection(&s).cloned().collect();
+    }
+    if universe.is_empty() {
+        bail!("cohorts share zero proteins after intersection");
+    }
+    let ordered: Vec<String> = {
+        let mut v: Vec<String> = universe.into_iter().collect();
+        v.sort();
+        v
+    };
+    for m in &mut matrices {
+        let index_by_label: BTreeMap<String, usize> = m
+            .protein_labels
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (l.clone(), i))
+            .collect();
+        let mut new_data = vec![vec![0.0_f64; ordered.len()]; m.data.len()];
+        for (j_new, label) in ordered.iter().enumerate() {
+            let j_old = index_by_label[label];
+            for (i, row) in m.data.iter().enumerate() {
+                new_data[i][j_new] = row[j_old];
+            }
+        }
+        m.data = new_data;
+        m.protein_labels = ordered.clone();
+    }
+    Ok(matrices)
+}
+
+fn write_bootstrap_summary(path: &Path, rows: &[BootstrapRow]) -> Result<()> {
+    let mut out = String::from(
+        "archetype_id\tobserved_n_cohorts\tobserved_cohorts\t\
+         bootstrap_mean_n_cohorts\tbootstrap_prob_universal\tbootstrap_prob_multi\t\
+         ci_lower_n_cohorts\tci_upper_n_cohorts\tbootstrap_match_rate\n",
+    );
+    for r in rows {
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{:.6}\n",
+            r.archetype_id,
+            r.observed_n_cohorts,
+            r.observed_cohorts.join(","),
+            r.bootstrap_mean_n_cohorts,
+            r.bootstrap_prob_universal,
+            r.bootstrap_prob_multi,
+            r.ci_lower_n_cohorts,
+            r.ci_upper_n_cohorts,
+            r.bootstrap_match_rate,
+        ));
+    }
+    atomic_write(path, out.as_bytes())
 }
 
 fn run_programs(args: ProgramsArgs) -> Result<()> {
