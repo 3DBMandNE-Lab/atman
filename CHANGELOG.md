@@ -8,6 +8,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Dunnett post-hoc (`atman de --post-hoc dunnett`).** Compares
+  every non-reference level of the factor to the (alphabetically
+  first) reference level under the joint multivariate-t distribution
+  of the `m = levels − 1` correlated t-statistics. Uses the
+  Dunnett–Curnow one-variate-plus-idiosyncratic representation to
+  reduce the equicorrelated multivariate-t CDF to a 2D
+  Gauss–Legendre quadrature (128-node outer × 64-node inner), which
+  matches `emmeans(..., adjust = "dunnett")` at ≤ 1e-2 on canonical
+  critical values for `m ∈ {2, 3, 5}` and `ν ∈ {10, 30, ∞}`. v1 uses
+  the balanced-design correlation `ρ = 0.5`; unbalanced Dunnett–Hsu
+  (heterogeneous correlations via Genz–Bretz) is a documented
+  follow-on. Integration tests verify self-consistency of the
+  dispatch against `atman_core::pdunnett` to floating-point precision
+  and magnitude on the planted stage fixture (strong responder
+  `adj_p < 0.05` on every Dunnett contrast; null protein stays
+  `adj_p > 0.10`). Closes DEBT-6.
 - **Tukey HSD post-hoc (`atman de --post-hoc tukey`).** Implements the
   studentized range distribution from scratch in
   `atman-core::studentized_range` via nested Gauss–Legendre

@@ -19,6 +19,7 @@ pub mod ingest;
 pub mod limma;
 pub mod matrix;
 pub mod msqrob;
+pub mod multivariate_t;
 pub mod qc;
 pub mod sample_id;
 pub mod stats;
