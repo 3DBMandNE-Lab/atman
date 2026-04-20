@@ -207,7 +207,7 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
     write_de_ensemble(&ensemble_path, &ensemble_rows)?;
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = hash_canonical_inputs(
+    let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
             "qc_measurements.tsv",
@@ -237,11 +237,12 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
             "ensemble-provisional-fraction": args.ensemble_provisional_fraction,
             "ensemble-sign-fraction": args.ensemble_sign_fraction,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!(
         "de ensemble: {} rows, {} applied: [{}], {} skipped: [{}]",
         ensemble_rows.len(),

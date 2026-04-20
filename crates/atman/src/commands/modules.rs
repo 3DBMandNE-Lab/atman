@@ -267,7 +267,7 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = hash_canonical_inputs(
+    let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
             "qc_measurements.tsv",
@@ -295,11 +295,12 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
             "chosen-beta": result.soft_power_chosen,
             "n-features-retained": kept_features.len(),
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("modules discover: sidecar={}", sidecar.display());
     Ok(())
 }

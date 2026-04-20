@@ -327,7 +327,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         .iter()
         .map(|(l, p)| (l.as_str(), p.as_path()))
         .collect();
-    let input_dir_sha256 = hash_labeled_inputs(&refs)?;
+    let inputs_sha256 = hash_labeled_inputs(&refs)?;
     let sidecar = sidecar_path_for(&args.output);
     write_run_sidecar(
         &sidecar,
@@ -350,11 +350,12 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
             "source": args.source,
             "output": args.output.display().to_string(),
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("align bootstrap: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -668,7 +669,7 @@ fn run_programs(args: ProgramsArgs) -> Result<()> {
         .iter()
         .map(|(l, p)| (l.as_str(), p.as_path()))
         .collect();
-    let input_dir_sha256 = hash_labeled_inputs(&refs)?;
+    let inputs_sha256 = hash_labeled_inputs(&refs)?;
     let sidecar = sidecar_path_for(&primary_output);
     let metric = match args.metric {
         SingleMetric::Jaccard => "jaccard",
@@ -694,11 +695,12 @@ fn run_programs(args: ProgramsArgs) -> Result<()> {
             "compare-constrained-vs-unconstrained": args.compare_constrained_vs_unconstrained,
             "output-matrix": args.output_matrix.as_ref().map(|p| p.display().to_string()),
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         std::slice::from_ref(&primary_output),
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("align programs: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -1477,7 +1479,7 @@ fn run_project(args: ProjectArgs) -> Result<()> {
         .iter()
         .map(|(l, p)| (l.as_str(), p.as_path()))
         .collect();
-    let input_dir_sha256 = hash_labeled_inputs(&refs)?;
+    let inputs_sha256 = hash_labeled_inputs(&refs)?;
     let sidecar = sidecar_path_for(&activations_path);
     write_run_sidecar(
         &sidecar,
@@ -1498,11 +1500,12 @@ fn run_project(args: ProjectArgs) -> Result<()> {
             "atlas-k": atlas.archetype_ids.len(),
             "atlas-p": atlas.protein_labels.len(),
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &[activations_path.clone(), qc_path.clone()],
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("align project: sidecar={}", sidecar.display());
     Ok(())
 }

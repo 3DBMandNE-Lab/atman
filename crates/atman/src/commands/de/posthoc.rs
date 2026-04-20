@@ -435,7 +435,7 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
     );
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = hash_canonical_inputs(
+    let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
             "qc_measurements.tsv",
@@ -461,11 +461,12 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
             "alpha": args.alpha,
             "omnibus-factor": args.omnibus_factor,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("de posthoc sidak: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -823,7 +824,7 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
     );
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = hash_canonical_inputs(
+    let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
             "qc_measurements.tsv",
@@ -849,11 +850,12 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
             "alpha": args.alpha,
             "omnibus-factor": args.omnibus_factor,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("de posthoc tukey: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -1241,7 +1243,7 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
     );
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = hash_canonical_inputs(
+    let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
             "qc_measurements.tsv",
@@ -1272,11 +1274,12 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
             "alpha": args.alpha,
             "omnibus-factor": args.omnibus_factor,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("de posthoc dunnett: sidecar={}", sidecar.display());
     Ok(())
 }

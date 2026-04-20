@@ -284,7 +284,7 @@ fn run_variance(args: VarianceArgs) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = crate::io::hash_labeled_inputs(&[
+    let inputs_sha256 = crate::io::hash_labeled_inputs(&[
         ("activations", args.activations.as_path()),
         ("samples", args.samples.as_path()),
     ])?;
@@ -299,11 +299,12 @@ fn run_variance(args: VarianceArgs) -> Result<()> {
             "min-samples": args.min_samples,
             "output": args.output.display().to_string(),
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("decompose variance: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -900,7 +901,7 @@ fn run_null(args: NullArgs) -> Result<()> {
         "qc" => &["qc_measurements.tsv", "samples.tsv", "proteins.tsv"],
         _ => &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     };
-    let input_dir_sha256 = hash_canonical_inputs(&args.input_dir, canonical_inputs)?;
+    let inputs_sha256 = hash_canonical_inputs(&args.input_dir, canonical_inputs)?;
     let sidecar = sidecar_path_for(&args.output);
     write_run_sidecar(
         &sidecar,
@@ -921,11 +922,12 @@ fn run_null(args: NullArgs) -> Result<()> {
             "impute": args.impute,
             "q-threshold": args.q_threshold,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("decompose null: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -1024,7 +1026,7 @@ fn run_ica(args: IcaArgs) -> Result<()> {
         "qc" => &["qc_measurements.tsv", "samples.tsv", "proteins.tsv"],
         _ => &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     };
-    let input_dir_sha256 = hash_canonical_inputs(&args.input_dir, canonical_inputs)?;
+    let inputs_sha256 = hash_canonical_inputs(&args.input_dir, canonical_inputs)?;
     let sidecar = sidecar_path_for(&args.output_loadings);
     let stability_metric = match args.stability_metric {
         StabilityMetric::JaccardTop20 => "jaccard-top20",
@@ -1063,11 +1065,12 @@ fn run_ica(args: IcaArgs) -> Result<()> {
             "transform": transform_meta.name,
             "alr-reference": transform_meta.alr_reference,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("decompose ica: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -1906,7 +1909,7 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = hash_canonical_inputs(
+    let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
             "qc_measurements.tsv",
@@ -1942,11 +1945,12 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
             "max-missing-fraction": args.max_missing_fraction,
             "impute": args.impute,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("decompose unmix: sidecar={}", sidecar.display());
     Ok(())
 }

@@ -162,7 +162,7 @@ fn write_meta_sidecar(
         .iter()
         .map(|(l, p)| (l.as_str(), p.as_path()))
         .collect();
-    let input_dir_sha256 = hash_labeled_inputs(&refs)?;
+    let inputs_sha256 = hash_labeled_inputs(&refs)?;
     let sidecar = sidecar_path_for(&args.output);
     let level = match args.level {
         Level::Protein => "protein",
@@ -178,11 +178,12 @@ fn write_meta_sidecar(
             "level": level,
             "report": args.report,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("meta: sidecar={}", sidecar.display());
     Ok(())
 }

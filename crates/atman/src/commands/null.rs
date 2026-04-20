@@ -234,7 +234,7 @@ pub fn run(args: Args) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = hash_canonical_inputs(
+    let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
             "qc_measurements.tsv",
@@ -257,11 +257,12 @@ pub fn run(args: Args) -> Result<()> {
             "seed": args.seed,
             "q-thresholds": args.q_thresholds,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &[summary_path.clone(), empirical_path.clone()],
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("null: sidecar={}", sidecar.display());
     Ok(())
 }

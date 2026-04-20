@@ -24,6 +24,7 @@ sha2 = { workspace = true }
 statrs = { workspace = true }
 tempfile = { workspace = true }
 ureq = { workspace = true }
+uuid = { workspace = true }
 
 [lib]
 name = "atman"

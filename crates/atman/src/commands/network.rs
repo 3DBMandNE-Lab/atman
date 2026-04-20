@@ -285,7 +285,7 @@ fn run_influence(args: InfluenceArgs) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = hash_labeled_inputs(&[
+    let inputs_sha256 = hash_labeled_inputs(&[
         ("input", args.input.as_path()),
         ("samples", args.samples.as_path()),
     ])?;
@@ -310,11 +310,12 @@ fn run_influence(args: InfluenceArgs) -> Result<()> {
             "emit-edges": args.emit_edges,
             "output": args.output.display().to_string(),
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("network influence: sidecar={}", sidecar.display());
     Ok(())
 }

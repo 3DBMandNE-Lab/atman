@@ -110,7 +110,7 @@ pub fn run(args: Args) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = hash_labeled_inputs(&[
+    let inputs_sha256 = hash_labeled_inputs(&[
         ("activations", args.activations.as_path()),
         ("pairs", args.pairs.as_path()),
     ])?;
@@ -129,11 +129,12 @@ pub fn run(args: Args) -> Result<()> {
             "output": args.output.display().to_string(),
             "output-summary": args.output_summary.display().to_string(),
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &[args.output.clone(), args.output_summary.clone()],
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("coupling: sidecar={}", sidecar.display());
     Ok(())
 }

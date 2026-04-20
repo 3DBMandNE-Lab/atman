@@ -157,7 +157,7 @@ pub fn run(args: Args) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = hash_canonical_inputs(
+    let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
             "qc_measurements.tsv",
@@ -182,11 +182,12 @@ pub fn run(args: Args) -> Result<()> {
             "n-permutations": args.n_permutations,
             "output": args.output.display().to_string(),
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("ratio: sidecar={}", sidecar.display());
     Ok(())
 }

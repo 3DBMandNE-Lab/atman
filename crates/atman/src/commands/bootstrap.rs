@@ -360,7 +360,7 @@ fn run_protein(args: ProteinArgs) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let input_dir_sha256 = hash_canonical_inputs(
+    let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
             "qc_measurements.tsv",
@@ -384,11 +384,12 @@ fn run_protein(args: ProteinArgs) -> Result<()> {
             "ci-low": args.ci_low,
             "ci-high": args.ci_high,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("bootstrap protein: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -538,7 +539,7 @@ fn run_module(args: ModuleArgs) -> Result<()> {
     let raw_path = args.input_dir.join("measurements.tsv");
     let samples_path = args.input_dir.join("samples.tsv");
     let proteins_path = args.input_dir.join("proteins.tsv");
-    let input_dir_sha256 = hash_labeled_inputs(&[
+    let inputs_sha256 = hash_labeled_inputs(&[
         ("qc_measurements.tsv", qc_path.as_path()),
         ("measurements.tsv", raw_path.as_path()),
         ("samples.tsv", samples_path.as_path()),
@@ -561,11 +562,12 @@ fn run_module(args: ModuleArgs) -> Result<()> {
             "ci-low": args.ci_low,
             "ci-high": args.ci_high,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("bootstrap module: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -728,7 +730,7 @@ fn run_program(args: ProgramArgs) -> Result<()> {
     let raw_path = args.input_dir.join("measurements.tsv");
     let samples_path = args.input_dir.join("samples.tsv");
     let proteins_path = args.input_dir.join("proteins.tsv");
-    let input_dir_sha256 = hash_labeled_inputs(&[
+    let inputs_sha256 = hash_labeled_inputs(&[
         ("qc_measurements.tsv", qc_path.as_path()),
         ("measurements.tsv", raw_path.as_path()),
         ("samples.tsv", samples_path.as_path()),
@@ -751,11 +753,12 @@ fn run_program(args: ProgramArgs) -> Result<()> {
             "ci-low": args.ci_low,
             "ci-high": args.ci_high,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("bootstrap program: sidecar={}", sidecar.display());
     Ok(())
 }

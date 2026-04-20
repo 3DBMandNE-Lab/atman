@@ -234,7 +234,7 @@ pub fn run(args: Args) -> Result<()> {
     if let Some(p) = args.proteins.as_ref() {
         input_entries.push(("proteins", p.as_path()));
     }
-    let input_dir_sha256 = hash_labeled_inputs(&input_entries)?;
+    let inputs_sha256 = hash_labeled_inputs(&input_entries)?;
     let measurements_out = args.output_dir.join("measurements.tsv");
     let proteins_out = args.output_dir.join("proteins.tsv");
     let samples_out = args.output_dir.join("samples.tsv");
@@ -277,11 +277,12 @@ pub fn run(args: Args) -> Result<()> {
             "skip-normalization-check": args.skip_normalization_check,
             "no-copy-measurements-to-qc": args.no_copy_measurements_to_qc,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("ingest-matrix: sidecar={}", sidecar.display());
     Ok(())
 }

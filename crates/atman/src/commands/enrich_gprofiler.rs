@@ -198,7 +198,7 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
     if let Some(p) = args.query_tsv.as_ref() {
         input_entries.push(("query-tsv", p.as_path()));
     }
-    let input_dir_sha256 = hash_labeled_inputs(&input_entries)?;
+    let inputs_sha256 = hash_labeled_inputs(&input_entries)?;
     let sidecar = sidecar_path_for(&args.output);
     write_run_sidecar(
         &sidecar,
@@ -218,11 +218,12 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
             "endpoint": args.endpoint,
             "output": args.output.display().to_string(),
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("enrich gprofiler: sidecar={}", sidecar.display());
     Ok(())
 }

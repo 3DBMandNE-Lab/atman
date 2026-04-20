@@ -79,7 +79,7 @@ fn run_qc(args: QcArgs) -> Result<()> {
     let sample_qc_path = args.output_dir.join("sample_qc.tsv");
     let protein_qc_path = args.output_dir.join("protein_qc.tsv");
     let condition_counts_path = args.output_dir.join("condition_counts.tsv");
-    let input_dir_sha256 = hash_canonical_inputs(
+    let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
             "qc_measurements.tsv",
@@ -98,7 +98,7 @@ fn run_qc(args: QcArgs) -> Result<()> {
             "min-subjects": args.min_subjects,
             "sparse-threshold": args.sparse_threshold,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         &[
             qc_summary_path.clone(),
             sample_qc_path.clone(),
@@ -107,7 +107,8 @@ fn run_qc(args: QcArgs) -> Result<()> {
         ],
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("report qc: sidecar={}", sidecar.display());
     Ok(())
 }

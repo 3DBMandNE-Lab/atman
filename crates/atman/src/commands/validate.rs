@@ -117,7 +117,7 @@ pub fn run(args: Args) -> Result<()> {
     if let Some(path) = &args.report {
         write_report(path, &findings)?;
         let finished_at = SystemTime::now();
-        let input_dir_sha256 = hash_canonical_inputs(
+        let inputs_sha256 = hash_canonical_inputs(
             &args.input_dir,
             &[
                 "qc_measurements.tsv",
@@ -137,11 +137,12 @@ pub fn run(args: Args) -> Result<()> {
                 "min-pairs": args.min_pairs,
                 "strict": args.strict,
             }),
-            &input_dir_sha256,
+            &inputs_sha256,
             std::slice::from_ref(path),
             started_at,
             finished_at,
-        )?;
+            None,
+)?;
         eprintln!("validate: sidecar={}", sidecar.display());
     }
 

@@ -166,10 +166,21 @@ fn decompose_ica_emits_loadings_activations_and_stability() {
     assert!(sidecar["atman_version"].is_string());
     assert!(sidecar["atman_git_sha"].is_string());
     assert!(sidecar["os_arch"].is_string());
-    assert!(sidecar["input_dir_sha256"]
-        .as_str()
-        .map(|s| s.len() == 64)
-        .unwrap_or(false));
+    // v1: inputs_sha256 is a per-file dict, `{path: "sha256:<hex>"}`.
+    let inputs = sidecar["inputs_sha256"].as_object().expect("inputs_sha256");
+    assert!(!inputs.is_empty(), "expected per-file input hashes");
+    for (_k, v) in inputs {
+        let s = v.as_str().unwrap();
+        assert!(s.starts_with("sha256:"));
+        assert_eq!(s.len(), "sha256:".len() + 64);
+    }
+    assert_eq!(sidecar["schema_version"], 1);
+    assert!(sidecar["run_uuid"].as_str().unwrap().len() == 36);
+    assert!(sidecar["reinvoke"].as_str().unwrap().starts_with("atman decompose ica"));
+    assert!(sidecar["build_env"]["rustc_version"].is_string());
+    assert!(sidecar["build_env"]["cargo_lock_sha256"].is_string());
+    assert!(sidecar["build_env"]["profile"].is_string());
+    assert!(sidecar["cwd_at_start"].is_string());
     let started = sidecar["started_at"].as_str().unwrap();
     let finished = sidecar["finished_at"].as_str().unwrap();
     assert!(started.ends_with('Z') && started.len() == 20);

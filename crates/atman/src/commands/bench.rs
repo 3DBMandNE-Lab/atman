@@ -222,7 +222,7 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
     let finished_at = SystemTime::now();
     let planted_path = fixture.join("planted_loadings.tsv");
     let abundance_path = fixture.join("abundance.tsv");
-    let input_dir_sha256 = hash_labeled_inputs(&[
+    let inputs_sha256 = hash_labeled_inputs(&[
         ("planted_loadings.tsv", planted_path.as_path()),
         ("abundance.tsv", abundance_path.as_path()),
     ])?;
@@ -241,11 +241,12 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
             "tol": args.tol,
             "check-determinism": args.check_determinism,
         }),
-        &input_dir_sha256,
+        &inputs_sha256,
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-    )?;
+        None,
+)?;
     eprintln!("bench decompose: sidecar={}", sidecar.display());
     Ok(())
 }
