@@ -477,11 +477,14 @@ fn write_bootstrap_summary(path: &Path, rows: &[BootstrapRow]) -> Result<()> {
     let mut out = String::from(
         "archetype_id\tobserved_n_cohorts\tobserved_cohorts\t\
          bootstrap_mean_n_cohorts\tbootstrap_prob_universal\tbootstrap_prob_multi\t\
-         ci_lower_n_cohorts\tci_upper_n_cohorts\tbootstrap_match_rate\n",
+         ci_lower_n_cohorts\tci_upper_n_cohorts\tbootstrap_match_rate\t\
+         alignment_entropy\tbca_lower_n_cohorts\tbca_upper_n_cohorts\t\
+         bca_fallback_to_percentile\n",
     );
     for r in rows {
         out.push_str(&format!(
-            "{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{:.6}\n",
+            "{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{:.6}\t\
+             {:.6}\t{:.6}\t{:.6}\t{}\n",
             r.archetype_id,
             r.observed_n_cohorts,
             r.observed_cohorts.join(","),
@@ -491,6 +494,10 @@ fn write_bootstrap_summary(path: &Path, rows: &[BootstrapRow]) -> Result<()> {
             r.ci_lower_n_cohorts,
             r.ci_upper_n_cohorts,
             r.bootstrap_match_rate,
+            r.alignment_entropy,
+            r.bca_lower_n_cohorts,
+            r.bca_upper_n_cohorts,
+            if r.bca_fallback_to_percentile { 1 } else { 0 },
         ));
     }
     atomic_write(path, out.as_bytes())

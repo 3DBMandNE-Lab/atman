@@ -163,6 +163,10 @@ fn align_bootstrap_runs_on_two_cohort_synthetic_fixture() {
         "ci_lower_n_cohorts",
         "ci_upper_n_cohorts",
         "bootstrap_match_rate",
+        "alignment_entropy",
+        "bca_lower_n_cohorts",
+        "bca_upper_n_cohorts",
+        "bca_fallback_to_percentile",
     ] {
         assert!(header.iter().any(|h| h == col), "missing column {col}");
     }
@@ -180,6 +184,12 @@ fn align_bootstrap_runs_on_two_cohort_synthetic_fixture() {
         assert!((0.0..=1.0 + 1e-9).contains(&prob_m));
         let mr: f64 = r["bootstrap_match_rate"].parse().unwrap();
         assert!((0.0..=1.0 + 1e-9).contains(&mr));
+        let entropy: f64 = r["alignment_entropy"].parse().unwrap();
+        assert!(entropy.is_finite() && entropy >= 0.0);
+        let bca_lo: f64 = r["bca_lower_n_cohorts"].parse().unwrap();
+        let bca_hi: f64 = r["bca_upper_n_cohorts"].parse().unwrap();
+        assert!(bca_lo.is_finite() && bca_hi.is_finite());
+        assert!(bca_lo <= bca_hi, "BCa CI inverted: [{bca_lo}, {bca_hi}]");
     }
 
     // Sidecar shape.
@@ -238,6 +248,121 @@ fn align_bootstrap_refuses_small_cohorts() {
     assert!(!status.status.success());
     let stderr = String::from_utf8_lossy(&status.stderr);
     assert!(stderr.contains("min-subjects"), "unexpected: {stderr}");
+}
+
+#[test]
+fn align_bootstrap_magnitude_universal_vs_specific_on_strong_fixture() {
+    // Stronger-SNR version of the planted fixture: 40 subjects per
+    // cohort, n_boot=30. The *universal* archetype (loaded on the
+    // shared proteins in both cohorts) should have high
+    // bootstrap_prob_multi and low alignment_entropy; its BCa CI
+    // should include 2. This is the magnitude contract that DEBT-4
+    // asserts — "the bootstrap has power to distinguish planted
+    // universal from noise," not just "the numbers are finite."
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("cohort_a");
+    let b = tmp.path().join("cohort_b");
+    write_strong_cohort(&a, "A", true, false, 101);
+    write_strong_cohort(&b, "B", false, true, 202);
+    let out = tmp.path().join("summary.tsv");
+    let status = run_atman(&[
+        "align", "bootstrap",
+        "--cohorts", &format!("{},{}", a.display(), b.display()),
+        "--labels", "A,B",
+        "--k", "2",
+        "--n-boot", "30",
+        "--seed", "20260420",
+        "--cosine-tau", "0.1",
+        "--match-tau", "0.1",
+        "--min-subjects", "10",
+        "--max-iter", "80",
+        "--tol", "1e-3",
+        "--output", out.to_str().unwrap(),
+    ]);
+    assert!(
+        status.status.success(),
+        "align bootstrap failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&status.stdout),
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let (_, rows) = parse_tsv(&out);
+    assert!(!rows.is_empty(), "no archetypes recovered; fixture is broken");
+    // At least one archetype should behave like a universal archetype:
+    // prob_multi >= 0.7, entropy reasonably low, BCa upper ≥ 2.
+    let has_universal = rows.iter().any(|r| {
+        let prob_m: f64 = r["bootstrap_prob_multi"].parse().unwrap();
+        let entropy: f64 = r["alignment_entropy"].parse().unwrap();
+        let bca_hi: f64 = r["bca_upper_n_cohorts"].parse().unwrap();
+        prob_m >= 0.7 && entropy < 1.0 && bca_hi >= 2.0
+    });
+    assert!(
+        has_universal,
+        "expected at least one universal archetype with prob_multi>=0.7 \
+         and entropy<1.0 and bca_upper>=2; got rows:\n{}",
+        rows.iter()
+            .map(|r| format!(
+                "  id={} prob_multi={} entropy={} bca=[{}, {}]",
+                r["archetype_id"], r["bootstrap_prob_multi"],
+                r["alignment_entropy"], r["bca_lower_n_cohorts"],
+                r["bca_upper_n_cohorts"]
+            ))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+fn write_strong_cohort(
+    dir: &Path, cohort_label: &str,
+    planted_a_specific: bool, planted_b_specific: bool, seed: u64,
+) {
+    // 40 subjects × 15 proteins. Proteins 1-6 are universal; 7-10 are
+    // A-specific; 11-15 are B-specific. Noise is low relative to the
+    // planted sources so the universal archetype is unambiguous.
+    std::fs::create_dir_all(dir).unwrap();
+    let n_samples = 40usize;
+    let n_proteins = 15usize;
+    let mut samples =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
+    for i in 1..=n_samples {
+        samples.push_str(&format!(
+            "{cohort_label}_S{i:03}\t{cohort_label}_S{i:03}\tN/A\t0\tplasma\t{i}\n"
+        ));
+    }
+    std::fs::write(dir.join("samples.tsv"), samples).unwrap();
+    let mut proteins = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    for j in 1..=n_proteins {
+        proteins.push_str(&format!(
+            "olink_explore_ngs\tA{j:03}\tQ{j:05}\tG{j:03}\tP1\t\n"
+        ));
+    }
+    std::fs::write(dir.join("proteins.tsv"), proteins).unwrap();
+    let mut rng = Lcg::new(seed);
+    let mut qc = String::from(
+        "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
+         abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
+         detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n",
+    );
+    let mut order: u64 = 0;
+    for i in 1..=n_samples {
+        let universal_source = rng.heavy_tail() * 3.0;
+        let a_source = rng.heavy_tail() * 3.0;
+        let b_source = rng.heavy_tail() * 3.0;
+        for j in 1..=n_proteins {
+            order += 1;
+            let universal_weight = if (1..=6).contains(&j) { 1.0 } else { 0.0 };
+            let a_weight = if planted_a_specific && (7..=10).contains(&j) { 1.0 } else { 0.0 };
+            let b_weight = if planted_b_specific && (11..=15).contains(&j) { 1.0 } else { 0.0 };
+            let noise = (rng.next() - 0.5) * 0.1;
+            let value = universal_weight * universal_source
+                + a_weight * a_source + b_weight * b_source + noise;
+            qc.push_str(&format!(
+                "olink_explore_ngs\t{cohort_label}_S{i:03}\tA{j:03}\tG{j:03}\tP1\t{value:.6}\t\
+                 {value:.6}\t{value:.6}\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n"
+            ));
+        }
+    }
+    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
 #[test]

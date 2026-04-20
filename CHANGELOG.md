@@ -8,6 +8,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **BCa CI + Shannon entropy for `atman align bootstrap`.** Retires the
+  v1 deferral on the subject-level bootstrap. The summary now carries
+  four new columns: `alignment_entropy` (bits of Shannon entropy over
+  the bootstrap `n_cohorts` histogram — low = stable cohort coverage),
+  `bca_lower_n_cohorts` / `bca_upper_n_cohorts` (bias-corrected
+  accelerated 95% CI, replacing the percentile-only v1 band), and
+  `bca_fallback_to_percentile` (1 when the BCa denominator goes
+  non-monotone and the CI silently falls back to the percentile bound).
+  Acceleration is estimated by pooled subject-level jackknife —
+  dropping each subject across all cohorts, re-running the full
+  ICA-per-cohort + alignment pipeline, and recording the
+  matched-archetype cohort count. Closes DEBT-4.
 - **Feature-covariance network influence (`atman network influence`).**
   Builds a feature × feature similarity graph over subjects
   (`--method {pearson,spearman,covariance}`), applies a hard

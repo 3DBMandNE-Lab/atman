@@ -621,15 +621,16 @@ compositional transform, and the decomposition result depends on
 which transform you chose. No standalone proteomics ICA tool
 currently exposes this as a first-class CLI option with provenance.
 
-### 19. Bootstrap alignment uncertainty (`atman align bootstrap`) (implemented, v1)
+### 19. Bootstrap alignment uncertainty (`atman align bootstrap`) (implemented)
 
 Subject-level bootstrap of cross-cohort archetype alignment.
 Every iteration resamples subjects within each cohort with
 replacement, re-runs FastICA per cohort, re-aligns with cosine
 similarity, and matches every point-estimate archetype to its
 best-cosine bootstrap counterpart. Output summarises per-archetype
-`bootstrap_prob_universal` / `bootstrap_prob_multi` plus a
-percentile-CI band on the cohort-count distribution.
+`bootstrap_prob_universal` / `bootstrap_prob_multi`, both a
+percentile-CI band and a BCa CI on the cohort-count distribution,
+plus Shannon entropy (`alignment_entropy`) over the same histogram.
 
 Command:
 
@@ -644,22 +645,36 @@ atman align bootstrap \
   --output out/align_bootstrap_summary.tsv
 ```
 
-v1 scope (tracked as follow-ons in feature_requests.md Priority 3):
+Scope:
 
 - Cosine similarity only; other metrics deferred.
-- Percentile CI only; no BCa.
-- No `alignment_entropy` metric.
+- BCa 95% CI whose acceleration is estimated by pooled
+  subject-level jackknife (one leave-one-out pass per subject
+  across all cohorts). When the BCa denominator goes non-monotone
+  the CI silently falls back to the percentile bound and the
+  `bca_fallback_to_percentile` column flips to 1.
+- Shannon entropy (`alignment_entropy`, bits) over the empirical
+  histogram of `n_cohorts` across the bootstrap, counting misses
+  as `n_cohorts = 0`. Low values ⇒ the archetype's cohort coverage
+  is stable under resampling.
 - Archetype matching is by representative-program best-cosine with
   a user-tunable `--match-tau` floor (default 0.50).
 
 Acceptance:
 
-- Pure bootstrap lives in `atman-core::align_bootstrap`; 6 unit
+- Pure bootstrap lives in `atman-core::align_bootstrap`; 11 unit
   tests cover row resampling, single-cohort refusal, min-subjects
-  refusal, mismatched-universe refusal, runs on toy data, and
-  determinism.
+  refusal, mismatched-universe refusal, finite-stats on toy data,
+  determinism, Shannon-entropy edge cases, and BCa CI
+  (symmetric-data percentile reduction, zero-spread jackknife
+  fallback to bias correction, empty-bootstrap fallback).
 - Integration tests cover CLI schema, single-cohort refusal,
-  min-subjects refusal, and determinism across repeated runs.
+  min-subjects refusal, determinism across repeated runs, and a
+  **magnitude assertion**: on a strong planted fixture (40 subjects
+  × 15 proteins, universal signal on 6 shared proteins) at least
+  one archetype must exhibit `bootstrap_prob_multi ≥ 0.7`,
+  `alignment_entropy < 1.0`, and BCa upper bound ≥ 2. This is the
+  bootstrap-has-power contract — schema alone is not enough.
 - Each cohort's canonical directory is intersected to a shared
   protein universe before alignment; `--impute mean` fills residual
   missingness within the `--max-missing-fraction` envelope.

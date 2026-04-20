@@ -8,28 +8,30 @@
 //!
 //! Output per point-estimate archetype: mean cohort count, fraction
 //! of iterations it was recovered in every cohort (`prob_universal`),
-//! fraction in at least two cohorts (`prob_multi`), and a percentile
-//! CI over the cohort-count distribution.
+//! fraction in at least two cohorts (`prob_multi`), a percentile CI
+//! over the cohort-count distribution, Shannon entropy over the
+//! bootstrap n_cohorts histogram (`alignment_entropy`, higher = more
+//! uncertain), and a BCa (bias-corrected accelerated) CI whose
+//! acceleration is estimated by pooled subject-level jackknife.
 //!
-//! v1 scope (tracked in feature_requests.md Priority 3):
-//! - Cosine similarity only (other metrics deferred).
-//! - Matching is via representative-program best-cosine; each
-//!   point-estimate archetype is represented by the loading vector
-//!   from its first-cohort program, and every bootstrap archetype
-//!   is represented by its first-cohort program. Match is the
-//!   bootstrap archetype whose representative has maximum cosine
-//!   similarity against the point-estimate representative, with a
-//!   configurable floor (`match_tau`).
-//! - No BCa CI; percentile only.
-//! - No alignment-entropy metric.
+//! Matching is via representative-program best-cosine; each
+//! point-estimate archetype is represented by the loading vector
+//! from its first-cohort program, and every bootstrap/jackknife
+//! archetype is represented likewise. Match is the archetype whose
+//! representative has maximum absolute cosine similarity against the
+//! point-estimate representative, with a configurable floor
+//! (`match_tau`). Misses contribute zero-cohort observations to the
+//! distribution (they are a valid outcome under resampling noise).
 //!
-//! Determinism: all randomness comes from
+//! Determinism: bootstrap randomness comes from
 //! [`crate::ica::Xoshiro256pp`] seeded per iteration via a
-//! SplitMix64 derivation over `(seed, iter)`.
+//! SplitMix64 derivation over `(seed, iter)`. Jackknife is
+//! deterministic — the single ICA seed per cohort is reused.
 
 use crate::align::{build_archetypes, AlignMetric, AlignedProgram};
 use crate::ica::{canonicalize_ica, fast_ica, CanonicalIca, Xoshiro256pp};
 use crate::stats::cosine;
+use statrs::distribution::{ContinuousCDF, Normal};
 
 #[derive(Debug, Clone)]
 pub struct CohortMatrix {
@@ -76,6 +78,19 @@ pub struct BootstrapRow {
     /// matched to this point-estimate archetype at all. When this is
     /// low the other statistics are noisy.
     pub bootstrap_match_rate: f64,
+    /// Shannon entropy (in bits) of the empirical distribution of
+    /// `n_cohorts` across bootstrap iterations, treating each missed
+    /// match as `n_cohorts = 0`. Low entropy ⇒ the archetype's
+    /// cohort coverage is stable under subject resampling.
+    pub alignment_entropy: f64,
+    /// BCa (bias-corrected accelerated) bootstrap CI lower bound at
+    /// the two-sided 95% level. Acceleration is estimated by
+    /// pooled-subject jackknife. When the BCa denominator is
+    /// non-positive (non-monotone tail) the CI falls back to the
+    /// percentile CI and `bca_fallback_to_percentile` is true.
+    pub bca_lower_n_cohorts: f64,
+    pub bca_upper_n_cohorts: f64,
+    pub bca_fallback_to_percentile: bool,
 }
 
 /// SplitMix64-derived sub-seed for iteration `iter` under top-level
@@ -191,6 +206,203 @@ fn group_archetypes(
     out
 }
 
+/// Match a point-estimate archetype to the jackknife/bootstrap
+/// archetype whose representative has maximum absolute cosine
+/// similarity. Returns `None` when the best similarity is below
+/// `match_tau` or the resampled pipeline produced no archetypes.
+fn match_pe_archetype(
+    pe_rep: &[f64],
+    bs_archetypes: &[(usize, Vec<String>, Vec<f64>)],
+    match_tau: f64,
+) -> Option<usize> {
+    let mut best_sim = f64::NEG_INFINITY;
+    let mut best_n: Option<usize> = None;
+    for (_, bs_cohorts, bs_rep) in bs_archetypes {
+        let sim = cosine(pe_rep, bs_rep).unwrap_or(0.0).abs();
+        if sim > best_sim {
+            best_sim = sim;
+            best_n = Some(bs_cohorts.len());
+        }
+    }
+    if best_sim >= match_tau { best_n } else { None }
+}
+
+/// Shannon entropy (in bits) of the empirical histogram of a
+/// non-negative integer-valued series, treating each distinct value
+/// as a category. Returns 0 on an empty series.
+fn shannon_entropy_bits(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
+    for &v in values {
+        *counts.entry(v.round() as i64).or_insert(0) += 1;
+    }
+    let n = values.len() as f64;
+    let mut h = 0.0;
+    for &c in counts.values() {
+        if c == 0 {
+            continue;
+        }
+        let p = c as f64 / n;
+        h -= p * p.log2();
+    }
+    h
+}
+
+/// BCa (bias-corrected accelerated) CI at confidence level
+/// `1 - alpha`. `bootstrap` is the B-vector of resampled θ values;
+/// `jackknife` is the leave-one-subject-out vector; `theta_hat` is
+/// the point estimate. Returns `(lower, upper, fallback_to_percentile)`.
+fn bca_ci(
+    bootstrap: &[f64],
+    jackknife: &[f64],
+    theta_hat: f64,
+    alpha: f64,
+) -> (f64, f64, bool) {
+    let b = bootstrap.len();
+    if b == 0 {
+        return (theta_hat, theta_hat, true);
+    }
+    let mut sorted = bootstrap.to_vec();
+    sorted.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    let normal = match Normal::new(0.0, 1.0) {
+        Ok(n) => n,
+        Err(_) => return (sorted[0], sorted[b - 1], true),
+    };
+    // Percentile fallback values, computed once.
+    let pct_lo = sorted[((alpha / 2.0) * b as f64) as usize];
+    let pct_hi = sorted[(((1.0 - alpha / 2.0) * b as f64) as usize).min(b - 1)];
+
+    // z0: bias correction from the fraction of bootstrap < θ̂.
+    let below = bootstrap.iter().filter(|&&v| v < theta_hat).count();
+    let prop = (below as f64 / b as f64).clamp(
+        1.0 / (b as f64 + 1.0),
+        1.0 - 1.0 / (b as f64 + 1.0),
+    );
+    let z0 = normal.inverse_cdf(prop);
+
+    // Acceleration via jackknife. Needs ≥ 2 jackknife values and
+    // positive spread; otherwise fall back to bias-corrected-only
+    // by setting a = 0.
+    let a = if jackknife.len() >= 2 {
+        let jbar = jackknife.iter().sum::<f64>() / jackknife.len() as f64;
+        let num: f64 = jackknife.iter().map(|&t| (jbar - t).powi(3)).sum();
+        let den_sq: f64 = jackknife.iter().map(|&t| (jbar - t).powi(2)).sum();
+        if den_sq > 0.0 {
+            num / (6.0 * den_sq.powf(1.5))
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
+    let z_lo = normal.inverse_cdf(alpha / 2.0);
+    let z_hi = normal.inverse_cdf(1.0 - alpha / 2.0);
+    let denom_lo = 1.0 - a * (z0 + z_lo);
+    let denom_hi = 1.0 - a * (z0 + z_hi);
+    if !denom_lo.is_finite() || !denom_hi.is_finite() || denom_lo <= 0.0 || denom_hi <= 0.0 {
+        return (pct_lo, pct_hi, true);
+    }
+    let alpha1 = normal.cdf(z0 + (z0 + z_lo) / denom_lo);
+    let alpha2 = normal.cdf(z0 + (z0 + z_hi) / denom_hi);
+    if !alpha1.is_finite() || !alpha2.is_finite() {
+        return (pct_lo, pct_hi, true);
+    }
+    let lo_idx = ((alpha1 * b as f64) as usize).min(b - 1);
+    let hi_idx = ((alpha2 * b as f64) as usize).min(b - 1);
+    (sorted[lo_idx], sorted[hi_idx], false)
+}
+
+/// Run the point-estimate ICA + alignment pipeline on a set of
+/// cohort matrices. Returns, for each input PE archetype, the
+/// matched jackknife archetype's cohort count (or 0 on miss).
+fn point_estimate_match_counts(
+    cohorts: &[CohortMatrix],
+    params: &BootstrapParams,
+    universe: &[String],
+    pe_archetypes: &[(usize, Vec<String>, Vec<f64>)],
+) -> Vec<f64> {
+    let canons: Vec<(String, CanonicalIca)> = cohorts
+        .iter()
+        .map(|c| {
+            let canon = fit_and_canonicalize(
+                &c.data,
+                params.k,
+                params.seed,
+                params.max_iter,
+                params.tol,
+            );
+            (c.label.clone(), canon)
+        })
+        .collect();
+    let (progs, labels) =
+        align_canonicals(&canons, universe, params.top_n, params.cosine_tau);
+    let archetypes = group_archetypes(&progs, &labels);
+    pe_archetypes
+        .iter()
+        .map(|(_, _, pe_rep)| {
+            match_pe_archetype(pe_rep, &archetypes, params.match_tau)
+                .map(|n| n as f64)
+                .unwrap_or(0.0)
+        })
+        .collect()
+}
+
+/// Subject-level jackknife over the pooled cohort space. For each
+/// subject across all cohorts, drop them and re-run the point-
+/// estimate pipeline, recording the matched-archetype cohort count
+/// per PE archetype. Returns a `pe_archetypes.len() × N_total` matrix
+/// (outer = PE archetype, inner = jackknife replicate).
+fn jackknife_n_cohorts(
+    cohorts: &[CohortMatrix],
+    params: &BootstrapParams,
+    universe: &[String],
+    pe_archetypes: &[(usize, Vec<String>, Vec<f64>)],
+) -> Vec<Vec<f64>> {
+    let mut jack: Vec<Vec<f64>> = pe_archetypes.iter().map(|_| Vec::new()).collect();
+    for (ci, cohort) in cohorts.iter().enumerate() {
+        // Skip cohorts below min_subjects + 1 (leave-one-out would
+        // take the cohort below the published minimum). Contributing
+        // zero jackknife replicates from such a cohort is honest —
+        // its effective acceleration contribution was going to be
+        // unreliable anyway.
+        if cohort.data.len() <= params.min_subjects {
+            continue;
+        }
+        for drop_idx in 0..cohort.data.len() {
+            let reduced: Vec<CohortMatrix> = cohorts
+                .iter()
+                .enumerate()
+                .map(|(cj, c)| {
+                    let data = if cj == ci {
+                        c.data
+                            .iter()
+                            .enumerate()
+                            .filter(|&(k, _)| k != drop_idx)
+                            .map(|(_, r)| r.clone())
+                            .collect()
+                    } else {
+                        c.data.clone()
+                    };
+                    CohortMatrix {
+                        label: c.label.clone(),
+                        data,
+                        protein_labels: c.protein_labels.clone(),
+                    }
+                })
+                .collect();
+            let counts = point_estimate_match_counts(&reduced, params, universe, pe_archetypes);
+            for (ai, n) in counts.iter().enumerate() {
+                jack[ai].push(*n);
+            }
+        }
+    }
+    jack
+}
+
 pub fn align_bootstrap(
     cohorts: &[CohortMatrix],
     params: BootstrapParams,
@@ -284,30 +496,24 @@ pub fn align_bootstrap(
         // Match every PE archetype to at most one bootstrap archetype
         // by max cosine between representative loadings.
         for (ai, (_, _, pe_rep)) in pe_archetypes.iter().enumerate() {
-            let mut best_sim = f64::NEG_INFINITY;
-            let mut best_n_cohorts: Option<usize> = None;
-            for (_, bs_cohorts, bs_rep) in &bs_archetypes {
-                let sim = cosine(pe_rep, bs_rep).unwrap_or(0.0).abs();
-                if sim > best_sim {
-                    best_sim = sim;
-                    best_n_cohorts = Some(bs_cohorts.len());
-                }
-            }
-            if best_sim >= params.match_tau {
-                if let Some(n) = best_n_cohorts {
-                    acc[ai].observe(n, n_total_cohorts);
-                }
-            } else {
-                acc[ai].observe_miss();
+            match match_pe_archetype(pe_rep, &bs_archetypes, params.match_tau) {
+                Some(n) => acc[ai].observe(n, n_total_cohorts),
+                None => acc[ai].observe_miss(),
             }
         }
     }
 
+    // Subject-level jackknife for BCa acceleration.
+    let jack = jackknife_n_cohorts(cohorts, &params, universe, &pe_archetypes);
+
     Ok(pe_archetypes
         .iter()
         .zip(acc.iter())
+        .zip(jack.iter())
         .enumerate()
-        .map(|(ai, ((_, pe_cohorts, _), a))| a.to_row(ai + 1, pe_cohorts.clone()))
+        .map(|(ai, (((_, pe_cohorts, _), a), jack_row))| {
+            a.to_row(ai + 1, pe_cohorts.clone(), jack_row)
+        })
         .collect())
 }
 
@@ -332,7 +538,12 @@ impl BootstrapAcc {
     fn observe_miss(&mut self) {
         self.iterations += 1;
     }
-    fn to_row(&self, archetype_id: usize, observed_cohorts: Vec<String>) -> BootstrapRow {
+    fn to_row(
+        &self,
+        archetype_id: usize,
+        observed_cohorts: Vec<String>,
+        jackknife: &[f64],
+    ) -> BootstrapRow {
         let mut sorted = self.matches.clone();
         sorted.sort();
         let mean = if sorted.is_empty() {
@@ -367,6 +578,16 @@ impl BootstrapAcc {
                 .min(n - 1);
             (sorted[lower_idx], sorted[upper_idx])
         };
+
+        // Full n_boot-length bootstrap series for entropy + BCa:
+        // misses count as n_cohorts = 0 (they are a valid outcome
+        // under resampling noise, not a missing observation).
+        let mut full: Vec<f64> = self.matches.iter().map(|&n| n as f64).collect();
+        full.resize(self.n_boot, 0.0);
+        let entropy = shannon_entropy_bits(&full);
+        let theta_hat = observed_cohorts.len() as f64;
+        let (bca_lo, bca_hi, bca_fallback) = bca_ci(&full, jackknife, theta_hat, 0.05);
+
         BootstrapRow {
             archetype_id,
             observed_n_cohorts: observed_cohorts.len(),
@@ -377,6 +598,10 @@ impl BootstrapAcc {
             ci_lower_n_cohorts: ci_lower,
             ci_upper_n_cohorts: ci_upper,
             bootstrap_match_rate: match_rate,
+            alignment_entropy: entropy,
+            bca_lower_n_cohorts: bca_lo,
+            bca_upper_n_cohorts: bca_hi,
+            bca_fallback_to_percentile: bca_fallback,
         }
     }
 }
@@ -486,7 +711,55 @@ mod tests {
             assert!(r.bootstrap_prob_universal >= 0.0 && r.bootstrap_prob_universal <= 1.0);
             assert!(r.bootstrap_prob_multi >= 0.0 && r.bootstrap_prob_multi <= 1.0);
             assert!(r.bootstrap_match_rate >= 0.0 && r.bootstrap_match_rate <= 1.0);
+            assert!(r.alignment_entropy.is_finite() && r.alignment_entropy >= 0.0);
+            assert!(r.bca_lower_n_cohorts.is_finite());
+            assert!(r.bca_upper_n_cohorts.is_finite());
+            assert!(r.bca_lower_n_cohorts <= r.bca_upper_n_cohorts);
         }
+    }
+
+    #[test]
+    fn shannon_entropy_bits_uniform_equals_log2_k() {
+        let v: Vec<f64> = vec![0.0, 1.0, 2.0, 3.0];
+        // Uniform over 4 categories ⇒ H = log2(4) = 2 bits.
+        assert!((shannon_entropy_bits(&v) - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn shannon_entropy_bits_degenerate_is_zero() {
+        let v: Vec<f64> = vec![1.0; 8];
+        assert!(shannon_entropy_bits(&v).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bca_ci_symmetric_data_approximates_percentile() {
+        // Symmetric distribution ⇒ z0 ≈ 0; skew-free jackknife ⇒ a ≈ 0.
+        // BCa then reduces to the percentile CI.
+        let bootstrap: Vec<f64> = (0..1001).map(|i| i as f64 / 1000.0).collect();
+        let jackknife: Vec<f64> = (0..100).map(|i| 0.5 + (i as f64 - 49.5) * 0.001).collect();
+        let (lo, hi, fallback) = bca_ci(&bootstrap, &jackknife, 0.5, 0.05);
+        assert!(!fallback);
+        assert!((lo - 0.025).abs() < 0.02, "lo={lo}");
+        assert!((hi - 0.975).abs() < 0.02, "hi={hi}");
+    }
+
+    #[test]
+    fn bca_ci_zero_spread_jackknife_reduces_to_bias_corrected() {
+        // All jackknife values equal ⇒ den_sq = 0 ⇒ a = 0. BCa still
+        // runs with bias correction only; no fallback.
+        let bootstrap: Vec<f64> = (0..1001).map(|i| i as f64 / 1000.0).collect();
+        let jackknife: Vec<f64> = vec![0.5; 50];
+        let (lo, hi, fallback) = bca_ci(&bootstrap, &jackknife, 0.5, 0.05);
+        assert!(!fallback);
+        assert!(lo < hi);
+    }
+
+    #[test]
+    fn bca_ci_empty_bootstrap_falls_back() {
+        let (lo, hi, fallback) = bca_ci(&[], &[1.0, 2.0], 1.5, 0.05);
+        assert!(fallback);
+        assert_eq!(lo, 1.5);
+        assert_eq!(hi, 1.5);
     }
 
     #[test]
