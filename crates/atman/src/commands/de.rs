@@ -4160,13 +4160,18 @@ fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()> {
 /// every `(non_control, control)` pair where `control` is the
 /// alphabetically-first observed level of the post-hoc factor.
 ///
-/// Adjustment uses the equicorrelated multivariate-t CDF via
-/// `atman_core::multivariate_t::pdunnett` with `ρ = 0.5` — the
-/// canonical balanced-design correlation. Unbalanced Dunnett–Hsu
-/// (where correlations differ per pair) is a documented follow-on.
+/// Adjustment: balanced designs (`max n_i / min n_i < 1.25`) use the
+/// equicorrelated multivariate-t CDF via
+/// `atman_core::multivariate_t::pdunnett` at `ρ = 0.5`; unbalanced
+/// designs use the Hsu variant with a full correlation matrix
+/// computed from per-level `n_i` and evaluated by deterministic
+/// Monte Carlo (`atman_core::multivariate_t::pdunnett_hsu` at 50 000
+/// draws, byte-equal under fixed `--seed`).
 fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<()> {
     use atman_core::de::{contrast_inference, ols, OlsOutcome};
-    use atman_core::multivariate_t::pdunnett;
+    use atman_core::multivariate_t::{
+        dunnett_hsu_correlation_matrix, pdunnett, pdunnett_hsu,
+    };
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
@@ -4303,6 +4308,66 @@ fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<()> {
     }
 
     const RHO: f64 = 0.5;
+    const HSU_N_MC: usize = 50_000;
+    const BALANCE_THRESHOLD: f64 = 1.25;
+    // Count n_i per level from the full design. Hsu's correlation
+    // matrix depends only on these counts.
+    let mut level_counts: HashMap<String, usize> = HashMap::new();
+    for (sid, _) in &design_rows {
+        // Resolve the sample's factor level via the cov_raw lookup.
+        let _ = sid;
+    }
+    // The simpler way: iterate samples and read the factor value via
+    // setup.cov_raw keyed by sample_id.
+    for sample in &samples {
+        if sample.is_control {
+            continue;
+        }
+        let per_cov = match setup.cov_raw.get(&sample.sample_id) {
+            Some(v) => v,
+            None => continue,
+        };
+        let val = match per_cov.get(factor_cov_idx).cloned().unwrap_or(None) {
+            Some(v) if !v.is_empty() => v,
+            _ => continue,
+        };
+        *level_counts.entry(val).or_insert(0) += 1;
+    }
+    let n_control = *level_counts.get(&control).unwrap_or(&0);
+    let n_treatments: Vec<usize> = factor_levels
+        .iter()
+        .skip(1)
+        .map(|lvl| *level_counts.get(lvl).unwrap_or(&0))
+        .collect();
+    let max_n = n_treatments.iter().copied().max().unwrap_or(1).max(n_control) as f64;
+    let min_n = n_treatments
+        .iter()
+        .copied()
+        .chain(std::iter::once(n_control))
+        .filter(|n| *n > 0)
+        .min()
+        .unwrap_or(1) as f64;
+    let is_unbalanced = max_n / min_n.max(1.0) > BALANCE_THRESHOLD;
+    let hsu_matrix = if is_unbalanced {
+        Some(dunnett_hsu_correlation_matrix(n_control, &n_treatments))
+    } else {
+        None
+    };
+    if is_unbalanced {
+        eprintln!(
+            "de posthoc dunnett: unbalanced design detected (n_i = {:?}, control {}) — \
+             using Dunnett-Hsu via Monte Carlo ({} draws)",
+            n_treatments, n_control, HSU_N_MC,
+        );
+    }
+    let hsu_mc_seed = 20260420_u64; // fixed seed for byte-equal CDF calls
+    let dunnett_cdf = |q: f64, df: f64| -> f64 {
+        match (&hsu_matrix, q.is_finite() && df.is_finite()) {
+            (_, false) => f64::NAN,
+            (Some(r), _) => pdunnett_hsu(q, df, r, HSU_N_MC, hsu_mc_seed),
+            (None, _) => pdunnett(q, m_contrasts, df, RHO),
+        }
+    };
     let mut all_rows: Vec<DeResultRow> = Vec::new();
     for (panel, gene) in &measured_features {
         let (assay_id, uniprot) = gene_meta
@@ -4336,8 +4401,7 @@ fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<()> {
                         Some(r) => {
                             let q = r.t.abs();
                             let p_dun = if q.is_finite() && fit.df.is_finite() {
-                                (1.0 - pdunnett(q, m_contrasts, fit.df, RHO))
-                                    .clamp(0.0, 1.0)
+                                (1.0 - dunnett_cdf(q, fit.df)).clamp(0.0, 1.0)
                             } else {
                                 f64::NAN
                             };
@@ -4495,7 +4559,11 @@ fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<()> {
             "post-hoc": args.post_hoc,
             "post-hoc-factor": factor_name,
             "dunnett-control": control,
-            "dunnett-rho": RHO,
+            "dunnett-rho": if is_unbalanced { serde_json::Value::Null } else { serde_json::Value::from(RHO) },
+            "dunnett-unbalanced": is_unbalanced,
+            "dunnett-n-control": n_control,
+            "dunnett-n-treatments": n_treatments,
+            "dunnett-hsu-n-mc": if is_unbalanced { serde_json::Value::from(HSU_N_MC) } else { serde_json::Value::Null },
             "alpha": args.alpha,
             "omnibus-factor": args.omnibus_factor,
         }),

@@ -110,6 +110,103 @@ fn posthoc_dunnett_adjustment_is_self_consistent_with_core_pdunnett() {
 }
 
 #[test]
+fn posthoc_dunnett_switches_to_hsu_on_unbalanced_design() {
+    // Write a minimal unbalanced-stage cohort: 4 AD, 12 CN, 20 MCI
+    // (max/min = 5 ⇒ way past the 1.25 balance threshold). Verify
+    // the dispatch runs cleanly and the sidecar reports the Hsu
+    // path was used.
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    std::fs::create_dir_all(&input).unwrap();
+    let mut samples = String::from(
+        "sample_id\tsubject_id\tcondition\tis_control\tsample_type\t\
+         ingest_order\tstage\tage\n",
+    );
+    let mut qc = String::from(
+        "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
+         abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
+         detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n",
+    );
+    let stages: Vec<(&str, usize)> = vec![("AD", 4), ("CN", 12), ("MCI", 20)];
+    let mut sid_counter = 0u64;
+    let mut order = 0u64;
+    let mut seeded = 20260420u64;
+    let mut next_noise = || {
+        // Simple LCG for deterministic noise
+        seeded = seeded
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((seeded >> 33) as f64) / (u32::MAX as f64) - 0.5
+    };
+    for (stage, n) in &stages {
+        for _ in 0..*n {
+            sid_counter += 1;
+            let sid = format!("S{sid_counter:03}");
+            let age = 60.0 + next_noise() * 20.0;
+            samples.push_str(&format!(
+                "{sid}\t{sid}\tCase\t0\tplasma\t{sid_counter}\t{stage}\t{age:.1}\n"
+            ));
+            let responder_val = match *stage {
+                "AD" => 2.5,
+                "CN" => 0.0,
+                _ => 1.0,
+            } + next_noise() * 0.5;
+            order += 1;
+            qc.push_str(&format!(
+                "olink_explore_ngs\t{sid}\tR001\tRESPONDER\tP1\t\
+                 {responder_val:.6}\t{responder_val:.6}\t{responder_val:.6}\t\
+                 log2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n"
+            ));
+        }
+    }
+    std::fs::write(input.join("samples.tsv"), samples).unwrap();
+    std::fs::write(
+        input.join("proteins.tsv"),
+        "platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n\
+         olink_explore_ngs\tR001\tQ00001\tRESPONDER\tP1\t\n",
+    )
+    .unwrap();
+    std::fs::write(input.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(input.join("measurements.tsv"), &qc).unwrap();
+
+    let output = tmp.path().join("out_unbalanced");
+    let out = run_atman(&[
+        "de",
+        "--input-dir", input.to_str().unwrap(),
+        "--output-dir", output.to_str().unwrap(),
+        "--test", "ols",
+        "--design", "~ stage + age",
+        "--post-hoc", "dunnett",
+        "--post-hoc-factor", "stage",
+        "--min-pairs", "4",
+    ]);
+    assert!(
+        out.status.success(),
+        "atman failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let sidecar: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(output.join("de_results.tsv.run.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sidecar["args"]["dunnett-unbalanced"], serde_json::Value::Bool(true));
+    assert_eq!(
+        sidecar["args"]["dunnett-hsu-n-mc"].as_u64().unwrap(),
+        50_000
+    );
+    let (_, rows) = parse_tsv(&output.join("de_results.tsv"));
+    for r in &rows {
+        assert_eq!(r["posthoc_method"], "dunnett");
+        let adj: f64 = r["posthoc_adj_p"].parse().unwrap();
+        assert!(
+            adj.is_finite() && adj >= 0.0 && adj <= 1.0,
+            "dunnett adj_p {adj} out of [0, 1]"
+        );
+    }
+}
+
+#[test]
 fn posthoc_dunnett_magnitude_detects_planted_stage_effect() {
     let tmp = tempfile::tempdir().unwrap();
     let input = copy_fixture_to_canonical(tmp.path());

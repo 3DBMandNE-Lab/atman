@@ -170,6 +170,158 @@ pub fn pdunnett(q: f64, m: usize, df: f64, rho: f64) -> f64 {
     acc.clamp(0.0, 1.0)
 }
 
+/// Cholesky factor `L` of a symmetric positive-definite `R` such
+/// that `L Lᵀ = R`. Lower-triangular; `L[i][j] = 0` for `j > i`.
+/// Returns `None` when `R` is non-SPD.
+fn cholesky_factor(r: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
+    let m = r.len();
+    if m == 0 || r.iter().any(|row| row.len() != m) {
+        return None;
+    }
+    let mut l = vec![vec![0.0_f64; m]; m];
+    for i in 0..m {
+        let diag_sum: f64 = (0..i).map(|k| l[i][k] * l[i][k]).sum();
+        let diag = r[i][i] - diag_sum;
+        if !diag.is_finite() || diag <= 0.0 {
+            return None;
+        }
+        l[i][i] = diag.sqrt();
+        for j in (i + 1)..m {
+            let off_sum: f64 = (0..i).map(|k| l[i][k] * l[j][k]).sum();
+            l[j][i] = (r[j][i] - off_sum) / l[i][i];
+        }
+    }
+    Some(l)
+}
+
+/// Local Xoshiro256++ for MC draws inside this module.
+struct McRng(u64, u64, u64, u64);
+impl McRng {
+    fn new(seed: u64) -> Self {
+        let mut s = seed;
+        let mut out = [0_u64; 4];
+        for v in &mut out {
+            s = s.wrapping_add(0x9E3779B97F4A7C15);
+            let mut z = s;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+            *v = z ^ (z >> 31);
+        }
+        McRng(out[0], out[1], out[2], out[3])
+    }
+    fn next_u64(&mut self) -> u64 {
+        let result = self.0.wrapping_add(self.3).rotate_left(23).wrapping_add(self.0);
+        let t = self.1 << 17;
+        self.2 ^= self.0;
+        self.3 ^= self.1;
+        self.1 ^= self.2;
+        self.0 ^= self.3;
+        self.2 ^= t;
+        self.3 = self.3.rotate_left(45);
+        result
+    }
+    fn next_u01(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 * (1.0 / (1_u64 << 53) as f64)
+    }
+    fn next_standard_normal(&mut self) -> f64 {
+        let u1 = self.next_u01().max(1e-300);
+        let u2 = self.next_u01();
+        (-2.0_f64 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+    }
+}
+
+/// Monte-Carlo two-sided `P(max_i |T_i| ≤ q)` under a multivariate-t
+/// with an **arbitrary** correlation matrix `R` (m × m) and residual
+/// degrees of freedom `ν`. This is the unbalanced Dunnett-Hsu variant:
+/// when comparison group sizes differ, `R` is no longer equicorrelated
+/// (off-diagonals depend on the full pair of `n_i` values) and the
+/// equicorrelation-based [`pdunnett`] is inexact.
+///
+/// Uses the standard multivariate-t construction `T = L z / S` where
+/// `L Lᵀ = R`, `z ~ N(0, I_m)`, and `S = √(χ²_ν / ν)` independent. A
+/// deterministic Xoshiro256++ is seeded from `seed` via a SplitMix64
+/// init so repeated calls at the same seed are byte-equal.
+///
+/// `n_mc` draws deliver ~√(p(1-p) / n_mc) Monte-Carlo error;
+/// 50 000 is a typical default. `df` accepts fractional values but
+/// the chi² sampler uses `⌈df⌉` standard-normal-squared draws — fine
+/// for the small-to-moderate df regime Dunnett-Hsu targets.
+pub fn pdunnett_hsu(
+    q: f64,
+    df: f64,
+    correlation: &[Vec<f64>],
+    n_mc: usize,
+    seed: u64,
+) -> f64 {
+    let m = correlation.len();
+    if m == 0 || n_mc == 0 {
+        return 1.0;
+    }
+    if !q.is_finite() || q < 0.0 {
+        return 0.0;
+    }
+    if q == 0.0 {
+        return 0.0;
+    }
+    let l = match cholesky_factor(correlation) {
+        Some(l) => l,
+        None => return f64::NAN,
+    };
+    let df_ceil = df.ceil() as usize;
+    if df_ceil == 0 {
+        return f64::NAN;
+    }
+    let mut rng = McRng::new(seed);
+    let mut count = 0_usize;
+    for _ in 0..n_mc {
+        let mut z = vec![0.0_f64; m];
+        for v in z.iter_mut() {
+            *v = rng.next_standard_normal();
+        }
+        let mut t = vec![0.0_f64; m];
+        for i in 0..m {
+            for j in 0..=i {
+                t[i] += l[i][j] * z[j];
+            }
+        }
+        let mut chi_sq = 0.0_f64;
+        for _ in 0..df_ceil {
+            let v = rng.next_standard_normal();
+            chi_sq += v * v;
+        }
+        let s = (chi_sq / df).sqrt();
+        let max_abs = t.iter().map(|v| (v / s).abs()).fold(0.0_f64, f64::max);
+        if max_abs <= q {
+            count += 1;
+        }
+    }
+    count as f64 / n_mc as f64
+}
+
+/// Build the Dunnett-Hsu correlation matrix from group sizes:
+/// `ρ_{ij} = sqrt(n_i n_j / ((n_0 + n_i)(n_0 + n_j)))` for `i ≠ j`.
+/// `n_control` is the size of the reference group; `n_treatments`
+/// are the sizes of the `m` non-control groups in display order.
+pub fn dunnett_hsu_correlation_matrix(
+    n_control: usize,
+    n_treatments: &[usize],
+) -> Vec<Vec<f64>> {
+    let m = n_treatments.len();
+    let mut r = vec![vec![0.0_f64; m]; m];
+    for i in 0..m {
+        r[i][i] = 1.0;
+        for j in (i + 1)..m {
+            let ni = n_treatments[i] as f64;
+            let nj = n_treatments[j] as f64;
+            let n0 = n_control as f64;
+            let rho = (ni * nj / ((n0 + ni) * (n0 + nj))).sqrt();
+            r[i][j] = rho;
+            r[j][i] = rho;
+        }
+    }
+    r
+}
+
 /// Inverse of [`pdunnett`]: `q` such that `P(max |T_i| ≤ q) = p`.
 /// Bisection bracketed on `[0, 20]`.
 pub fn qdunnett(p: f64, m: usize, df: f64, rho: f64) -> f64 {
@@ -269,6 +421,62 @@ mod tests {
                 "pdunnett m=1 df=∞ q={q}: got {got}, expected {expected}"
             );
         }
+    }
+
+    #[test]
+    fn dunnett_hsu_correlation_matrix_reduces_to_half_in_balanced_case() {
+        // Balanced n_i = n_control = 10 → ρ_{ij} = √(100 / (400)) = 0.5.
+        let r = dunnett_hsu_correlation_matrix(10, &[10, 10, 10]);
+        for i in 0..3 {
+            assert!((r[i][i] - 1.0).abs() < 1e-12);
+            for j in 0..3 {
+                if i != j {
+                    assert!((r[i][j] - 0.5).abs() < 1e-12);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pdunnett_hsu_matches_equicorrelated_pdunnett_on_balanced_design() {
+        // Balanced design ⇒ Hsu's ρ ≡ 0.5 ⇒ pdunnett_hsu should
+        // track pdunnett at the same q within MC noise (few 1e-2).
+        let r = dunnett_hsu_correlation_matrix(20, &[20, 20, 20]);
+        let eq = pdunnett(2.5, 3, 30.0, 0.5);
+        let mc = pdunnett_hsu(2.5, 30.0, &r, 50_000, 20260420);
+        assert!(
+            (eq - mc).abs() < 2e-2,
+            "equicorrelated pdunnett({}) vs MC Hsu ({mc}): drift {}",
+            eq,
+            (eq - mc).abs()
+        );
+    }
+
+    #[test]
+    fn pdunnett_hsu_is_deterministic_under_fixed_seed() {
+        let r = dunnett_hsu_correlation_matrix(10, &[15, 20, 25]);
+        let a = pdunnett_hsu(2.0, 20.0, &r, 5_000, 7);
+        let b = pdunnett_hsu(2.0, 20.0, &r, 5_000, 7);
+        assert!((a - b).abs() < 1e-15);
+    }
+
+    #[test]
+    fn pdunnett_hsu_larger_unbalance_moves_away_from_equicorrelated() {
+        // With strongly unbalanced n_i, the Hsu correlation matrix
+        // differs noticeably from ρ = 0.5. The MC CDF should differ
+        // from the equicorrelated result (drift > MC noise).
+        let r = dunnett_hsu_correlation_matrix(5, &[50, 5, 5]);
+        let eq = pdunnett(2.5, 3, 30.0, 0.5);
+        let mc = pdunnett_hsu(2.5, 30.0, &r, 50_000, 777);
+        assert!(
+            mc.is_finite(),
+            "Hsu MC should return finite probability, got {mc}",
+        );
+        assert!(
+            (mc - eq).abs() > 1e-3,
+            "strongly unbalanced Hsu should drift from equicorrelated; got {} vs {}",
+            mc, eq
+        );
     }
 
     #[test]
