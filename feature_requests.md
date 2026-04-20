@@ -23,12 +23,27 @@ Open priorities — all shipped 2026-04-20:
 - ~~Priority 8~~ — `atman modules discover` ✅ (commit `92961c4`)
 - ~~Priority 10~~ — `atman decompose unmix` ✅ (commit `d61706c`)
 
-Residual deferrals on shipped features:
+Residual deferrals — **all cleared 2026-04-20**:
 
-- Jaccard/Spearman metrics in `align bootstrap` (Priority 3).
-- Unbalanced Dunnett–Hsu via Genz–Bretz (Priority 9).
-- NFINDR endmember extraction, `--k auto` HySime, `--n-boot` CI,
-  and `--annotate-markers` on `decompose unmix` (Priority 10).
+- ~~Jaccard/Spearman metrics in `align bootstrap`~~ ✅ (commit
+  `cf271c5`) — BootstrapParams + CLI now dispatch on metric.
+- ~~Unbalanced Dunnett–Hsu~~ ✅ (commit `968a25c`) — MC
+  multivariate-t with per-pair correlation matrix, auto-detected
+  from observed n_i when `max/min > 1.25`.
+- ~~NFINDR endmember extraction~~ ✅ (commit `93a87f4`) —
+  iterative simplex-volume max over VCA init.
+- ~~`--k auto` HySime-style selection~~ ✅ (commit `b2533ba`) —
+  residual-elbow sweep + `k_selection.tsv`.
+- ~~`--n-boot` bootstrap CI~~ ✅ (commit `5ed5bdb`) — subject-
+  level resample, matched+signed loadings, percentile CI on both
+  loadings and abundances.
+- ~~`--annotate-markers` ORA~~ ✅ (commit `aea7196`) —
+  hypergeometric upper-tail on top-N proteins.
+
+Only remaining deferral: the CSF plasma-endmember *real-data*
+sanity check on `sih/qc_measurements.tsv`. That one requires the
+live `atman_inputs_albnorm/` dataset and lives downstream of
+atman's test surface.
 
 Also shipped 2026-04-20 outside the original request batch:
 **Cross-method consensus DE dispatcher (`atman de --test ensemble`)** —
