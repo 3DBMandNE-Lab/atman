@@ -8,6 +8,33 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Below-LOD safety gate on `atman de`
+  (`--max-below-lod-fraction`, `--allow-censored`).** Refuses to run
+  when the fraction of `below_lod=1` rows among non-dropped
+  measurements exceeds `--max-below-lod-fraction` (default 0.5).
+  Atman's default DE tests treat missing as MCAR; left-censored data
+  at higher rates biases `mean_diff` toward zero and distorts
+  t-statistics. The gate reads only `dropped_by_qc` and `below_lod`
+  from `qc_measurements.tsv` up front so the full record parse is
+  deferred until the chosen test path loads it. Escape hatches:
+  raise the threshold after confirming the test is appropriate, or
+  pass `--allow-censored` (emits a stderr warning instead of
+  aborting). Commit `58595a8`.
+- **`atman ingest-matrix --normalize {none,median,quantile}` +
+  unnormalized-loading warning.** Adds cross-sample normalization
+  after any `--log2-transform`. Median centering subtracts each
+  sample's median and adds the grand mean of sample medians back,
+  preserving relative protein differences within samples. Quantile
+  forces identical empirical distributions for complete-case assays
+  and falls back to median centering for partially-observed assays
+  so no data is silently dropped. Default is `none` (correct for
+  Olink NPX, which arrives pre-normalized). When `--normalize none`
+  is used and per-sample median abundance spans more than one log2
+  unit, a stderr warning recommends `median` (suppressible via
+  `--skip-normalization-check`). For SomaScan, MaxQuant/LFQ, DIA-NN,
+  and Spectronaut, `--normalize median` is the recommended default.
+  VSN, plate bridging, and ComBat-style correction remain out of
+  scope — those belong upstream. Commit `7733a36`.
 - **Geometric compartmental unmixing (`atman decompose unmix`).**
   Ports Vertex Component Analysis (Nascimento & Bioucas-Dias 2005) +
   Fully Constrained Least Squares (Heinz & Chang 2001) from
@@ -28,12 +55,66 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   log-ratio coordinates don't admit a simplex interpretation.
   Outputs `endmembers.tsv` (rank-ordered per endmember),
   `abundances.tsv`, `unmix_diagnostics.tsv`, plus the standard
-  sidecar. v1 deliberately omits `nfindr`, `--k auto` (HySime),
-  `--n-boot` CI, and `--annotate-markers` — each is its own
-  follow-on. Integration tests verify planted-3-endmember recovery
+  sidecar. Initial v1 deferred `nfindr`, `--k auto` (HySime),
+  `--n-boot` CI, and `--annotate-markers` to follow-ons; all four
+  landed as separate entries below. Integration tests verify
+  planted-3-endmember recovery
   at cosine ≥ 0.85, FCLS row-sum = 1 ± 1e-5 with non-negative
   entries, determinism under fixed seed, refusal on `k > n/2`, and
   refusal on CLR+FCLS without the escape hatch. Closes Priority 10.
+- **`atman decompose unmix --annotate-markers` (ORA on endmember
+  loadings).** Hypergeometric upper-tail test on the top-N proteins
+  per endmember against user-supplied marker sets. Reads a marker-set
+  TSV (`set_name\tgene_symbol`) and emits `unmix_enrichment.tsv` with
+  columns `endmember_id`, `set_name`, `set_size`, `overlap`,
+  `top_n`, `universe_size`, `p_value`, `bh_q`. Integration test
+  confirms planted markers hit at `p < 1e-6` and decoy sets stay
+  `p > 0.5`. Commit `aea7196` (residual 10d).
+- **`atman decompose unmix --n-boot` (subject-level bootstrap CI).**
+  Adds percentile CIs on both endmember loadings and per-subject
+  abundances by resampling subjects with replacement, re-running
+  VCA+FCLS on each resample, matching each bootstrap endmember to
+  its best-`|cosine|` point-estimate counterpart, sign-correcting
+  the match, then re-solving abundances on the original subjects
+  under the matched+signed boot endmember matrix. Sub-seeds derive
+  deterministically from the master `--seed` via SplitMix64
+  (matching `align bootstrap`). Outputs `loading_ci.tsv` and
+  `abundance_ci.tsv` alongside the point-estimate artifacts.
+  Commit `5ed5bdb` (residual 10c).
+- **`atman decompose unmix --k auto` (HySime-style elbow
+  selection).** Sweeps `k` in `[--k-min, --k-max]`, computes the
+  mean reconstruction residual norm per `k`, and picks the smallest
+  `k` whose marginal improvement over `k − 1` drops below
+  `--k-elbow-threshold × peak_improvement` (default 0.10). Emits
+  `k_selection.tsv` recording every `k` in the sweep with
+  `mean_residual_norm` and `marginal_improvement`. Falls back to
+  `k_max` when every marginal improvement stays above the
+  threshold. Commit `b2533ba` (residual 10b).
+- **`atman decompose unmix --endmember nfindr` (N-FINDR
+  extraction).** Iterative simplex-volume maximization (Winter 1999)
+  initialized from VCA's picks. Swaps each endmember with the
+  candidate sample that most increases the Gram-matrix determinant
+  of the simplex; repeats until a full pass produces no swap or
+  `--nfindr-max-passes` is exhausted. Supplements VCA when the PE
+  simplex is sub-optimal under pure projection search. Commit
+  `93a87f4` (residual 10a).
+- **Unbalanced Dunnett–Hsu via deterministic MC on `atman de
+  --post-hoc dunnett`.** When observed per-group sample sizes vary
+  by more than `max/min > 1.25`, the test auto-switches from the
+  equicorrelated multivariate-t (which assumes balanced design) to
+  Dunnett–Hsu's per-pair correlation matrix
+  `ρ_{ij} = √(n_i n_j / ((n_0 + n_i)(n_0 + n_j)))`, evaluated via
+  deterministic Monte Carlo on a per-pair correlation structure.
+  Added `atman-core::multivariate_t::{dunnett_hsu_correlation_matrix,
+  pdunnett_hsu}`. Balanced designs still dispatch to the faster
+  equicorrelated path. Commit `968a25c` (residual 9).
+- **Jaccard + Spearman metrics in `atman align bootstrap`.**
+  `--metric {cosine,jaccard,spearman}` extends the v1 cosine-only
+  subject-level bootstrap. Jaccard uses top-N overlap on signed
+  loading ranks; Spearman uses rank-correlation on the full
+  loading vectors. Both flow through the existing matching,
+  percentile CI, entropy, and BCa pipeline unchanged. Commit
+  `cf271c5` (residual 3a).
 - **Cross-tool benchmark harness (`atman bench decompose`).** New
   top-level `atman bench` command family. Scores `atman decompose
   ica` against named external tools on a shared planted-archetype
