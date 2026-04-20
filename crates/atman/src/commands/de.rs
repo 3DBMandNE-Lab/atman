@@ -527,6 +527,7 @@ pub fn run(args: Args) -> Result<()> {
                     n_peptides_observed: None,
                     peptide_variance_ratio: None,
                     ridge_lambda: None,
+                    method: args.test.clone(),
                 },
                 PairedTResult::Skipped { reason, n_pairs } => DeResultRow {
                     panel: panel.clone(),
@@ -567,6 +568,7 @@ pub fn run(args: Args) -> Result<()> {
                     n_peptides_observed: None,
                     peptide_variance_ratio: None,
                     ridge_lambda: None,
+                    method: args.test.clone(),
                 },
             };
             family_p.push(row.p_value);
@@ -2061,6 +2063,7 @@ fn run_limma(
                             .and_then(|m| m.get(assay_id).copied().map(|c| c as usize)),
                         peptide_variance_ratio: None,
                         ridge_lambda: None,
+                        method: "limma".into(),
                     });
                 }
                 for (panel, n) in per_panel {
@@ -2277,6 +2280,7 @@ fn run_limma(
                     .and_then(|m| m.get(assay_id).copied().map(|c| c as usize)),
                 peptide_variance_ratio: None,
                 ridge_lambda: None,
+                method: "limma".into(),
             });
         }
 
@@ -2525,6 +2529,7 @@ fn run_msqrob(
                                 n_peptides_observed: Some(used_peptides.len()),
                                 peptide_variance_ratio: None,
                                 ridge_lambda: Some(ridge_lambda),
+                                method: "msqrob".into(),
                             },
                         },
                     ));
@@ -2592,6 +2597,7 @@ fn run_msqrob(
                         n_peptides_observed: Some(fit.n_peptides),
                         peptide_variance_ratio: Some(fit.peptide_variance_ratio),
                         ridge_lambda: Some(ridge_lambda),
+                        method: "msqrob".into(),
                     },
                 },
             ));

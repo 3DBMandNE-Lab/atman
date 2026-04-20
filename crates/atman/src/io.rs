@@ -736,6 +736,11 @@ pub struct DeResultRow {
     pub n_peptides_observed: Option<usize>,
     pub peptide_variance_ratio: Option<f64>,
     pub ridge_lambda: Option<f64>,
+    /// Emitting dispatch name (e.g. "paired-t", "welch-t", "ols",
+    /// "mixed", "limma", "msqrob"). Populated for every row so the
+    /// `--test ensemble` aggregator can bucket rows by method without
+    /// parsing the free-form `effect_size_method` string.
+    pub method: String,
 }
 
 pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
@@ -746,7 +751,7 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
          median_diff\ttrimmed_mean_diff\t\
          s2_trend\ts2_prior\ts2_posterior\tdf_prior\tdf_total\t\
          f_statistic\tf_p_value\tf_bh_q\tlfc_threshold\t\
-         n_peptides_observed\tpeptide_variance_ratio\tridge_lambda\n",
+         n_peptides_observed\tpeptide_variance_ratio\tridge_lambda\tmethod\n",
     );
     for r in rows {
         buf.push_str(&r.panel);
@@ -818,6 +823,8 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
         push_opt_f64(&mut buf, r.peptide_variance_ratio);
         buf.push('\t');
         push_opt_f64(&mut buf, r.ridge_lambda);
+        buf.push('\t');
+        buf.push_str(&r.method);
         buf.push('\n');
     }
     atomic_write(path, buf.as_bytes())
@@ -937,6 +944,7 @@ mod tests {
             n_peptides_observed: None,
             peptide_variance_ratio: None,
             ridge_lambda: None,
+            method: "limma".into(),
         };
         write_de_results(&p, &[row]).unwrap();
         let text = std::fs::read_to_string(&p).unwrap();
@@ -957,5 +965,60 @@ mod tests {
         let body = text.lines().nth(1).unwrap();
         assert!(body.contains("0.5")); // s2_trend
         assert!(body.contains("limma-eBayes-robust-trend"));
+    }
+
+    #[test]
+    fn de_results_method_column_roundtrips() {
+        let d = TempDir::new().unwrap();
+        let p = d.path().join("de_results.tsv");
+        let row = DeResultRow {
+            panel: "P1".into(),
+            assay_id: "A001".into(),
+            gene_symbol: "GENE1".into(),
+            uniprot: "Q00001".into(),
+            comparison: "A-B".into(),
+            n_pairs: 5,
+            mean_a: Some(1.0),
+            mean_b: Some(0.0),
+            mean_diff: Some(1.0),
+            t: Some(2.5),
+            df: Some(10.0),
+            p_value: Some(0.01),
+            bh_q: Some(0.05),
+            effect_size: None,
+            effect_size_method: "welch-t".into(),
+            ci_low: None,
+            ci_high: None,
+            wilcoxon_p: None,
+            wilcoxon_method: "".into(),
+            median_diff: None,
+            trimmed_mean_diff: None,
+            skip_reason: "".into(),
+            s2_trend: None,
+            s2_prior: None,
+            s2_posterior: None,
+            df_prior: None,
+            df_total: None,
+            f_statistic: None,
+            f_p_value: None,
+            f_bh_q: None,
+            lfc_threshold: None,
+            n_peptides_observed: None,
+            peptide_variance_ratio: None,
+            ridge_lambda: None,
+            method: "welch-t".into(),
+        };
+        write_de_results(&p, &[row]).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let header = text.lines().next().unwrap();
+        assert!(
+            header.ends_with("method"),
+            "method must be the last header column: {header}"
+        );
+        let body = text.lines().nth(1).unwrap();
+        assert!(
+            body.ends_with("welch-t"),
+            "method must be the last body cell: {body}"
+        );
     }
 }
