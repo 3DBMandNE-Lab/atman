@@ -14,7 +14,7 @@
 //!   is (e.g., one comparison × all proteins). This module does not pool
 //!   families together.
 
-use statrs::distribution::{ContinuousCDF, StudentsT};
+use statrs::distribution::{ContinuousCDF, FisherSnedecor, StudentsT};
 
 /// A single paired t-test result for one protein in one comparison.
 #[derive(Debug, Clone, PartialEq)]
@@ -864,6 +864,227 @@ fn inverse_diag_from_cholesky(l: &[Vec<f64>]) -> Vec<f64> {
     out
 }
 
+/// One fitted linear contrast on an OLS design.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContrastResult {
+    /// `cᵀβ`.
+    pub estimate: f64,
+    /// `sqrt(cᵀ (XᵀX)⁻¹ c · σ²)`.
+    pub se: f64,
+    /// `estimate / se`.
+    pub t: f64,
+    /// Two-sided Student-t p on `df` degrees of freedom.
+    pub p_value: f64,
+}
+
+/// One-contrast inference on the already-fit OLS coefficients.
+///
+/// `design` is the n × p sample-major design matrix used for the
+/// original fit. `beta` is the fitted coefficients (length p).
+/// `contrast_weights` is a length-p weight vector `c`; the test
+/// evaluates `H₀: cᵀβ = 0`. `sigma2` is the residual variance
+/// estimate from the fit (`RSS / df`). `df` is the residual
+/// degrees of freedom (`n − p`).
+///
+/// Numerically, we rebuild `XᵀX`, Cholesky-factor it, solve
+/// `XᵀX z = c`, and read off `cᵀ(XᵀX)⁻¹c = cᵀz`. Returns `None`
+/// when the design is singular, sizes are inconsistent, or
+/// `df <= 0`.
+pub fn contrast_inference(
+    design: &[Vec<f64>],
+    beta: &[f64],
+    contrast_weights: &[f64],
+    sigma2: f64,
+    df: f64,
+) -> Option<ContrastResult> {
+    if design.is_empty() || beta.is_empty() || contrast_weights.is_empty() {
+        return None;
+    }
+    let p = beta.len();
+    if design[0].len() != p || contrast_weights.len() != p {
+        return None;
+    }
+    if !(df.is_finite() && df > 0.0) || !sigma2.is_finite() || sigma2 < 0.0 {
+        return None;
+    }
+    // Rebuild XᵀX (p × p).
+    let mut xtx = vec![vec![0.0_f64; p]; p];
+    for row in design {
+        if row.len() != p || row.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        for i in 0..p {
+            for j in 0..p {
+                xtx[i][j] += row[i] * row[j];
+            }
+        }
+    }
+    let l = cholesky_lower(&xtx)?;
+    // Solve XᵀX z = c via forward/back substitution on L.
+    let mut z_forward = vec![0.0_f64; p];
+    for i in 0..p {
+        let mut sum = contrast_weights[i];
+        for k in 0..i {
+            sum -= l[i][k] * z_forward[k];
+        }
+        z_forward[i] = sum / l[i][i];
+    }
+    let mut z = vec![0.0_f64; p];
+    for i in (0..p).rev() {
+        let mut sum = z_forward[i];
+        for k in (i + 1)..p {
+            sum -= l[k][i] * z[k];
+        }
+        z[i] = sum / l[i][i];
+    }
+    // Variance scale `cᵀ (XᵀX)⁻¹ c = cᵀz`.
+    let mut var_scale = 0.0_f64;
+    for i in 0..p {
+        var_scale += contrast_weights[i] * z[i];
+    }
+    if !var_scale.is_finite() || var_scale < 0.0 {
+        return None;
+    }
+    let se = (var_scale * sigma2).sqrt();
+    let mut estimate = 0.0_f64;
+    for i in 0..p {
+        estimate += contrast_weights[i] * beta[i];
+    }
+    let t = if se == 0.0 { f64::NAN } else { estimate / se };
+    let p_value = match StudentsT::new(0.0, 1.0, df) {
+        Ok(dist) if t.is_finite() => 2.0 * (1.0 - dist.cdf(t.abs())),
+        _ => f64::NAN,
+    };
+    Some(ContrastResult {
+        estimate,
+        se,
+        t,
+        p_value,
+    })
+}
+
+/// Omnibus F-test of the joint hypothesis `β_j = 0` for every
+/// `j` in `factor_columns`. Uses the standard
+/// `F = (β_S' · [A⁻¹]_SS · β_S) / (k · σ²)` form where `A = XᵀX`,
+/// `S` is the column subset, and `k = |S|`. `df_num = k`,
+/// `df_den = df`.
+///
+/// Returns `None` when the design is singular or dimensions are
+/// inconsistent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OmnibusF {
+    pub f_statistic: f64,
+    pub df_num: usize,
+    pub df_den: f64,
+    pub p_value: f64,
+}
+
+pub fn omnibus_f_test(
+    design: &[Vec<f64>],
+    beta: &[f64],
+    factor_columns: &[usize],
+    sigma2: f64,
+    df: f64,
+) -> Option<OmnibusF> {
+    if design.is_empty() || beta.is_empty() || factor_columns.is_empty() {
+        return None;
+    }
+    let p = beta.len();
+    if design[0].len() != p
+        || !sigma2.is_finite()
+        || sigma2 <= 0.0
+        || !(df.is_finite() && df > 0.0)
+    {
+        return None;
+    }
+    for &c in factor_columns {
+        if c >= p {
+            return None;
+        }
+    }
+
+    // XᵀX and its full inverse (only the factor-column submatrix is
+    // needed, but p is small in practice).
+    let mut xtx = vec![vec![0.0_f64; p]; p];
+    for row in design {
+        if row.len() != p || row.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        for i in 0..p {
+            for j in 0..p {
+                xtx[i][j] += row[i] * row[j];
+            }
+        }
+    }
+    let l = cholesky_lower(&xtx)?;
+    // Build (XᵀX)⁻¹ column-by-column from L.
+    let mut inv = vec![vec![0.0_f64; p]; p];
+    for target in 0..p {
+        let mut z = vec![0.0_f64; p];
+        for i in 0..p {
+            let mut sum = if i == target { 1.0 } else { 0.0 };
+            for k in 0..i {
+                sum -= l[i][k] * z[k];
+            }
+            z[i] = sum / l[i][i];
+        }
+        let mut col = vec![0.0_f64; p];
+        for i in (0..p).rev() {
+            let mut sum = z[i];
+            for k in (i + 1)..p {
+                sum -= l[k][i] * col[k];
+            }
+            col[i] = sum / l[i][i];
+        }
+        for i in 0..p {
+            inv[i][target] = col[i];
+        }
+    }
+    // Extract principal submatrix at factor_columns.
+    let k = factor_columns.len();
+    let mut a_ss = vec![vec![0.0_f64; k]; k];
+    for (a, &ia) in factor_columns.iter().enumerate() {
+        for (b, &ib) in factor_columns.iter().enumerate() {
+            a_ss[a][b] = inv[ia][ib];
+        }
+    }
+    // Invert the k × k submatrix via its own Cholesky.
+    let ls = cholesky_lower(&a_ss)?;
+    // Build β_S and solve A_ss · x = β_S.
+    let beta_s: Vec<f64> = factor_columns.iter().map(|&i| beta[i]).collect();
+    let mut z_fw = vec![0.0_f64; k];
+    for i in 0..k {
+        let mut sum = beta_s[i];
+        for kk in 0..i {
+            sum -= ls[i][kk] * z_fw[kk];
+        }
+        z_fw[i] = sum / ls[i][i];
+    }
+    let mut x = vec![0.0_f64; k];
+    for i in (0..k).rev() {
+        let mut sum = z_fw[i];
+        for kk in (i + 1)..k {
+            sum -= ls[kk][i] * x[kk];
+        }
+        x[i] = sum / ls[i][i];
+    }
+    let quad: f64 = beta_s.iter().zip(x.iter()).map(|(b, xx)| b * xx).sum();
+    let f = quad / (k as f64 * sigma2);
+    if !f.is_finite() || f < 0.0 {
+        return None;
+    }
+    let p_value = match FisherSnedecor::new(k as f64, df) {
+        Ok(dist) => 1.0 - dist.cdf(f),
+        Err(_) => f64::NAN,
+    };
+    Some(OmnibusF {
+        f_statistic: f,
+        df_num: k,
+        df_den: df,
+        p_value,
+    })
+}
+
 /// Benjamini–Hochberg FDR correction. Input `p_values` is a slice of optional
 /// p-values (None = skipped test, excluded from the correction). Returns a
 /// `Vec<Option<f64>>` of q-values aligned with the input indices; the same
@@ -919,6 +1140,138 @@ mod tests {
 
     fn approx(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() <= tol
+    }
+
+    #[test]
+    fn contrast_matches_single_coefficient_se_on_standard_design() {
+        // A 3-column intercept + two indicator design with 9 samples.
+        // Contrast c = (0, 1, 0) picks out β_1 directly. The resulting
+        // se/t/p should match what ols() already returns for β_1.
+        let design: Vec<Vec<f64>> = (0..9)
+            .map(|i| {
+                let cond = i / 3; // 0, 1, 2 each ×3
+                vec![
+                    1.0,
+                    if cond == 1 { 1.0 } else { 0.0 },
+                    if cond == 2 { 1.0 } else { 0.0 },
+                ]
+            })
+            .collect();
+        let y: Vec<f64> = (0..9)
+            .map(|i| {
+                let cond = i / 3;
+                cond as f64 * 2.0 + (i as f64 * 0.01).sin()
+            })
+            .collect();
+        let fit = match ols(&design, &y, 2) {
+            OlsOutcome::Computed(f) => f,
+            _ => panic!("ols should fit"),
+        };
+        let contrast = vec![0.0, 1.0, 0.0];
+        let r = contrast_inference(&design, &fit.beta, &contrast, fit.sigma2, fit.df).unwrap();
+        // Contrast estimate should match β_1 and SE should match se[1].
+        assert!(approx(r.estimate, fit.beta[1], 1e-10));
+        assert!(approx(r.se, fit.se[1], 1e-10));
+        assert!(approx(r.t, fit.t[1], 1e-10));
+        assert!(approx(r.p_value, fit.p_value[1], 1e-10));
+    }
+
+    #[test]
+    fn contrast_difference_of_two_levels_matches_hand_computation() {
+        // Same 3-column design. Contrast c = (0, 1, -1) is the
+        // difference between level 1 and level 2. Recovery: the
+        // estimate equals β_1 − β_2.
+        let design: Vec<Vec<f64>> = (0..12)
+            .map(|i| {
+                let cond = i / 4;
+                vec![
+                    1.0,
+                    if cond == 1 { 1.0 } else { 0.0 },
+                    if cond == 2 { 1.0 } else { 0.0 },
+                ]
+            })
+            .collect();
+        let y: Vec<f64> = (0..12)
+            .map(|i| {
+                let cond = i / 4;
+                cond as f64 * 1.5 + (i as f64 * 0.1).cos() * 0.05
+            })
+            .collect();
+        let fit = match ols(&design, &y, 2) {
+            OlsOutcome::Computed(f) => f,
+            _ => panic!("ols should fit"),
+        };
+        let contrast = vec![0.0, 1.0, -1.0];
+        let r = contrast_inference(&design, &fit.beta, &contrast, fit.sigma2, fit.df).unwrap();
+        let expected_est = fit.beta[1] - fit.beta[2];
+        assert!(
+            approx(r.estimate, expected_est, 1e-10),
+            "estimate {} vs expected {}",
+            r.estimate,
+            expected_est
+        );
+        // The SE of (β_1 − β_2) must be positive and finite.
+        assert!(r.se.is_finite() && r.se > 0.0);
+    }
+
+    #[test]
+    fn omnibus_f_under_h0_has_expected_distribution_p_range() {
+        // y is random noise with no dependency on the factor; with
+        // n=30 and 3 levels, p should be large (bounded well away
+        // from 0). Using a deterministic pseudorandom sequence.
+        let design: Vec<Vec<f64>> = (0..30)
+            .map(|i| {
+                let cond = i / 10;
+                vec![
+                    1.0,
+                    if cond == 1 { 1.0 } else { 0.0 },
+                    if cond == 2 { 1.0 } else { 0.0 },
+                ]
+            })
+            .collect();
+        let y: Vec<f64> = (0..30)
+            .map(|i| {
+                // Fresh deterministic noise — no cond dependence.
+                let u = ((i as f64 * 0.97).sin() * 7.0).cos();
+                u + (i as f64).ln_1p() * 0.15
+            })
+            .collect();
+        let fit = match ols(&design, &y, 2) {
+            OlsOutcome::Computed(f) => f,
+            _ => panic!(),
+        };
+        let omni = omnibus_f_test(&design, &fit.beta, &[1, 2], fit.sigma2, fit.df).unwrap();
+        assert_eq!(omni.df_num, 2);
+        assert_eq!(omni.df_den, 27.0); // n - p = 30 - 3
+        assert!(omni.p_value > 0.05, "expected null F p>0.05, got {}", omni.p_value);
+    }
+
+    #[test]
+    fn omnibus_f_large_on_planted_factor_effect() {
+        // Strong planted effect on the factor columns.
+        let design: Vec<Vec<f64>> = (0..12)
+            .map(|i| {
+                let cond = i / 4;
+                vec![
+                    1.0,
+                    if cond == 1 { 1.0 } else { 0.0 },
+                    if cond == 2 { 1.0 } else { 0.0 },
+                ]
+            })
+            .collect();
+        let y: Vec<f64> = (0..12)
+            .map(|i| {
+                let cond = i / 4;
+                cond as f64 * 3.0 + (i as f64 * 0.1).cos() * 0.05
+            })
+            .collect();
+        let fit = match ols(&design, &y, 2) {
+            OlsOutcome::Computed(f) => f,
+            _ => panic!(),
+        };
+        let omni = omnibus_f_test(&design, &fit.beta, &[1, 2], fit.sigma2, fit.df).unwrap();
+        assert!(omni.f_statistic > 10.0, "expected F>10, got {}", omni.f_statistic);
+        assert!(omni.p_value < 0.001, "expected p<0.001, got {}", omni.p_value);
     }
 
     #[test]
