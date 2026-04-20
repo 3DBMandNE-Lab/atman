@@ -1,8 +1,10 @@
 # Atman Adapters
 
-Atman's built-in `ingest` command reads Olink Explore long CSV files. Other
-proteomics sources can use Atman by writing the canonical TSV files that the
-downstream commands consume:
+Atman accepts proteomics data through three routes: platform-native
+`ingest` (currently Olink Explore NPX), `ingest-matrix` for common wide
+matrices (DIA-NN, Spectronaut, MaxQuant/LFQ, SomaScan, and other log2
+abundance exports), and user-written adapters that emit the canonical TSV
+files directly. Any proteomics source can feed Atman by producing:
 
 - `samples.tsv`
 - `proteins.tsv`

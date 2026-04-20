@@ -1,4 +1,7 @@
-//! atman: command-line engine for Olink Explore proteomics workflows.
+//! atman: deterministic proteomics analysis engine.
+//!
+//! Supported platforms: Olink Explore NGS, SomaScan, MaxQuant/LFQ, DIA-NN,
+//! Spectronaut, and any wide abundance matrix via `ingest-matrix`.
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -9,7 +12,7 @@ use atman::commands;
 #[command(
     name = "atman",
     version,
-    about = "Proteomics engine for Olink Explore NGS"
+    about = "Deterministic proteomics analysis in Rust — Olink, SomaScan, DIA-NN, Spectronaut, MaxQuant"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -35,7 +38,7 @@ enum Command {
     /// Compute log2 fold change per panel for the given comparisons.
     FoldChange(commands::fold_change::Args),
     /// Differential abundance with paired-t or moderated variance-shrinkage model.
-    De(commands::de::Args),
+    De(Box<commands::de::Args>),
     /// Gene-set enrichment analyses over DE results.
     Enrich(commands::enrich::Args),
     /// Compare matched contrast pairs for provocation-dependent asymmetry.
@@ -87,7 +90,7 @@ fn main() -> Result<()> {
         Command::Decompose(args) => commands::decompose::run(args),
         Command::Meta(args) => commands::meta::run(args),
         Command::FoldChange(args) => commands::fold_change::run(args),
-        Command::De(args) => commands::de::run(args),
+        Command::De(args) => commands::de::run(*args),
         Command::Enrich(args) => commands::enrich::run(args),
         Command::Asymmetry(args) => commands::asymmetry::run(args),
         Command::Bootstrap(args) => commands::bootstrap::run(args),

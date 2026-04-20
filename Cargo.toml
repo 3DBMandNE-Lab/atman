@@ -11,7 +11,7 @@ authors = ["Kevin Joseph"]
 repository = "https://github.com/kevinj24fr/atman"
 homepage = "https://github.com/kevinj24fr/atman"
 readme = "README.md"
-keywords = ["proteomics", "olink", "bioinformatics", "cli"]
+keywords = ["proteomics", "mass-spectrometry", "bioinformatics", "olink", "cli"]
 categories = ["command-line-utilities", "science"]
 
 [workspace.dependencies]

@@ -3,14 +3,21 @@
 [![CI](https://github.com/kevinj24fr/atman/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kevinj24fr/atman/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
 
-Atman is a standalone Rust command-line tool for reproducible proteomics
-workflows. It has a built-in Olink Explore NPX ingest path, a simple canonical
-TSV interchange format for other proteomics sources, and analysis commands for
-differential abundance, module testing, asymmetry, and robustness summaries.
+Atman is a standalone Rust command-line tool for reproducible, deterministic
+proteomics workflows across affinity and mass-spectrometry platforms. It ships
+wide-matrix and platform-native ingest paths, a canonical TSV interchange
+format, and analysis commands for differential abundance, decomposition,
+module testing, enrichment, asymmetry, and robustness summaries.
+
+Supported platforms: Olink Explore NGS, SomaScan, MaxQuant/LFQ, DIA-NN,
+Spectronaut, and any wide abundance matrix via `ingest-matrix` or a
+thin user-written adapter emitting the canonical TSV schema.
 
 Atman does not require a service, database, notebook runtime, or workflow
 system. The repository includes a Dube et al. 2023 Olink Explore fixture
-dataset so the package can test its raw-to-result reproduction path end to end.
+dataset so the package can test its raw-to-result reproduction path end to end,
+and `adapters/examples/` ships tiny synthetic fixtures for DIA-NN, MaxQuant,
+and SomaScan-style matrices.
 
 ## Install
 
@@ -31,31 +38,69 @@ docker run --rm atman:1.0.0 --help
 
 ## Input Support
 
-Atman has two input modes:
+Atman has three input modes, all landing on the same canonical TSV schema:
 
-- **Built-in ingest:** `atman ingest --platform olink-explore-ngs` reads raw
-  long-format Olink Explore NPX CSV files and writes Atman's canonical TSVs.
 - **Matrix ingest:** `atman ingest-matrix` reads common wide protein matrices
-  plus sample/protein metadata and writes Atman's canonical TSVs.
+  (DIA-NN, Spectronaut, MaxQuant/LFQ, SomaScan, any log2 intensity/abundance
+  export) plus sample/protein metadata and writes Atman's canonical TSVs.
+  Supports `--log2-transform` for linear-scale inputs and both
+  `proteins-rows` / `samples-rows` orientations.
+- **Platform-native ingest:** `atman ingest --platform olink-explore-ngs`
+  reads raw long-format Olink Explore NPX CSV files. Additional native
+  parsers can be added per platform as needed.
 - **Canonical TSV adapters:** any script or converter can write
   `samples.tsv`, `proteins.tsv`, `measurements.tsv`, and optionally
   `qc_measurements.tsv`. Once those files exist, Atman's downstream commands
   (`de`, `module-de`, `robustness`, and related summaries) run the same way
   regardless of the original assay source.
 
-The canonical TSV route is how Atman can be used with other proteomics
-matrices, including log2 LFQ/intensity exports from MaxQuant-like workflows,
-Spectronaut protein-group quantity tables, DIA-NN protein-group matrices,
-SomaScan-style log2 abundance matrices, and already-normalized CSV/TSV
-protein matrices. Those adapters are intentionally thin: normalize source
-metadata, map samples and proteins, log-transform linear intensities when
-needed, and emit Atman's TSV schema.
+Adapters are intentionally thin: normalize source metadata, map samples and
+proteins, log-transform linear intensities when needed, and emit Atman's TSV
+schema. See `adapters/examples/` for tiny synthetic DIA-NN, MaxQuant, and
+SomaScan-style fixtures end-to-end.
+
+## Platform Quirks: Adapter Responsibilities
+
+Atman's canonical TSV absorbs scale (`abundance_unit` + `--log2-transform`),
+per-sample/per-assay QC flags, LOD (`below_lod`, `detection_limit`), panel/plate
+provenance, and peptide-level inputs for `msqrob`/`limma-DEqMS`. Analysis
+commands are agnostic to those.
+
+Analysis commands are **not** automatic on three fronts. The adapter (or your
+upstream pipeline) is responsible:
+
+1. **Cross-sample normalization.** `atman ingest-matrix --normalize
+   median|quantile|none` applies per-sample median centering or quantile
+   normalization on log-scale values. Default is `none`: Olink NPX arrives
+   pre-normalized, so pass-through is correct there. When `--normalize none`
+   is used and per-sample median abundance spans more than one log2 unit,
+   Atman emits a stderr warning recommending `median`. For SomaScan RFU,
+   MaxQuant/LFQ, DIA-NN, and Spectronaut exports, pass `--normalize median`
+   (or normalize upstream). VSN, plate bridging, and ComBat-style correction
+   are out of scope — do those upstream.
+2. **Missingness semantics (MNAR vs MCAR).** Atman drops missing cells per
+   protein/test. `below_lod` is recorded but the default tests still treat
+   it as MCAR. `atman de` refuses to run when the fraction of `below_lod=1`
+   rows among non-dropped measurements exceeds `--max-below-lod-fraction`
+   (default 0.5). Either impute upstream (e.g. Perseus-style min-shifted),
+   filter proteins to an acceptable observation rate, or pass
+   `--allow-censored` after confirming the chosen test is appropriate.
+   `decompose ica` exposes `--impute mean|none`; the other analysis
+   commands do not.
+3. **Protein-group ambiguity.** `proteins.tsv` is one `assay_id` per row.
+   MaxQuant `P1;P2;P3` protein-group rows and similar ambiguous identifiers
+   must be picked/split/deduped by the adapter. Atman will not disambiguate.
+
+For plate or batch effects, pass `batch` as a covariate to `atman de --test ols
+--design "~ condition + batch"`. There is no ComBat-style in-place correction.
 
 ## Commands
 
 ```text
-atman ingest             raw Olink Explore long CSV -> canonical TSVs
 atman ingest-matrix      wide protein matrix + metadata -> canonical TSVs
+                         (DIA-NN, Spectronaut, MaxQuant/LFQ, SomaScan, ...)
+atman ingest             platform-native parser (Olink Explore NPX)
+                         -> canonical TSVs
 atman align programs     cross-cohort program alignment + sensitivity sweep
 atman align bootstrap    subject-level bootstrap of cross-cohort archetype alignment
 atman decompose ica      multi-seed FastICA with seed-stability reporting
@@ -85,19 +130,25 @@ atman run                execute a plan YAML/JSON and emit a hash manifest
 
 ## Quick Start
 
+Pick one ingest path. The rest of the pipeline is platform-agnostic.
+
 ```bash
+# Option A — wide-matrix ingest (DIA-NN, Spectronaut, MaxQuant/LFQ, SomaScan, ...)
+atman ingest-matrix \
+    --matrix matrix.tsv --samples sample_metadata.tsv \
+    --orientation proteins-rows \
+    --platform diann_report \
+    --abundance-unit log2_diann_pg_quantity \
+    --assay-id-col Protein.Group --gene-col Genes \
+    --condition-col diagnosis \
+    --output-dir out
+
+# Option B — platform-native Olink Explore NPX ingest (bundled fixture)
 atman ingest \
     --platform olink-explore-ngs --parser dube \
     --output-dir out \
     example_data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
     example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
-
-# For already-normalized wide matrices, use atman ingest-matrix instead.
-# Example:
-# atman ingest-matrix --matrix matrix.tsv --samples sample_metadata.tsv \
-#     --orientation proteins-rows --platform diann_report \
-#     --abundance-unit log2_diann_pg_quantity --condition-col diagnosis \
-#     --assay-id-col Protein.Group --gene-col Genes --output-dir out
 
 atman qc --input-dir out --output-dir out --rule dube
 
@@ -322,7 +373,7 @@ The plan-level `atman run` manifest already covers its own provenance.
 ## Data Model
 
 Atman writes a small canonical TSV dataset between commands. This schema is
-also the adapter target for non-Olink sources:
+the adapter target for any proteomics source:
 
 - `samples.tsv`: sample IDs, subject IDs, conditions, controls, ingest order
 - `proteins.tsv`: assay IDs, UniProt IDs, gene symbols, panel metadata
@@ -344,7 +395,7 @@ rerun, or replaced independently.
 crates/atman-core/       core data model and algorithms
 crates/atman/            CLI, command orchestration, and file IO
 adapters/                canonical TSV adapter helpers and templates
-adapters/examples/       tiny synthetic non-Olink matrix examples
+adapters/examples/       tiny synthetic matrix examples (DIA-NN, MaxQuant, SomaScan)
 CITATION.cff             citation metadata for release archives
 docs/tutorial.md         package tutorial using the bundled Dube fixture
 docs/release-checklist.md

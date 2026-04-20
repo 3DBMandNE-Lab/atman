@@ -36,6 +36,31 @@ enum Orientation {
     SamplesRows,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+enum Normalize {
+    /// Pass abundances through unchanged. Appropriate for data that is
+    /// already cross-sample normalized (e.g. Olink NPX).
+    None,
+    /// Per-sample median centering on log-scale: subtract each sample's
+    /// median, add the mean of sample medians back. Preserves relative
+    /// protein differences within samples.
+    Median,
+    /// Force identical empirical distributions across samples. Complete-case
+    /// assays (observed in every sample) are quantile-normalized; remaining
+    /// assays fall back to median centering so no data is silently dropped.
+    Quantile,
+}
+
+impl Normalize {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Normalize::None => "none",
+            Normalize::Median => "median",
+            Normalize::Quantile => "quantile",
+        }
+    }
+}
+
 #[derive(ClapArgs, Debug)]
 pub struct Args {
     /// Wide abundance matrix, CSV or TSV.
@@ -110,6 +135,22 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     log2_transform: bool,
 
+    /// Cross-sample normalization applied after any `--log2-transform`.
+    /// Default `none` passes values through. `median` subtracts each sample's
+    /// median and adds the grand mean of sample medians. `quantile` forces
+    /// identical empirical distributions across samples for complete-case
+    /// assays and falls back to median centering for partially-observed
+    /// assays. Olink NPX is already normalized — use `none`. For SomaScan,
+    /// MaxQuant/LFQ, DIA-NN, and Spectronaut, either normalize upstream or
+    /// pass `--normalize median` (recommended default for log-scale MS).
+    #[arg(long, value_enum, default_value_t = Normalize::None)]
+    normalize: Normalize,
+
+    /// Disable the cross-sample-median-spread warning that fires when
+    /// `--normalize none` appears to be applied to un-normalized data.
+    #[arg(long, default_value_t = false)]
+    skip_normalization_check: bool,
+
     /// Do not copy measurements.tsv to qc_measurements.tsv.
     #[arg(long, default_value_t = false)]
     no_copy_measurements_to_qc: bool,
@@ -140,7 +181,7 @@ pub fn run(args: Args) -> Result<()> {
     let samples = read_table(&args.samples)?;
     let sample_ids = write_samples(&args, &samples)?;
 
-    let (proteins, measurements) = match args.orientation {
+    let (proteins, mut measurements) = match args.orientation {
         Orientation::ProteinsRows => {
             let proteins = protein_rows_from_table(&args, &matrix)?;
             let measurements =
@@ -158,6 +199,11 @@ pub fn run(args: Args) -> Result<()> {
             (proteins, measurements)
         }
     };
+
+    if !args.skip_normalization_check && args.normalize == Normalize::None {
+        warn_if_unnormalized(&measurements);
+    }
+    apply_normalization(&mut measurements, args.normalize)?;
 
     write_proteins(&args.output_dir.join("proteins.tsv"), platform, &proteins)?;
     write_measurements(
@@ -227,6 +273,8 @@ pub fn run(args: Args) -> Result<()> {
             "sample-type-col": args.sample_type_col,
             "is-control-col": args.is_control_col,
             "log2-transform": args.log2_transform,
+            "normalize": args.normalize.as_str(),
+            "skip-normalization-check": args.skip_normalization_check,
             "no-copy-measurements-to-qc": args.no_copy_measurements_to_qc,
         }),
         &input_dir_sha256,
@@ -599,4 +647,207 @@ fn parse_is_control(value: &str) -> bool {
 
 fn format_float(value: f64) -> String {
     format!("{value}")
+}
+
+/// Emit a stderr warning when per-sample medians span more than 1.0 log2
+/// unit (≈2× fold). Only meaningful for log-scale inputs; on linear data
+/// one log2 unit of median spread is still a strong sign of loading bias.
+fn warn_if_unnormalized(rows: &[MeasurementRow]) {
+    let medians = per_sample_medians(rows);
+    if medians.len() < 2 {
+        return;
+    }
+    let min = medians.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max = medians.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let spread = max - min;
+    if spread.is_finite() && spread > 1.0 {
+        eprintln!(
+            "ingest-matrix: WARNING per-sample median abundance spans {spread:.2} log2 units \
+across {} samples (max={max:.3}, min={min:.3}). This pattern usually reflects \
+un-normalized loading or intensity differences across samples. Re-run with \
+`--normalize median` (or `--normalize quantile`), normalize upstream, or pass \
+`--skip-normalization-check` to suppress this warning.",
+            medians.len()
+        );
+    }
+}
+
+fn per_sample_medians(rows: &[MeasurementRow]) -> Vec<f64> {
+    let mut by_sample: HashMap<String, Vec<f64>> = HashMap::new();
+    for r in rows.iter() {
+        if let Some(v) = r.abundance {
+            by_sample.entry(r.sample_id.clone()).or_default().push(v);
+        }
+    }
+    by_sample
+        .into_values()
+        .map(|mut v| median_in_place(&mut v))
+        .filter(|m| m.is_finite())
+        .collect()
+}
+
+fn median_in_place(values: &mut [f64]) -> f64 {
+    if values.is_empty() {
+        return f64::NAN;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = values.len();
+    if n % 2 == 1 {
+        values[n / 2]
+    } else {
+        (values[n / 2 - 1] + values[n / 2]) / 2.0
+    }
+}
+
+fn apply_normalization(rows: &mut [MeasurementRow], method: Normalize) -> Result<()> {
+    match method {
+        Normalize::None => Ok(()),
+        Normalize::Median => {
+            apply_median_normalization(rows);
+            Ok(())
+        }
+        Normalize::Quantile => apply_quantile_normalization(rows),
+    }
+}
+
+fn apply_median_normalization(rows: &mut [MeasurementRow]) {
+    let mut by_sample: HashMap<String, Vec<f64>> = HashMap::new();
+    for r in rows.iter() {
+        if let Some(v) = r.abundance {
+            by_sample.entry(r.sample_id.clone()).or_default().push(v);
+        }
+    }
+    if by_sample.is_empty() {
+        return;
+    }
+    let mut sample_medians: HashMap<String, f64> = HashMap::new();
+    for (sid, mut vs) in by_sample.into_iter() {
+        let m = median_in_place(&mut vs);
+        if m.is_finite() {
+            sample_medians.insert(sid, m);
+        }
+    }
+    if sample_medians.is_empty() {
+        return;
+    }
+    let grand: f64 =
+        sample_medians.values().copied().sum::<f64>() / sample_medians.len() as f64;
+    for r in rows.iter_mut() {
+        if let Some(v) = r.abundance.as_mut() {
+            if let Some(&m) = sample_medians.get(&r.sample_id) {
+                *v = *v - m + grand;
+            }
+        }
+    }
+}
+
+fn apply_quantile_normalization(rows: &mut [MeasurementRow]) -> Result<()> {
+    // Build sample and assay orderings.
+    let mut samples: BTreeSet<String> = BTreeSet::new();
+    let mut assays: BTreeSet<String> = BTreeSet::new();
+    for r in rows.iter() {
+        samples.insert(r.sample_id.clone());
+        assays.insert(r.assay_id.clone());
+    }
+    let sample_list: Vec<String> = samples.into_iter().collect();
+    let assay_list: Vec<String> = assays.into_iter().collect();
+    let sample_idx: HashMap<String, usize> = sample_list
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.clone(), i))
+        .collect();
+    let assay_idx: HashMap<String, usize> = assay_list
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.clone(), i))
+        .collect();
+    let n_s = sample_list.len();
+    let n_a = assay_list.len();
+    if n_s < 2 {
+        return Ok(());
+    }
+    let mut grid: Vec<Vec<Option<f64>>> = vec![vec![None; n_s]; n_a];
+    for r in rows.iter() {
+        let s = sample_idx[&r.sample_id];
+        let a = assay_idx[&r.assay_id];
+        grid[a][s] = r.abundance;
+    }
+    // Complete-case: assays with a value in every sample.
+    let complete_rows: Vec<usize> = (0..n_a)
+        .filter(|&a| grid[a].iter().all(|v| v.is_some()))
+        .collect();
+    let n_c = complete_rows.len();
+    if n_c < 2 {
+        eprintln!(
+            "ingest-matrix: quantile normalization fell back to median centering for every assay \
+(only {n_c} complete-case assay(s) across {n_s} samples)."
+        );
+        apply_median_normalization(rows);
+        return Ok(());
+    }
+    // Per-sample sorted vectors and argsort (which complete-row idx sits at each rank).
+    let mut sorted: Vec<Vec<f64>> = vec![Vec::with_capacity(n_c); n_s];
+    let mut argsort: Vec<Vec<usize>> = vec![Vec::with_capacity(n_c); n_s];
+    for s in 0..n_s {
+        let mut pairs: Vec<(usize, f64)> = complete_rows
+            .iter()
+            .map(|&a| (a, grid[a][s].unwrap()))
+            .collect();
+        pairs.sort_by(|x, y| x.1.partial_cmp(&y.1).unwrap_or(std::cmp::Ordering::Equal));
+        for (a_idx, v) in pairs {
+            sorted[s].push(v);
+            argsort[s].push(a_idx);
+        }
+    }
+    // Target per rank = mean across samples of the rank-th sorted value.
+    let target: Vec<f64> = (0..n_c)
+        .map(|r| sorted.iter().map(|row| row[r]).sum::<f64>() / n_s as f64)
+        .collect();
+    // Write target back into the grid for complete-case assays.
+    let mut new_values: HashMap<(usize, usize), f64> = HashMap::new();
+    for (s, ranks) in argsort.iter().enumerate() {
+        for (r, &a_idx) in ranks.iter().enumerate() {
+            new_values.insert((a_idx, s), target[r]);
+        }
+    }
+    // Median-fallback for partial-case assays: compute per-sample medians
+    // using ALL non-dropped values in grid (stable reference).
+    let sample_medians: Vec<f64> = (0..n_s)
+        .map(|s| {
+            let mut vs: Vec<f64> = grid.iter().filter_map(|row| row[s]).collect();
+            median_in_place(&mut vs)
+        })
+        .collect();
+    let finite_med: Vec<f64> = sample_medians
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite())
+        .collect();
+    let grand: f64 = if finite_med.is_empty() {
+        0.0
+    } else {
+        finite_med.iter().sum::<f64>() / finite_med.len() as f64
+    };
+    let n_partial = n_a - n_c;
+    if n_partial > 0 {
+        eprintln!(
+            "ingest-matrix: quantile-normalized {n_c} complete-case assay(s); \
+median-centered {n_partial} partial-case assay(s)."
+        );
+    }
+    for r in rows.iter_mut() {
+        if let Some(v) = r.abundance.as_mut() {
+            let s = sample_idx[&r.sample_id];
+            let a = assay_idx[&r.assay_id];
+            if let Some(nv) = new_values.get(&(a, s)) {
+                *v = *nv;
+            } else {
+                let m = sample_medians[s];
+                if m.is_finite() {
+                    *v = *v - m + grand;
+                }
+            }
+        }
+    }
+    Ok(())
 }
