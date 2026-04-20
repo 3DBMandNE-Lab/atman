@@ -149,12 +149,21 @@ m_contrasts <- 3L
 sidak_adj <- function(p) 1 - (1 - pmin(pmax(p, 0), 1))^m_contrasts
 
 rows <- list()
+# Tukey HSD uses the studentized range distribution — R's ptukey.
+# Statistic: q = |estimate| * sqrt(2) / se ; df = residual df ; nmeans = 3.
+tukey_adj <- function(est, se, df) {
+  q <- abs(est) * sqrt(2) / se
+  1 - ptukey(q, nmeans = 3L, df = df)
+}
+
+rows_sidak <- list()
+rows_tukey <- list()
 for (gene in c("RESPONDER", "NULLP")) {
   y <- wide[[gene]]
   cr <- fit_and_contrast(y)
   for (lbl in names(cr)) {
     r <- cr[[lbl]]
-    rows[[length(rows) + 1L]] <- data.frame(
+    rows_sidak[[length(rows_sidak) + 1L]] <- data.frame(
       gene_symbol = gene,
       comparison = lbl,
       estimate = r$est,
@@ -165,10 +174,27 @@ for (gene in c("RESPONDER", "NULLP")) {
       posthoc_adj_p = sidak_adj(r$p),
       stringsAsFactors = FALSE
     )
+    rows_tukey[[length(rows_tukey) + 1L]] <- data.frame(
+      gene_symbol = gene,
+      comparison = lbl,
+      estimate = r$est,
+      se = r$se,
+      t = r$t,
+      df = r$df,
+      posthoc_p = r$p,
+      posthoc_adj_p = tukey_adj(r$est, r$se, r$df),
+      stringsAsFactors = FALSE
+    )
   }
 }
-ref <- do.call(rbind, rows)
+ref <- do.call(rbind, rows_sidak)
 out_path <- file.path(fixture_dir, "posthoc_sidak_reference.tsv")
 write.table(ref, file = out_path, sep = "\t", quote = FALSE, row.names = FALSE)
 cat("wrote", out_path, "with", nrow(ref), "rows\n")
 print(ref)
+
+ref_tukey <- do.call(rbind, rows_tukey)
+out_path_tukey <- file.path(fixture_dir, "posthoc_tukey_reference.tsv")
+write.table(ref_tukey, file = out_path_tukey, sep = "\t", quote = FALSE, row.names = FALSE)
+cat("wrote", out_path_tukey, "with", nrow(ref_tukey), "rows\n")
+print(ref_tukey)

@@ -330,11 +330,38 @@ pub fn run(args: Args) -> Result<()> {
             }
         }
         "tukey" => {
-            anyhow::bail!(
-                "--post-hoc tukey is pending DEBT-5 (requires studentized range \
-                 distribution); use --post-hoc sidak with a complete pairwise \
-                 --contrast-list as a conservative fallback"
-            );
+            if args.test != "ols" {
+                anyhow::bail!(
+                    "--post-hoc tukey currently requires --test ols; got --test {:?}",
+                    args.test
+                );
+            }
+            if args.design.is_none() {
+                anyhow::bail!("--post-hoc tukey requires --design");
+            }
+            if args
+                .post_hoc_factor
+                .as_deref()
+                .or(args.omnibus_factor.as_deref())
+                .unwrap_or("")
+                .is_empty()
+            {
+                anyhow::bail!(
+                    "--post-hoc tukey requires --post-hoc-factor or --omnibus-factor"
+                );
+            }
+            if !(0.0..=1.0).contains(&args.alpha) {
+                anyhow::bail!("--alpha must be in [0, 1]");
+            }
+            if args.groups.is_some() {
+                anyhow::bail!(
+                    "--post-hoc tukey compares all pairs within the factor; \
+                     --groups is not allowed in this mode"
+                );
+            }
+            // `--contrast-list` is allowed (caller can restrict to a
+            // subset of pairs) but not required — tukey generates all
+            // ordered pairs from observed factor levels when absent.
         }
         "dunnett" => {
             anyhow::bail!(
@@ -379,6 +406,9 @@ pub fn run(args: Args) -> Result<()> {
     // --groups loop entirely.
     if args.post_hoc == "sidak" {
         return run_posthoc_sidak(args, started_at);
+    }
+    if args.post_hoc == "tukey" {
+        return run_posthoc_tukey(args, started_at);
     }
 
     // Parse comparisons after samples are available below; formula OLS can
@@ -3710,6 +3740,391 @@ fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()> {
         finished_at,
     )?;
     eprintln!("de posthoc sidak: sidecar={}", sidecar.display());
+    Ok(())
+}
+
+/// Dispatch for `--post-hoc tukey`: one OLS fit per protein, then
+/// every ordered pair `(level_a, level_b)` of the post-hoc factor,
+/// with p-values adjusted via Tukey's studentized range. Compared
+/// to sidak the only differences are (a) the contrast list defaults
+/// to every ordered pair of factor levels and (b) the adjustment
+/// uses `1 − ptukey(|estimate|·√2 / se, nmeans=k, df=residual)`
+/// rather than `1 − (1 − p)^m`.
+///
+/// Why `|estimate|·√2 / se`: the covariate-adjusted contrast SE
+/// from `contrast_inference` is `√(σ² · c'·(X'X)⁻¹·c)`; the
+/// Tukey–Kramer SE is that divided by `√2`, so the studentized
+/// range statistic `q = diff / SE_tukey = diff · √2 / SE_contrast`.
+/// This matches `emmeans(..., adjust = "tukey")` under arbitrary
+/// covariate adjustment and unbalanced `n_i`.
+fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()> {
+    use atman_core::de::{contrast_inference, ols, OlsOutcome};
+    use atman_core::studentized_range::ptukey;
+    std::fs::create_dir_all(&args.output_dir)
+        .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
+
+    let factor_name = args
+        .post_hoc_factor
+        .clone()
+        .or_else(|| args.omnibus_factor.clone())
+        .expect("validated non-empty above");
+
+    let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
+    let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
+    let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
+
+    let formula = args.design.as_deref().expect("validated above");
+    let terms = parse_design_terms(formula)?;
+    if terms.iter().any(|t| matches!(t, DesignTerm::Condition)) {
+        anyhow::bail!(
+            "--post-hoc tukey does not support `condition` in --design; \
+             include the factor {:?} directly (e.g. \"~ {} + age + sex\")",
+            factor_name,
+            factor_name
+        );
+    }
+    let cov_names = covariate_names_from_terms(&terms);
+    let cov_raw = if cov_names.is_empty() {
+        HashMap::new()
+    } else {
+        read_covariate_columns(&args.input_dir.join("samples.tsv"), &cov_names)?
+    };
+    let setup = OlsSetup {
+        terms,
+        cov_names,
+        cov_raw,
+        contrast: None,
+        label: formula.to_string(),
+    };
+    if !setup.cov_names.iter().any(|n| n == &factor_name) {
+        anyhow::bail!(
+            "--post-hoc-factor {:?} is not in --design covariates {:?}",
+            factor_name,
+            setup.cov_names
+        );
+    }
+
+    let (design_rows, design_labels, cov_kinds) =
+        build_posthoc_full_design(&samples, &setup, &factor_name)?;
+    if design_rows.is_empty() {
+        anyhow::bail!(
+            "no samples retained after complete-case filter on --design covariates"
+        );
+    }
+
+    let factor_cov_idx = setup
+        .cov_names
+        .iter()
+        .position(|n| n == &factor_name)
+        .expect("validated present");
+    let factor_levels: Vec<String> = match &cov_kinds[factor_cov_idx] {
+        CovKind::Categorical { levels } => levels.clone(),
+        _ => anyhow::bail!(
+            "--post-hoc-factor {:?} must be categorical; looks numeric in the data",
+            factor_name
+        ),
+    };
+    if factor_levels.len() < 2 {
+        anyhow::bail!(
+            "factor {:?} has only {} observed level(s); need at least 2",
+            factor_name,
+            factor_levels.len()
+        );
+    }
+
+    // Resolve the contrast list: either user-supplied subset, or
+    // every ordered pair of levels (the canonical Tukey HSD family).
+    let contrast_list: Vec<(String, String)> = match args.contrast_list.as_deref() {
+        Some(s) if !s.is_empty() => {
+            let list = parse_contrast_list(s)?;
+            for (a, b) in &list {
+                if !factor_levels.contains(a) {
+                    anyhow::bail!(
+                        "contrast level {:?} not among observed factor levels {:?}",
+                        a, factor_levels
+                    );
+                }
+                if !factor_levels.contains(b) {
+                    anyhow::bail!(
+                        "contrast level {:?} not among observed factor levels {:?}",
+                        b, factor_levels
+                    );
+                }
+            }
+            list
+        }
+        _ => {
+            let mut out = Vec::new();
+            for i in 0..factor_levels.len() {
+                for j in (i + 1)..factor_levels.len() {
+                    out.push((factor_levels[i].clone(), factor_levels[j].clone()));
+                }
+            }
+            out
+        }
+    };
+
+    let ref_level = factor_levels[0].clone();
+    let factor_col_by_level: HashMap<String, usize> = factor_levels
+        .iter()
+        .skip(1)
+        .map(|lvl| {
+            let label = format!("{factor_name}{lvl}");
+            let idx = design_labels
+                .iter()
+                .position(|l| l == &label)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "factor column {:?} missing from design labels {:?}",
+                        label, design_labels
+                    )
+                })?;
+            Ok::<_, anyhow::Error>((lvl.clone(), idx))
+        })
+        .collect::<Result<_>>()?;
+
+    // Abundance lookup by (panel, gene, sample).
+    let sample_by_id: HashMap<&str, &Sample> =
+        samples.iter().map(|s| (s.sample_id.as_str(), s)).collect();
+    let mut gene_meta: BTreeMap<(String, String), (String, Vec<String>)> = BTreeMap::new();
+    for p in &proteins {
+        if let (Some(gene), Some(panel)) = (p.gene_symbol.as_ref(), p.panel.as_ref()) {
+            gene_meta
+                .entry((panel.clone(), gene.clone()))
+                .or_insert_with(|| (p.assay_id.0.clone(), p.uniprot.clone()));
+        }
+    }
+    let mut cells_by_sample: HashMap<(String, String, String), f64> = HashMap::new();
+    let mut measured_features: BTreeSet<(String, String)> = BTreeSet::new();
+    for m in &measurements {
+        let abundance = match m.effective_abundance() {
+            Some(a) => a,
+            None => continue,
+        };
+        let s = match sample_by_id.get(m.sample_id.as_str()) {
+            Some(s) => *s,
+            None => continue,
+        };
+        if s.is_control {
+            continue;
+        }
+        let panel = match &m.panel {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+        let gene = match &m.gene_symbol {
+            Some(g) => g.clone(),
+            None => continue,
+        };
+        measured_features.insert((panel.clone(), gene.clone()));
+        cells_by_sample.insert((panel, gene, m.sample_id.clone()), abundance);
+    }
+
+    let k_nmeans = factor_levels.len();
+    let mut all_rows: Vec<DeResultRow> = Vec::new();
+    for (panel, gene) in &measured_features {
+        let (assay_id, uniprot) = gene_meta
+            .get(&(panel.clone(), gene.clone()))
+            .cloned()
+            .unwrap_or_else(|| (String::new(), vec![]));
+
+        let mut design_cc: Vec<Vec<f64>> = Vec::new();
+        let mut y_cc: Vec<f64> = Vec::new();
+        for (sid, row) in &design_rows {
+            if let Some(&abund) =
+                cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone()))
+            {
+                if abund.is_finite() {
+                    design_cc.push(row.clone());
+                    y_cc.push(abund);
+                }
+            }
+        }
+        let n = y_cc.len();
+        let contrast_label_for = |(a, b): &(String, String)| format!("{a}-{b}");
+        match ols(&design_cc, &y_cc, args.min_pairs) {
+            OlsOutcome::Computed(fit) => {
+                for (a, b) in &contrast_list {
+                    let c = build_posthoc_contrast_vector(
+                        a, b, &ref_level, &factor_col_by_level, design_labels.len(),
+                    );
+                    let (raw_p, est, se, t_stat, adj_p) = match contrast_inference(
+                        &design_cc, &fit.beta, &c, fit.sigma2, fit.df,
+                    ) {
+                        Some(r) => {
+                            let q = if r.se > 0.0 && r.se.is_finite() {
+                                r.estimate.abs() * std::f64::consts::SQRT_2 / r.se
+                            } else {
+                                f64::NAN
+                            };
+                            let p_tukey = if q.is_finite() && fit.df.is_finite() {
+                                (1.0 - ptukey(q, k_nmeans, fit.df)).clamp(0.0, 1.0)
+                            } else {
+                                f64::NAN
+                            };
+                            (r.p_value, r.estimate, r.se, r.t, p_tukey)
+                        }
+                        None => (f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN),
+                    };
+                    all_rows.push(DeResultRow {
+                        panel: panel.clone(),
+                        assay_id: assay_id.clone(),
+                        gene_symbol: gene.clone(),
+                        uniprot: uniprot.join(","),
+                        comparison: contrast_label_for(&(a.clone(), b.clone())),
+                        n_pairs: n,
+                        mean_a: None,
+                        mean_b: None,
+                        mean_diff: if est.is_finite() { Some(est) } else { None },
+                        t: if t_stat.is_finite() { Some(t_stat) } else { None },
+                        df: if fit.df.is_finite() { Some(fit.df) } else { None },
+                        p_value: if raw_p.is_finite() { Some(raw_p) } else { None },
+                        bh_q: None,
+                        effect_size: if est.is_finite() { Some(est) } else { None },
+                        effect_size_method: "ols-posthoc-tukey".into(),
+                        ci_low: if est.is_finite() && se.is_finite() {
+                            Some(est - 1.96 * se)
+                        } else {
+                            None
+                        },
+                        ci_high: if est.is_finite() && se.is_finite() {
+                            Some(est + 1.96 * se)
+                        } else {
+                            None
+                        },
+                        wilcoxon_p: None,
+                        wilcoxon_method: String::new(),
+                        median_diff: None,
+                        trimmed_mean_diff: None,
+                        skip_reason: String::new(),
+                        s2_trend: None,
+                        s2_prior: None,
+                        s2_posterior: None,
+                        df_prior: None,
+                        df_total: None,
+                        f_statistic: None,
+                        f_p_value: None,
+                        f_bh_q: None,
+                        lfc_threshold: None,
+                        n_peptides_observed: None,
+                        peptide_variance_ratio: None,
+                        ridge_lambda: None,
+                        method: "ols".into(),
+                        posthoc_method: "tukey".into(),
+                        posthoc_p: if raw_p.is_finite() { Some(raw_p) } else { None },
+                        posthoc_adj_p: if adj_p.is_finite() { Some(adj_p) } else { None },
+                    });
+                }
+            }
+            OlsOutcome::Skipped { reason, n } => {
+                let reason_str = match reason {
+                    SkipReason::InsufficientPairs => "insufficient_samples",
+                    SkipReason::ZeroVariance => "zero_variance",
+                    SkipReason::NonFiniteInput => "non_finite_input",
+                };
+                for (a, b) in &contrast_list {
+                    all_rows.push(DeResultRow {
+                        panel: panel.clone(),
+                        assay_id: assay_id.clone(),
+                        gene_symbol: gene.clone(),
+                        uniprot: uniprot.join(","),
+                        comparison: contrast_label_for(&(a.clone(), b.clone())),
+                        n_pairs: n,
+                        mean_a: None, mean_b: None, mean_diff: None,
+                        t: None, df: None, p_value: None, bh_q: None,
+                        effect_size: None,
+                        effect_size_method: "ols-posthoc-tukey".into(),
+                        ci_low: None, ci_high: None,
+                        wilcoxon_p: None, wilcoxon_method: String::new(),
+                        median_diff: None, trimmed_mean_diff: None,
+                        skip_reason: reason_str.into(),
+                        s2_trend: None, s2_prior: None, s2_posterior: None,
+                        df_prior: None, df_total: None,
+                        f_statistic: None, f_p_value: None, f_bh_q: None,
+                        lfc_threshold: None,
+                        n_peptides_observed: None, peptide_variance_ratio: None,
+                        ridge_lambda: None,
+                        method: "ols".into(),
+                        posthoc_method: "tukey".into(),
+                        posthoc_p: None, posthoc_adj_p: None,
+                    });
+                }
+            }
+        }
+    }
+
+    // BH-q per (comparison, panel) across proteins in the family.
+    let mut by_family: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+    for (i, r) in all_rows.iter().enumerate() {
+        by_family
+            .entry((r.comparison.clone(), r.panel.clone()))
+            .or_default()
+            .push(i);
+    }
+    for indices in by_family.values() {
+        let ps: Vec<Option<f64>> = indices.iter().map(|&i| all_rows[i].p_value).collect();
+        let qs = atman_core::bh_fdr(&ps);
+        for (j, &i) in indices.iter().enumerate() {
+            all_rows[i].bh_q = qs[j];
+        }
+    }
+    all_rows.sort_by(|a, b| {
+        a.comparison
+            .cmp(&b.comparison)
+            .then_with(|| a.panel.cmp(&b.panel))
+            .then_with(|| match (a.posthoc_adj_p, b.posthoc_adj_p) {
+                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| a.gene_symbol.cmp(&b.gene_symbol))
+    });
+
+    let results_path = args.output_dir.join("de_results.tsv");
+    write_de_results(&results_path, &all_rows)?;
+    let outputs = vec![results_path.clone()];
+    eprintln!(
+        "de posthoc tukey: factor={:?} pairs={} proteins={} rows={}",
+        factor_name,
+        contrast_list.len(),
+        measured_features.len(),
+        all_rows.len()
+    );
+
+    let finished_at = SystemTime::now();
+    let input_dir_sha256 = hash_canonical_inputs(
+        &args.input_dir,
+        &[
+            "qc_measurements.tsv",
+            "measurements.tsv",
+            "samples.tsv",
+            "proteins.tsv",
+        ],
+    )?;
+    let sidecar = sidecar_path_for(&results_path);
+    write_run_sidecar(
+        &sidecar,
+        "de",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "output-dir": args.output_dir.display().to_string(),
+            "test": "ols",
+            "design": args.design,
+            "groups": args.groups,
+            "min-pairs": args.min_pairs,
+            "post-hoc": args.post_hoc,
+            "post-hoc-factor": factor_name,
+            "contrast-list": args.contrast_list,
+            "alpha": args.alpha,
+            "omnibus-factor": args.omnibus_factor,
+        }),
+        &input_dir_sha256,
+        &outputs,
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("de posthoc tukey: sidecar={}", sidecar.display());
     Ok(())
 }
 

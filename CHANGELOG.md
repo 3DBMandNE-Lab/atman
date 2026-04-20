@@ -8,6 +8,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Tukey HSD post-hoc (`atman de --post-hoc tukey`).** Implements the
+  studentized range distribution from scratch in
+  `atman-core::studentized_range` via nested Gauss–Legendre
+  quadrature (128-node inner × 48-node outer) with Legendre zeros
+  computed from Bonnet's recursion — no external data tables. P-value
+  adjustment uses `1 − ptukey(|estimate|·√2 / SE, nmeans=k,
+  df=residual)`, which matches `emmeans(..., adjust = "tukey")` under
+  arbitrary covariate adjustment and unbalanced `n_i`. CLI auto-emits
+  all ordered pairs of the factor's observed levels unless
+  `--contrast-list` restricts the family. Parity to R's `ptukey` is
+  ≥ 3 decimals at canonical α=0.05 critical values for
+  `k ∈ {3, 4, 5}`; integration tests verify self-consistency of the
+  dispatch against `atman_core::ptukey` to floating-point precision
+  and magnitude on a 36-sample planted fixture (planted stage effect
+  recovers `adj_p < 0.05` on every pair; null protein stays
+  `adj_p > 0.10`). Closes DEBT-5.
 - **BCa CI + Shannon entropy for `atman align bootstrap`.** Retires the
   v1 deferral on the subject-level bootstrap. The summary now carries
   four new columns: `alignment_entropy` (bits of Shannon entropy over

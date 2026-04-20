@@ -142,34 +142,6 @@ fn posthoc_sidak_matches_r_lm_contrasts_to_6_decimals() {
 }
 
 #[test]
-fn posthoc_sidak_refuses_tukey_with_deferred_message() {
-    let tmp = tempfile::tempdir().unwrap();
-    let input = copy_fixture_to_canonical(tmp.path());
-    let output = tmp.path().join("refuse_out");
-    let out = run_atman(&[
-        "de",
-        "--input-dir",
-        input.to_str().unwrap(),
-        "--output-dir",
-        output.to_str().unwrap(),
-        "--test",
-        "ols",
-        "--design",
-        "~ stage + age",
-        "--post-hoc",
-        "tukey",
-        "--contrast-list",
-        "MCI-CN",
-        "--post-hoc-factor",
-        "stage",
-    ]);
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("tukey"), "unexpected stderr: {stderr}");
-    assert!(stderr.contains("DEBT-5"), "expected DEBT-5 note: {stderr}");
-}
-
-#[test]
 fn posthoc_sidak_refuses_unknown_factor_level() {
     let tmp = tempfile::tempdir().unwrap();
     let input = copy_fixture_to_canonical(tmp.path());

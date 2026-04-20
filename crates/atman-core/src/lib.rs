@@ -22,6 +22,7 @@ pub mod msqrob;
 pub mod qc;
 pub mod sample_id;
 pub mod stats;
+pub mod studentized_range;
 pub mod types;
 pub mod variance_decomposition;
 
