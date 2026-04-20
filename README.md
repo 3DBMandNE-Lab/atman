@@ -3,23 +3,44 @@
 [![CI](https://github.com/kevinj24fr/atman/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kevinj24fr/atman/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
 
-Atman is a standalone Rust command-line tool for reproducible, deterministic
-proteomics workflows across affinity and mass-spectrometry platforms. It ships
-wide-matrix and platform-native ingest paths, a canonical TSV interchange
-format, and analysis commands for differential abundance, decomposition,
-module testing, enrichment, asymmetry, and robustness summaries.
+Atman is a Rust command-line tool for proteomics workflows across
+affinity and mass-spectrometry platforms. It ships wide-matrix and
+platform-native ingest paths, a canonical TSV interchange format, and
+analysis commands for differential abundance, decomposition, module
+testing, enrichment, asymmetry, and robustness summaries.
+
+Atman builds on the reference statistics (limma, DEqMS, msqrob2,
+`car::Anova`, and base `lm + pairwise.t.test`) and validates each
+path to numerical parity against those references on published
+fixtures — see [Validation](#validation). Every invocation writes a
+SHA-256 hash manifest (`*.run.json`) next to its primary output so a
+run's resolved args, input hashes, output hashes, atman version, and
+git SHA stay attached to the artifact.
+
+**Data flow**
+
+```
+Input                  Atman stage                 Output
+-------------------------------------------------------------------
+raw NPX / matrix  ──▶  ingest / ingest-matrix  ──▶ canonical TSV
+canonical TSV     ──▶  qc / validate / report  ──▶ QC'd TSV + report
+QC'd TSV          ──▶  de / decompose / bench  ──▶ results.tsv
+any stage         ──▶  (every command)         ──▶ <output>.run.json
+                                                   (SHA-256 manifest)
+```
 
 Supported platforms: Olink Explore NGS, SomaScan, MaxQuant/LFQ, DIA-NN,
 Spectronaut, and any wide abundance matrix via `ingest-matrix` or a
 thin user-written adapter emitting the canonical TSV schema.
 
-Atman does not require a service, database, notebook runtime, or workflow
-system. The repository includes a Dube et al. 2023 Olink Explore fixture
-dataset so the package can test its raw-to-result reproduction path end to end,
-and `adapters/examples/` ships tiny synthetic fixtures for DIA-NN, MaxQuant,
-and SomaScan-style matrices.
+The repository ships the Dube et al. 2023 Olink Explore fixture so the
+raw-to-result reproduction path is tested end-to-end;
+`adapters/examples/` ships tiny synthetic fixtures for DIA-NN,
+MaxQuant, and SomaScan-style matrices.
 
 ## Install
+
+Install from source or container. Atman is not yet on crates.io.
 
 From source with stable Rust 1.94 or newer:
 
@@ -38,24 +59,71 @@ docker run --rm atman:1.0.0 --help
 
 ## Validation
 
-Atman's statistical tests are validated to numerical parity against
-canonical R references on published fixtures. Every reference file below
-ships in the repository; every reference script regenerates the reference
-TSV deterministically under a pinned R + Bioconductor version.
+Atman's tests are validated against R reference implementations on
+published fixtures. Every reference file ships in the repository and
+every reference script regenerates the reference TSV deterministically.
 
-| Test path | R reference | Fixture | Agreement | atman wall-clock |
+In the table, `Δ` means the element-wise absolute difference
+`abs(atman − R)` between atman's output column and the corresponding R
+column on the same protein/contrast.
+
+| Test path | R reference | Fixture | Agreement | Wall-clock |
 |---|---|---|---|---|
-| `de --test limma --peptide-metadata` (DEqMS trend) | Bioconductor `DEqMS::spectraCounteBayes` v1.26 | CPTAC Study 6 UPS1 spike-in (29-protein subset) | median per-protein `|atman − DEqMS|` = **0.000 log₂** (bit-for-bit match at 3 d.p. on every displayed protein) | 0.60 s |
-| `de --test msqrob` | `msqrob2::msqrob(~condition)` v1.16 via the canonical vignette workflow | CPTAC Study 6 UPS1 (30-protein subset from `statOmics/MSqRobData`) | median per-protein `|atman − msqrob2|` = **0.118 log₂** across 26 jointly-fitted proteins; **100% sign agreement** on all 11 signal proteins `\|effect\| ≥ 0.3 log₂`; 9/9 UPS1 proteins recover the expected negative direction | 0.01 s |
-| `de --test limma` (parametric eBayes, `trend=false`, `robust=false`) | `limma::eBayes` 3.x | 100-feature × 20-sample regression fixture | `\|atman − limma\|` < **1e-4** on `t`, `p_value`, `df_total`, `s2_post` | 0.06 s |
-| `de --post-hoc sidak --test ols` | `R lm()` + `pairwise.t.test(p.adjust = "bonferroni")` with Sidak re-derivation | Planted 3-level stage × 2-covariate fixture | `max abs diff` < **1e-6** on `estimate`, `posthoc_p`, `posthoc_adj_p` | 0.01 s |
-| `decompose variance --omnibus-factor` (Type III F) | `car::Anova(type = 3)` (Wald form) | Planted variance-attribution fixture | `max abs p diff` < **1e-6** | < 0.01 s |
-| Olink Explore NPX reproduction (`ingest`, `qc`, `matrix`, `fold-change`) | Dube et al. 2023 Scientific Data published tables | Dube heat-stress cohort (2 panels, 8 filtered NPX files, 8 log2-FC files) | filtered NPX files: **byte-exact** cell match; log2-FC files: match to **floating-point precision** (max delta 1.05e-15) | — |
+| `de --test limma --peptide-metadata` (DEqMS trend) | `DEqMS::spectraCounteBayes` | CPTAC Study 6 UPS1 spike-in (29-protein subset) | median per-protein `Δ` = **0.000 log₂** (three-decimal match on every displayed protein) | 0.60 s |
+| `de --test msqrob` | `msqrob2::msqrob(~condition)` via the QFeatures vignette workflow (log2 → median centering → median peptide summary → protein-level fit) | CPTAC Study 6 UPS1 (30-protein subset from `statOmics/MSqRobData`) | median per-protein `Δ` = **0.118 log₂** across 26 jointly-fitted proteins; **100% sign agreement** on all 11 signal proteins (`abs(effect) ≥ 0.3 log₂`); 9/9 UPS1 proteins recover the expected negative direction. See note below — atman and msqrob2 are different estimators on this comparison. | 0.01 s |
+| `de --test limma` (parametric eBayes, `trend=false`, `robust=false`) | `limma::eBayes` | 100-feature × 20-sample regression fixture | `Δ` < **1e-4** on `t`, `p_value`, `df_total`, `s2_post` | 0.06 s |
+| `de --post-hoc sidak --test ols` | `lm()` + `pairwise.t.test(p.adjust = "bonferroni")` with Sidak re-derivation | Planted 3-level `stage` × 2-covariate fixture | `max Δ` < **1e-6** on `estimate`, `posthoc_p`, `posthoc_adj_p` | 0.01 s |
+| `decompose variance --omnibus-factor` (Type III F) | `car::Anova(type = 3)` Wald form | Planted variance-attribution fixture | `max Δ p` < **1e-6** | < 0.01 s |
+| Olink Explore NPX reproduction (`ingest`, `qc`, `matrix`, `fold-change`) | Dube et al. 2023 Scientific Data published tables | Dube heat-stress cohort (2 panels, 8 filtered NPX files, 8 log2-FC files) | filtered NPX files: **byte-exact** cell match; log2-FC files: **floating-point precision** (max `Δ` = 1.05e-15) | — |
 
-Wall-clock numbers are end-to-end test times on the release build
-(Apple M-series, single thread), including fixture I/O and binary
-invocation. They are upper bounds on the analytical compute cost per
-fixture.
+Wall-clock numbers are end-to-end integration-test times on the
+release build, single-threaded, Apple M-series. They include fixture
+I/O and binary invocation and are upper bounds on the analytical
+compute cost per fixture.
+
+### Note on msqrob2 parity
+
+Atman's `--test msqrob` and msqrob2 in the canonical QFeatures vignette
+workflow are not the same estimator; the 0.118 log₂ median difference
+reflects the method choice rather than a numerical gap:
+
+- **msqrob2 here (aggregate-then-fit).** Peptides are summarised to one
+  value per (protein, sample) via `matrixStats::colMedians`, then
+  `msqrob(~condition)` fits per-protein OLS with empirical-Bayes
+  variance shrinkage.
+- **Atman (joint fit).** One peptide-level linear mixed model per
+  protein, random intercept per peptide, ridge penalty on non-intercept
+  fixed effects, REML 1D profile over `τ = σ²_peptide / σ²_res`, with
+  empirical-Bayes variance shrinkage across all fitted proteins.
+
+The substantive claims are sign agreement and spike-in recovery; the
+median-Δ is reported for transparency. The aggregate-then-fit path can
+be reproduced inside atman by first summarising peptides to proteins
+with `atman score modules --method median` and running
+`atman de --test ols`, at which point the two paths converge.
+
+### Reference environment
+
+Reference scripts live alongside the fixtures in
+`crates/atman/tests/fixtures/` and declare their package requirements
+in the script header:
+
+| Script | Packages |
+|---|---|
+| `deqms_cptac_reference.R` | limma (CRAN), DEqMS (Bioconductor ≥ 1.26), matrixStats |
+| `msqrob2_cptac_reference.R` | msqrob2 (Bioconductor ≥ 1.16), QFeatures, SummarizedExperiment |
+| `gen_limma_reference.R` | limma (CRAN) 3.x |
+| `posthoc_sidak_reference.R` | base R (`lm`, `pairwise.t.test`) |
+| `variance_type3_reference.R` | car (CRAN) |
+
+Reference TSVs committed in the repo were generated under
+R 4.3.x + Bioconductor 3.18. Pinning to an exact environment via
+`renv.lock` or a Dockerfile is a later pass; in the meantime the
+committed reference TSVs are what the parity tests diff against, so
+drift on the R side cannot affect CI.
+
+The parity assertions run on every `cargo test --workspace --release`;
+CI fails if any drifts.
 
 Reference scripts live alongside the fixtures in
 `crates/atman/tests/fixtures/`:
@@ -163,44 +231,22 @@ atman run                execute a plan YAML/JSON and emit a hash manifest
 
 ## Quick Start
 
-Pick one ingest path. The rest of the pipeline is platform-agnostic.
+Minimal end-to-end: ingest → validate → QC → paired-t DE. For the
+bundled Dube fixture:
 
 ```bash
-# Option A — wide-matrix ingest (DIA-NN, Spectronaut, MaxQuant/LFQ, SomaScan, ...)
-atman ingest-matrix \
-    --matrix matrix.tsv --samples sample_metadata.tsv \
-    --orientation proteins-rows \
-    --platform diann_report \
-    --abundance-unit log2_diann_pg_quantity \
-    --assay-id-col Protein.Group --gene-col Genes \
-    --condition-col diagnosis \
-    --output-dir out
-
-# Option B — platform-native Olink Explore NPX ingest (bundled fixture)
 atman ingest \
     --platform olink-explore-ngs --parser dube \
     --output-dir out \
     example_data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
     example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
 
-atman qc --input-dir out --output-dir out --rule dube
-
 atman validate \
     --input-dir out \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
     --min-pairs 5
 
-atman report qc \
-    --input-dir out \
-    --output-dir out/report
-
-atman matrix \
-    --input-dir out --output-dir out \
-    --format dube-wide --split-by panel
-
-atman fold-change \
-    --input-dir out --output-dir out \
-    --groups "PT2-PT1,PR2-PR1,PT2-PR2,PT1-PR1"
+atman qc --input-dir out --output-dir out --rule dube
 
 atman de \
     --input-dir out --output-dir out \
@@ -208,170 +254,37 @@ atman de \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
     --min-pairs 5
 
-# Covariate-adjusted OLS with formula-style design.
-atman de \
-    --input-dir out --output-dir out_ols \
-    --test ols \
-    --groups "Case-Control" \
-    --design "~ condition + age + sex + batch" \
-    --contrast conditionCase \
-    --min-pairs 5
-
-# Multi-level omnibus F-test: report a per-protein F for whether a
-# categorical factor (here: stage with 3 levels CN/MCI/AD) has ANY
-# effect, alongside the standard pairwise contrast. Emits
-# de_omnibus.tsv with BH-adjusted q within each (comparison, panel).
-atman de \
-    --input-dir out --output-dir out_ols_omnibus \
-    --test ols \
-    --groups "Case-Control" \
-    --design "~ condition + stage" \
-    --contrast conditionCase \
-    --omnibus-factor stage \
-    --min-pairs 5
-
-# Repeated-measures random-intercept model.
-atman de \
-    --input-dir out --output-dir out_mixed \
-    --test mixed \
-    --groups "PT2-PT1" \
-    --fixed "condition + age + sex" \
-    --random "1|subject_id" \
-    --min-pairs 5
-
-# limma-grade eBayes with parametric mean-variance trend and robust prior.
-atman de \
-    --input-dir out --output-dir out_limma \
-    --test limma \
-    --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
-    --paired-by participant \
-    --trend true --robust true \
-    --min-pairs 5
-
-# DEqMS peptide-count-weighted eBayes. Swaps the mean-variance trend
-# covariate for log(peptide_count + 1) via a tricube kernel smoother
-# (Zhu et al. 2020). Requires peptides.tsv for the peptide→protein
-# mapping; any protein missing from peptides.tsv gets count 0.
-atman de \
-    --input-dir out --output-dir out_deqms \
-    --test limma \
-    --peptide-metadata out/peptides.tsv \
-    --groups "Case-Control" \
-    --trend true \
-    --min-pairs 5
-
-# Cross-method consensus DE. Runs every listed method on the same
-# canonical inputs, Stouffer-combines per-method p-values within each
-# (comparison, protein), BH-FDRs across proteins, and assigns a
-# VALIDATED / PROVISIONAL / INSUFFICIENT grade based on ensemble_q +
-# sign consistency. Methods with missing inputs (msqrob without
-# --peptide-measurements, etc.) are auto-skipped, not an error.
-#
-# INTERPRETIVE CAVEAT. Ensemble is a within-dataset robustness check,
-# not independent-study meta-analysis. paired-t, welch-t, ols, mixed,
-# limma, and msqrob all share most of their signal on the same
-# measurement matrix, so Stouffer p-values are not the meta-analytic
-# combination of independent studies. Read VALIDATED as "the finding
-# survives method swap on this dataset," not "independently replicated."
-atman de \
-    --input-dir out --output-dir out_ensemble \
-    --test ensemble \
-    --ensemble-methods "paired-t,welch-t,limma,msqrob" \
-    --peptide-measurements out/peptide_measurements.tsv \
-    --peptide-metadata out/peptides.tsv \
-    --groups "PT2-PR2" \
-    --paired-by participant \
-    --min-pairs 5
-
-# TREAT (minimum-effect test) at log2-FC threshold 0.5.
-atman de \
-    --input-dir out --output-dir out_limma_treat \
-    --test limma \
-    --groups "PT1-PR1" \
-    --lfc-threshold 0.5 \
-    --min-pairs 5
-
-# msqrob peptide-level ridge mixed model. One model per protein over its
-# peptides, random intercept per peptide, ridge penalty on non-intercept
-# fixed effects. Requires peptide_measurements.tsv + peptides.tsv.
-atman de \
-    --input-dir out --output-dir out_msqrob \
-    --test msqrob \
-    --peptide-measurements out/peptide_measurements.tsv \
-    --peptide-metadata out/peptides.tsv \
-    --groups "Case-Control" \
-    --ridge-lambda 0.5 \
-    --min-peptides 2 \
-    --min-pairs 5
-
-atman bootstrap protein \
-    --input-dir out \
-    --groups "PT2-PT1" \
-    --test paired-t \
-    --n 2000 \
-    --seed 1 \
-    --output out/protein_bootstrap.tsv
-
-atman bootstrap module \
-    --input-dir out \
-    --modules-tsv modules.tsv \
-    --groups "PT2-PT1" \
-    --test paired-t \
-    --n 2000 \
-    --seed 1 \
-    --output out/module_bootstrap.tsv
-
-atman null \
-    --input-dir out \
-    --output-dir out/null \
-    --groups "PT2-PT1" \
-    --test paired-t \
-    --n 1000 \
-    --seed 1
-
-atman score modules \
-    --input-dir out \
-    --modules-tsv modules.tsv \
-    --method mean \
-    --output out/module_scores.tsv \
-    --canonical-output-dir out/module_score_canonical
-
-atman enrich ora \
-    --de-results out/de_results.tsv \
-    --gene-sets gene_sets.tsv \
-    --comparison "PT2-PT1" \
-    --output out/ora.tsv
-
-atman meta \
-    --inputs cohort1/de_results.tsv,cohort2/de_results.tsv \
-    --output meta.tsv
+# Provenance manifest written automatically alongside de_results.tsv:
+cat out/de_results.tsv.run.json | head -40
 ```
 
-Common outputs:
+Primary outputs after the `de` step: `de_results.tsv`, `de_report.tsv`,
+`de_results.tsv.run.json` (the SHA-256 sidecar). A full per-command
+output reference lives in the [Data Model](#data-model) section.
 
-- `measurements.tsv`, `qc_measurements.tsv`, `samples.tsv`, `proteins.tsv`
-- `peptide_measurements.tsv`, `peptides.tsv` (msqrob peptide-level input)
-- optional `validate_report.tsv`
-- `report/qc_summary.tsv`, `report/sample_qc.tsv`, `report/protein_qc.tsv`,
-  `report/condition_counts.tsv`
-- `<panel>_npx.csv`
-- `<panel>_log2_fc.csv`
-- `de_results.tsv`, `de_report.tsv`; OLS also writes `de_covariates.tsv` and
-  `de_design.tsv`
-- `de_results.tsv` appends effect-size, confidence-interval, Wilcoxon, median,
-  and trimmed-mean columns after the original DE fields
-- `protein_bootstrap.tsv`, `module_bootstrap.tsv`
-- `null/null_summary.tsv`, `null/empirical_p.tsv`
-- `module_scores.tsv`; optional module-score canonical TSVs for downstream DE
-- `ora.tsv`
-- `meta.tsv`
-- `de_ensemble.tsv` (ensemble mode): per-(comparison, protein)
-  cross-method agreement with `n_applied`, `n_significant`,
-  `n_sign_consistent`, `majority_sign`, `ensemble_p` (Stouffer),
-  `ensemble_q` (BH within comparison), `grade`
-  (VALIDATED / PROVISIONAL / INSUFFICIENT), `methods_applied`,
-  `methods_skipped`. `de_results.tsv` in ensemble mode additionally
-  tags every row with the emitting `method`.
+### Other ingest paths
+
+Wide matrices (DIA-NN, Spectronaut, MaxQuant/LFQ, SomaScan, or any
+log2-intensity export) land through `atman ingest-matrix` instead:
+
+```bash
+atman ingest-matrix \
+    --matrix matrix.tsv --samples sample_metadata.tsv \
+    --orientation proteins-rows \
+    --platform diann_report \
+    --abundance-unit log2_diann_pg_quantity \
+    --assay-id-col Protein.Group --gene-col Genes \
+    --condition-col diagnosis \
+    --normalize median \
+    --output-dir out
+```
+
+See [`docs/tutorial.md`](docs/tutorial.md) for the end-to-end Dube
+walkthrough and [`docs/recipes.md`](docs/recipes.md) for the DE test
+cookbook — OLS formulas, mixed models, limma + DEqMS, msqrob, TREAT,
+post-hoc Sidak / Tukey / Dunnett, cross-method ensemble, bootstrap
+intervals, null calibration, module scoring, ORA, meta-analysis, and
+the `atman run` plan-manifest format.
 
 ## Reproducibility Check
 
@@ -409,6 +322,52 @@ the driver script. Commands with sidecar output: `ingest-matrix`,
 `align programs`, `coupling`, `null`, `enrich gprofiler`, `de`, `bootstrap
 protein`, `bootstrap module`, `bootstrap program`, `meta`, and `ratio`.
 The plan-level `atman run` manifest already covers its own provenance.
+
+### Plan manifests (`atman run`)
+
+For end-to-end reproducibility beyond the single-command sidecar,
+`atman run` executes a declarative plan file (YAML or JSON) stage by
+stage and writes `plan_manifest.tsv` with SHA-256 hashes of every
+declared input and output per stage, atman version, OS/arch, exit
+code, and per-stage wall-clock. If the plan content changes, atman
+refuses to overwrite the manifest unless the plan's `plan_commit` tag
+is bumped (or `--allow-drift` is passed). Full schema and example in
+[`docs/recipes.md`](docs/recipes.md).
+
+### Network-dependent commands
+
+One command reaches external infrastructure: `atman enrich gprofiler`
+calls the live g:Profiler REST endpoint. Responses are cached to disk
+keyed by a SHA-256 of the canonicalized request (genes, background,
+organism, sources, threshold method, user threshold, pinned ontology
+version), and `--offline` fails on cache miss so a pre-populated cache
+reproduces byte-identical runs without a network round-trip. For a
+fully-offline pipeline, populate the cache once and then run with
+`--offline`.
+
+All other commands read only local files.
+
+## Non-goals
+
+Atman deliberately does not cover:
+
+- **Single-cell proteomics.** No cell-level quantification, no
+  SCP-specific normalization; the data model is sample × protein.
+- **Bayesian DE / posteriors.** All variance shrinkage is
+  empirical-Bayes (limma-style `fit_f_dist`), not hierarchical
+  posterior sampling. No MCMC.
+- **Network inference.** `atman network influence` scores hub
+  centrality on a given adjacency; it does not learn the adjacency.
+  Graphical-lasso / causal-discovery are out of scope.
+- **MS raw file handling.** Ingest starts from peptide-level or
+  protein-level matrices (MaxQuant `peptides.txt`, DIA-NN report,
+  Spectronaut report, SomaScan RFU, Olink NPX). Upstream feature
+  extraction (MaxQuant / FragPipe / DIA-NN) is assumed.
+- **VSN, ComBat-style batch correction, plate bridging.** Explicit
+  §Adapter Responsibilities above; belongs in the adapter or
+  upstream pipeline.
+- **Survival analysis, Cox regression, Kaplan-Meier.** Outside the
+  DE-focused scope.
 
 ## Data Model
 

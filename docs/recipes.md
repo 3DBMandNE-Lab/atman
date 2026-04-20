@@ -1,0 +1,278 @@
+# Atman DE Recipes
+
+Atman's `de` command ships ten test paths. The README Quick Start covers
+`paired-t` end-to-end; this file is the cookbook for everything else.
+All recipes assume `out/` already contains the canonical TSVs produced
+by `atman ingest` or `atman ingest-matrix` plus the appropriate QC,
+validate, and report steps from the Quick Start.
+
+## Two-group paired and unpaired
+
+```bash
+# Paired (already in the Quick Start; repeated here for context)
+atman de \
+    --input-dir out --output-dir out \
+    --test paired-t --paired-by participant \
+    --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
+    --min-pairs 5
+
+# Welch two-sample (unequal variance)
+atman de \
+    --input-dir out --output-dir out_welch \
+    --test welch-t \
+    --groups "Case-Control" \
+    --min-pairs 5
+```
+
+## Covariate-adjusted OLS
+
+```bash
+atman de \
+    --input-dir out --output-dir out_ols \
+    --test ols \
+    --groups "Case-Control" \
+    --design "~ condition + age + sex + batch" \
+    --contrast conditionCase \
+    --min-pairs 5
+```
+
+## Multi-level omnibus F
+
+Reports per-protein F for whether a categorical factor (here `stage`
+with 3 levels CN/MCI/AD) has **any** effect, alongside the standard
+pairwise contrast. Emits `de_omnibus.tsv` with BH-adjusted q within each
+`(comparison, panel)`.
+
+```bash
+atman de \
+    --input-dir out --output-dir out_ols_omnibus \
+    --test ols \
+    --groups "Case-Control" \
+    --design "~ condition + stage" \
+    --contrast conditionCase \
+    --omnibus-factor stage \
+    --min-pairs 5
+```
+
+## Post-hoc pairwise contrasts (Sidak / Tukey / Dunnett)
+
+Single OLS fit, all `choose(k, 2)` pairwise contrasts corrected for
+multiple comparisons.
+
+```bash
+# Sidak step-down
+atman de --post-hoc sidak \
+    --input-dir out --output-dir out_sidak \
+    --test ols --groups "stage" \
+    --design "~ stage + age + sex" \
+    --min-pairs 5
+
+# Tukey HSD via from-scratch studentized range
+atman de --post-hoc tukey  --input-dir out --output-dir out_tukey ...
+
+# Dunnett against a control level (balanced or Dunnett–Hsu unbalanced,
+# auto-detected from observed per-group n)
+atman de --post-hoc dunnett --control-level CN \
+    --input-dir out --output-dir out_dunnett ...
+```
+
+## Repeated-measures mixed model
+
+```bash
+atman de \
+    --input-dir out --output-dir out_mixed \
+    --test mixed \
+    --groups "PT2-PT1" \
+    --fixed "condition + age + sex" \
+    --random "1|subject_id" \
+    --min-pairs 5
+```
+
+## limma eBayes + TREAT
+
+```bash
+# limma-grade eBayes with parametric mean-variance trend + robust prior
+atman de \
+    --input-dir out --output-dir out_limma \
+    --test limma \
+    --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
+    --paired-by participant \
+    --trend true --robust true \
+    --min-pairs 5
+
+# TREAT (minimum-effect test) at log2-FC threshold 0.5
+atman de \
+    --input-dir out --output-dir out_limma_treat \
+    --test limma \
+    --groups "PT1-PR1" \
+    --lfc-threshold 0.5 \
+    --min-pairs 5
+```
+
+## DEqMS (peptide-count-weighted trend)
+
+Swaps limma's mean-variance trend covariate for `log(peptide_count + 1)`
+via a tricube kernel smoother (Zhu et al. 2020). Requires `peptides.tsv`
+for the peptide→protein mapping; proteins absent from the catalog get
+count 0.
+
+```bash
+atman de \
+    --input-dir out --output-dir out_deqms \
+    --test limma \
+    --peptide-metadata out/peptides.tsv \
+    --groups "Case-Control" \
+    --trend true \
+    --min-pairs 5
+```
+
+## msqrob (peptide-level ridge mixed model)
+
+One protein → one model. Peptide-level observations with a random
+intercept per peptide and a ridge penalty on non-intercept fixed
+effects. Requires both `peptide_measurements.tsv` and `peptides.tsv`.
+
+```bash
+atman de \
+    --input-dir out --output-dir out_msqrob \
+    --test msqrob \
+    --peptide-measurements out/peptide_measurements.tsv \
+    --peptide-metadata out/peptides.tsv \
+    --groups "Case-Control" \
+    --ridge-lambda 0.5 \
+    --min-peptides 2 \
+    --min-pairs 5
+```
+
+## Cross-method ensemble consensus
+
+Runs every listed method on the same canonical inputs, Stouffer-combines
+per-method p-values within each `(comparison, protein)`, BH-FDRs across
+proteins, and assigns a VALIDATED / PROVISIONAL / INSUFFICIENT grade
+based on ensemble q + sign consistency. Methods with missing inputs
+(msqrob without `--peptide-measurements`, etc.) are auto-skipped, not an
+error.
+
+**Interpretive caveat.** Ensemble is a within-dataset robustness check,
+not independent-study meta-analysis. `paired-t`, `welch-t`, `ols`,
+`mixed`, `limma`, and `msqrob` all share most of their signal on the
+same measurement matrix, so Stouffer p-values do not combine independent
+evidence. Read VALIDATED as "the finding survives method swap on this
+dataset," not "independently replicated."
+
+```bash
+atman de \
+    --input-dir out --output-dir out_ensemble \
+    --test ensemble \
+    --ensemble-methods "paired-t,welch-t,limma,msqrob" \
+    --peptide-measurements out/peptide_measurements.tsv \
+    --peptide-metadata out/peptides.tsv \
+    --groups "PT2-PR2" \
+    --paired-by participant \
+    --min-pairs 5
+```
+
+## Protein-level bootstrap uncertainty
+
+```bash
+atman bootstrap protein \
+    --input-dir out \
+    --groups "PT2-PT1" \
+    --test paired-t \
+    --n 2000 \
+    --seed 1 \
+    --output out/protein_bootstrap.tsv
+```
+
+## Module-level bootstrap uncertainty
+
+```bash
+atman bootstrap module \
+    --input-dir out \
+    --modules-tsv modules.tsv \
+    --groups "PT2-PT1" \
+    --test paired-t \
+    --n 2000 \
+    --seed 1 \
+    --output out/module_bootstrap.tsv
+```
+
+## Permutation / sign-flip null calibration
+
+```bash
+atman null \
+    --input-dir out \
+    --output-dir out/null \
+    --groups "PT2-PT1" \
+    --test paired-t \
+    --n 1000 \
+    --seed 1
+```
+
+## Module scoring → module-level DE
+
+```bash
+# Score modules per sample (mean, median, z-score, or PC1)
+atman score modules \
+    --input-dir out \
+    --modules-tsv modules.tsv \
+    --method mean \
+    --output out/module_scores.tsv \
+    --canonical-output-dir out/module_score_canonical
+
+# Module-level DE uses the canonical TSVs written above
+atman module-de \
+    --input-dir out/module_score_canonical \
+    --groups "PT2-PT1" \
+    --test paired-t \
+    --output out/module_de.tsv
+```
+
+## ORA enrichment
+
+```bash
+atman enrich ora \
+    --de-results out/de_results.tsv \
+    --gene-sets gene_sets.tsv \
+    --comparison "PT2-PT1" \
+    --output out/ora.tsv
+```
+
+## Cross-cohort meta-analysis
+
+```bash
+atman meta \
+    --inputs cohort1/de_results.tsv,cohort2/de_results.tsv \
+    --output meta.tsv
+```
+
+## Plan-manifest reproducibility (`atman run`)
+
+Declarative alternative to a shell script. Writes
+`plan_manifest.tsv` with SHA-256 of every declared input and output
+per stage, atman version, OS/arch, and per-stage wall-clock. Refuses
+to overwrite a manifest whose `plan_commit` hasn't been bumped when
+the plan content changes (unless `--allow-drift` is passed).
+
+```yaml
+# plan.yaml
+plan_commit: "2026-04-20.v1"
+stages:
+  - name: ingest
+    inputs: [example_data/dube_heat_2023/*.csv]
+    outputs: [out/samples.tsv, out/proteins.tsv, out/measurements.tsv]
+    cmd: >
+      atman ingest --platform olink-explore-ngs --parser dube
+      --output-dir out example_data/dube_heat_2023/*.csv
+  - name: de
+    inputs: [out/qc_measurements.tsv, out/samples.tsv]
+    outputs: [out/de_results.tsv, out/de_report.tsv]
+    cmd: >
+      atman de --input-dir out --output-dir out
+      --test paired-t --paired-by participant
+      --groups "PT1-PR1,PR2-PR1" --min-pairs 5
+```
+
+```bash
+atman run --plan plan.yaml --manifest out/plan_manifest.tsv
+```
