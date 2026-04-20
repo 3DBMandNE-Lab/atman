@@ -517,6 +517,61 @@ Acceptance:
   bundled Dube heat-acclimation cohort — HSPA1A, HSPB1, DNAJB1 all
   graded VALIDATED in PT2-PR2.
 
+## Phase 8: Decomposition Rigor
+
+### 17. Archetype null calibration (`atman decompose null`) (implemented)
+
+Permutation-null calibration for FastICA archetype stability. Runs
+multi-seed ICASSO stability on the real matrix and on `--n-perm`
+null matrices (sample-shuffle / protein-shuffle / gaussian-matched
+modes), records each null run's max-across-programs stability, and
+reports a per-program permutation p-value with `(1+count)/(1+n_perm)`
+correction plus BH-q across programs.
+
+Command:
+
+```bash
+atman decompose null \
+  --input-dir out --output out/archetype_null.tsv \
+  --k 20 --n-perm 200 --n-seeds 3 --seed 20260418 \
+  --null-mode protein-shuffle --top-n 20 \
+  --max-missing-fraction 0.5 --impute mean
+```
+
+Null modes:
+
+- `sample-shuffle`: permute the row order of the sample × protein
+  matrix. Weakest null — preserves inter-protein covariance, so ICA
+  finds the same archetypes in the null. Useful only for testing
+  activation-sample coherence.
+- `protein-shuffle`: independently permute samples within each
+  protein column. Destroys inter-protein covariance. Recommended
+  default null for archetype-existence questions.
+- `gaussian-matched`: per-protein `N(μ, σ²)` with matched first two
+  moments. Strongest null — no structure beyond mean/variance.
+
+Acceptance:
+
+- Deterministic under `--seed`; every null iteration derives its
+  sub-seed from SplitMix64`(seed, iter)`.
+- Output includes `decision` column (`signal` when `null_q <
+  --q-threshold`, else `noise`); threshold configurable via
+  `--q-threshold` (default 0.05).
+- Run sidecar captures `null-mode`, `n-perm`, `seed`, `top-n`,
+  `q-threshold`, and SHA-256 of the output TSV.
+- Unit tests verify null-matrix generators preserve expected
+  marginal invariants (row permutation preserves column multisets,
+  column shuffle ditto per-column, Gaussian-matched recovers mean
+  and variance within tolerance at n=2000).
+- Integration tests cover synthetic planted-signal schema +
+  determinism + k-size refusal, plus an end-to-end smoke test on
+  the bundled Dube cohort.
+
+Why it matters: no standalone proteomics ICA tool ships archetype-
+level permutation null calibration. MOFA, consICA, fastICA+ICASSO
+rely on user-side scripting. Atman now provides it as a first-class
+CLI surface with sidecar provenance.
+
 ## Implemented Build Order
 
 1. `atman validate`
@@ -535,6 +590,7 @@ Acceptance:
 14. Peptide-level ridge mixed model
 15. DEqMS peptide-count-weighted variance
 16. Cross-method ensemble DE dispatcher
+17. Archetype null calibration
 
 ## Release Readiness Status
 

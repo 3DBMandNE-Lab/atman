@@ -58,6 +58,7 @@ atman ingest             raw Olink Explore long CSV -> canonical TSVs
 atman ingest-matrix      wide protein matrix + metadata -> canonical TSVs
 atman align programs     cross-cohort program alignment + sensitivity sweep
 atman decompose ica      multi-seed FastICA with seed-stability reporting
+atman decompose null     permutation-null calibration of archetype stability
 atman validate           check canonical TSV schema, keys, and sample support
 atman qc                 apply QC masking rules
 atman report qc          summarize QC, missingness, and condition support

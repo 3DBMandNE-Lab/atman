@@ -8,6 +8,23 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Archetype null calibration (`atman decompose null`).** Permutation
+  null for FastICA archetype stability: runs the multi-seed Jaccard
+  stability metric on the real matrix, then runs it again on
+  `--n-perm` null matrices generated via `--null-mode` (one of
+  `sample-shuffle`, `protein-shuffle`, `gaussian-matched`). Each null
+  iteration contributes its max-across-programs stability to a null
+  distribution; per-program p-value uses the `(1 + count)/(1 + n_perm)`
+  permutation correction, BH-adjusted across programs within the run
+  to produce `null_q`. Output `archetype_null.tsv` columns:
+  `program, observed_stability, null_stability_mean,
+  null_stability_p95, null_p, null_q, decision` (decision is
+  `signal` when `null_q < --q-threshold` (default 0.05), else
+  `noise`). Fully deterministic under `--seed`; each null iteration
+  derives its sub-seed from SplitMix64`(seed, iter)`. Closes P1 of
+  the decomposition methods track ("are these archetypes just
+  ICA-finds-whatever?"). Directly addresses a reviewer defense that
+  `atman decompose ica` alone could not provide.
 - **Cross-method consensus DE (`atman de --test ensemble`).** Runs
   every applicable DE method on the same canonical inputs — paired-t,
   welch-t, ols, mixed, limma (with or without DEqMS), msqrob — and
