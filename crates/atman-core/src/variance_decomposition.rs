@@ -10,30 +10,36 @@
 //! when no grouping factor is supplied) as the numerical engine; this
 //! module adds only the partitioning math on top.
 //!
-//! **v1 variance partition (Type I, projection-based).** For a fixed
-//! factor `f` whose columns in the design matrix span `c..d`, the
-//! variance attributable to `f` is
+//! **Type III sums of squares.** For each fixed factor `f` whose
+//! columns in the design matrix span `c..d`, the variance
+//! attributable to `f` after controlling for every other term is
 //!
 //! ```text
-//! var_f = Var_over_samples( X[:, c..d] · β[c..d] )
+//! SS_III(f) = βᵀ_f · [(XᵀX)⁻¹_{ff}]⁻¹ · β_f
+//! F_f       = SS_III(f) / (k · σ²_residual)
 //! ```
 //!
-//! (sample variance with `ddof = 1`). Random-intercept variance is
-//! `σ²_u = variance_ratio · σ²_res`. Residual variance is `σ²_res`.
-//! The intraclass correlation for the random factor is
-//! `ICC = σ²_u / (σ²_u + σ²_res)`. This partition is not guaranteed
-//! to sum to the total activation variance when factors are
-//! correlated; the `total_var` column reports the empirical total so
-//! users can see the gap explicitly. Type II / III sums of squares
-//! (correlation-adjusted partitions) are a documented follow-on.
+//! where `k = d − c` is the factor's degrees of freedom. This is
+//! the Wald form of the classical Type III F-test: the variance
+//! reduction you'd observe by dropping the factor from the full
+//! model, partialling out every other covariate. It matches R's
+//! `car::Anova(lm, type = 3)` on balanced OLS designs.
 //!
-//! Per-fixed-coefficient Wald t-statistics and two-sided p-values
-//! come straight from the underlying fit. Factor-level omnibus
-//! F-tests are a deliberate v1 scope trim — callers that want them
-//! can apply `atman de --test mixed --contrast`-style logic to the
-//! per-coefficient output.
+//! Random-intercept variance is `σ²_u = variance_ratio · σ²_res`.
+//! Residual variance is `σ²_res`. The intraclass correlation for
+//! the random factor is `ICC = σ²_u / (σ²_u + σ²_res)`.
+//!
+//! In the mixed-effects case (`group_labels = Some(...)`), the
+//! Type III F above uses the *OLS* Hessian `XᵀX` rather than the
+//! GLS Hessian `Xᵀ V⁻¹ X`. Proper mixed-model Type III requires
+//! the full GLS normal-equations matrix, which the current
+//! `mixed_random_intercept` entry point does not expose; for mixed
+//! fits the F and p-value are reported as NaN and the per-coefficient
+//! max-|t| / min-p summaries remain the only factor-level inference.
+//! Users who need mixed Type III should run `atman de --test mixed`
+//! and apply the contrast machinery there.
 
-use crate::de::{mixed_random_intercept, ols, OlsOutcome};
+use crate::de::{mixed_random_intercept, ols, omnibus_f_test, OlsOutcome};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FixedFactor {
@@ -68,7 +74,18 @@ pub struct VarianceRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FactorRow {
     pub name: String,
-    pub var: f64,
+    /// Type III sum of squares (`βᵀ_f · [(XᵀX)⁻¹_{ff}]⁻¹ · β_f`).
+    /// `NaN` for mixed fits (see module docstring).
+    pub ss_type3: f64,
+    /// Factor-level omnibus F-statistic under the Type III test.
+    /// `NaN` for mixed fits.
+    pub f_statistic: f64,
+    pub df_num: usize,
+    pub df_den: f64,
+    /// Two-sided F-distribution p-value of the Type III omnibus.
+    pub p_value: f64,
+    /// Max `|t|` across the factor's per-coefficient Wald stats.
+    /// Kept for quick per-coefficient inspection.
     pub max_abs_t: f64,
     pub min_p: f64,
     pub n_coefficients: usize,
@@ -148,7 +165,11 @@ pub fn decompose_archetype_variance(
                         .iter()
                         .map(|f| FactorRow {
                             name: f.name.clone(),
-                            var: f64::NAN,
+                            ss_type3: f64::NAN,
+                            f_statistic: f64::NAN,
+                            df_num: f.columns.end - f.columns.start,
+                            df_den: f64::NAN,
+                            p_value: f64::NAN,
                             max_abs_t: f64::NAN,
                             min_p: f64::NAN,
                             n_coefficients: f.columns.end - f.columns.start,
@@ -170,18 +191,44 @@ pub fn decompose_archetype_variance(
                 f64::NAN
             }
         });
+        let is_mixed = group_labels.is_some();
         let per_factor: Vec<FactorRow> = fixed_factors
             .iter()
             .map(|f| {
-                let var = factor_projection_variance(design, &fit.beta, f.columns.clone());
                 let (max_abs_t, min_p) = summarize_factor_coefficients(
                     &fit.t,
                     &fit.p_value,
                     f.columns.clone(),
                 );
+                let cols: Vec<usize> = f.columns.clone().collect();
+                // Type III Wald F via the OLS Hessian. For mixed
+                // fits this is NOT correct (would need the GLS
+                // Hessian), so we emit NaN and keep the per-coef
+                // summary as the only factor-level signal.
+                let (ss_type3, f_stat, df_num, df_den, p_value) = if is_mixed {
+                    (
+                        f64::NAN,
+                        f64::NAN,
+                        cols.len(),
+                        fit.df,
+                        f64::NAN,
+                    )
+                } else {
+                    match omnibus_f_test(design, &fit.beta, &cols, fit.sigma2, fit.df) {
+                        Some(om) => {
+                            let ss = om.f_statistic * (om.df_num as f64) * fit.sigma2;
+                            (ss, om.f_statistic, om.df_num, om.df_den, om.p_value)
+                        }
+                        None => (f64::NAN, f64::NAN, cols.len(), fit.df, f64::NAN),
+                    }
+                };
                 FactorRow {
                     name: f.name.clone(),
-                    var,
+                    ss_type3,
+                    f_statistic: f_stat,
+                    df_num,
+                    df_den,
+                    p_value,
                     max_abs_t,
                     min_p,
                     n_coefficients: f.columns.end - f.columns.start,
@@ -209,23 +256,6 @@ fn sample_variance(values: &[f64]) -> f64 {
     }
     let mean: f64 = values.iter().sum::<f64>() / n as f64;
     values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1) as f64
-}
-
-fn factor_projection_variance(
-    design: &[Vec<f64>],
-    beta: &[f64],
-    columns: std::ops::Range<usize>,
-) -> f64 {
-    let projected: Vec<f64> = design
-        .iter()
-        .map(|row| {
-            columns
-                .clone()
-                .map(|c| row[c] * beta[c])
-                .sum::<f64>()
-        })
-        .collect();
-    sample_variance(&projected)
 }
 
 fn summarize_factor_coefficients(
@@ -262,20 +292,52 @@ mod tests {
     }
 
     #[test]
-    fn factor_projection_picks_up_planted_contribution() {
-        // y = 2*x1 + 0*x2; variance of (2*x1) across samples equals 4*var(x1).
-        let design = vec![
-            vec![1.0, 0.0],
-            vec![2.0, 0.0],
-            vec![3.0, 0.0],
-            vec![4.0, 0.0],
-            vec![5.0, 0.0],
-        ];
-        let beta = vec![2.0, 0.0];
-        let var1 = factor_projection_variance(&design, &beta, 0..1);
-        let var2 = factor_projection_variance(&design, &beta, 1..2);
-        assert!((var1 - 4.0 * 2.5).abs() < 1e-12, "got {var1}");
-        assert!(var2.abs() < 1e-12, "got {var2}");
+    fn type3_ss_matches_wald_form_on_single_column_factor() {
+        // For a one-column factor, the Type III F equals (β / se)²
+        // and SS_III = F · σ² — both derivable from the OLS fit
+        // the test itself builds. Ensures the omnibus_f_test path
+        // agrees with the t² identity.
+        let design: Vec<Vec<f64>> = (0..10)
+            .map(|i| vec![1.0, if i < 5 { 0.0 } else { 1.0 }])
+            .collect();
+        let y: Vec<f64> = (0..10)
+            .map(|i| if i < 5 { 0.0 } else { 2.5 } + (i as f64 * 0.1).sin() * 0.2)
+            .collect();
+        let factors = vec![FixedFactor {
+            name: "condition".into(),
+            columns: 1..2,
+        }];
+        let ids = vec!["archetype_01".into()];
+        let rows = decompose_archetype_variance(
+            &ids,
+            &[y],
+            &design,
+            &factors,
+            None,
+            2,
+        )
+        .unwrap();
+        let r = &rows[0].per_factor[0];
+        assert_eq!(r.df_num, 1);
+        // F = t²: the omnibus on a single column must reproduce the
+        // squared Wald t-statistic to machine precision.
+        let implied_t2 = r.max_abs_t.powi(2);
+        assert!(
+            (r.f_statistic - implied_t2).abs() < 1e-8,
+            "F {} vs t² {}",
+            r.f_statistic,
+            implied_t2
+        );
+        // Single-column F-p equals two-sided t-p.
+        assert!((r.p_value - r.min_p).abs() < 1e-8);
+        // SS_III = F · σ²
+        let expected_ss = r.f_statistic * rows[0].var_residual;
+        assert!(
+            (r.ss_type3 - expected_ss).abs() < 1e-8,
+            "SS_III {} vs F·σ² {}",
+            r.ss_type3,
+            expected_ss
+        );
     }
 
     #[test]
@@ -318,7 +380,20 @@ mod tests {
             .iter()
             .find(|f| f.name == "condition")
             .unwrap();
-        assert!(cond_factor.var > 0.2, "condition var should be ≈0.25: {}", cond_factor.var);
+        // On 10 near-noise-free samples of y = 1[i≥5] + tiny, the
+        // condition coefficient is near 1 so Type III F is huge
+        // and the Type III SS dominates the residual variance.
+        assert!(
+            cond_factor.f_statistic > 100.0,
+            "condition F should be large on near-clean signal; got {}",
+            cond_factor.f_statistic
+        );
+        assert!(
+            cond_factor.p_value < 1e-5,
+            "condition p should clear 1e-5; got {}",
+            cond_factor.p_value
+        );
+        assert!(cond_factor.ss_type3 > 0.1);
         assert!(
             r.var_residual < 1e-5,
             "residual should be near zero on clean data: {}",

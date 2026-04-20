@@ -576,6 +576,27 @@ fn build_variance_design(
     Ok((design, fixed_factors, kept, group_labels))
 }
 
+/// 12-decimal float formatter for variance-decomposition outputs so
+/// parity tests against R lm + Type III can assert sub-1e-8 drift.
+/// The shared `format_float` truncates to 6 decimals which is too
+/// coarse for parity on statistics that run into the hundreds (F,
+/// SS) when scaled.
+fn format_stat(v: f64) -> String {
+    if !v.is_finite() {
+        if v.is_nan() {
+            "NaN".into()
+        } else if v > 0.0 {
+            "Inf".into()
+        } else {
+            "-Inf".into()
+        }
+    } else if v == 0.0 {
+        "0".into()
+    } else {
+        format!("{v:.12}")
+    }
+}
+
 fn write_variance_tsv(
     path: &Path,
     rows: &[VarianceRow],
@@ -587,8 +608,11 @@ fn write_variance_tsv(
         header.push_str(&format!("\tvar_random_{g}\ticc_random_{g}"));
     }
     for f in factors {
+        // Type III suite per factor: SS_III, F, df_num, df_den, p,
+        // plus the per-coefficient max|t|/min p summary for quick
+        // inspection.
         header.push_str(&format!(
-            "\tvar_{name}\tmax_abs_t_{name}\tmin_p_{name}",
+            "\tss_type3_{name}\tf_statistic_{name}\tdf_num_{name}\tdf_den_{name}\tp_value_{name}\tmax_abs_t_{name}\tmin_p_{name}",
             name = f.name
         ));
     }
@@ -598,23 +622,31 @@ fn write_variance_tsv(
     for r in rows {
         buf.push_str(&r.archetype_id);
         buf.push('\t');
-        buf.push_str(&format_float(r.total_var));
+        buf.push_str(&format_stat(r.total_var));
         buf.push('\t');
-        buf.push_str(&format_float(r.var_residual));
+        buf.push_str(&format_stat(r.var_residual));
         if random_group.is_some() {
             buf.push('\t');
-            buf.push_str(&format_float(r.var_random.unwrap_or(f64::NAN)));
+            buf.push_str(&format_stat(r.var_random.unwrap_or(f64::NAN)));
             buf.push('\t');
-            buf.push_str(&format_float(r.icc_random.unwrap_or(f64::NAN)));
+            buf.push_str(&format_stat(r.icc_random.unwrap_or(f64::NAN)));
         }
         for (i, _) in factors.iter().enumerate() {
             let f = &r.per_factor[i];
             buf.push('\t');
-            buf.push_str(&format_float(f.var));
+            buf.push_str(&format_stat(f.ss_type3));
             buf.push('\t');
-            buf.push_str(&format_float(f.max_abs_t));
+            buf.push_str(&format_stat(f.f_statistic));
             buf.push('\t');
-            buf.push_str(&format_float(f.min_p));
+            buf.push_str(&f.df_num.to_string());
+            buf.push('\t');
+            buf.push_str(&format_stat(f.df_den));
+            buf.push('\t');
+            buf.push_str(&format_stat(f.p_value));
+            buf.push('\t');
+            buf.push_str(&format_stat(f.max_abs_t));
+            buf.push('\t');
+            buf.push_str(&format_stat(f.min_p));
         }
         buf.push('\t');
         buf.push_str(r.skip_reason.as_deref().unwrap_or(""));

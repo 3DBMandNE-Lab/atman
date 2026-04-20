@@ -137,10 +137,14 @@ fn decompose_variance_attributes_variance_to_planted_factor() {
         "archetype_id",
         "total_var",
         "var_residual",
-        "var_cohort",
-        "var_condition",
-        "max_abs_t_cohort",
-        "max_abs_t_condition",
+        "ss_type3_cohort",
+        "ss_type3_condition",
+        "f_statistic_cohort",
+        "f_statistic_condition",
+        "p_value_cohort",
+        "p_value_condition",
+        "df_num_cohort",
+        "df_num_condition",
     ] {
         assert!(header.iter().any(|h| h == col), "missing column {col}");
     }
@@ -149,47 +153,41 @@ fn decompose_variance_attributes_variance_to_planted_factor() {
         .map(|r| (r["archetype_id"].as_str(), r))
         .collect();
 
-    // cohort_confounded: most variance should be in cohort, not condition.
+    // cohort_confounded: Type III F for cohort should dwarf F for
+    // condition, and its p should clear 0.05 while condition's stays
+    // above.
     let cc = by_id["cohort_confounded"];
-    let var_cohort: f64 = cc["var_cohort"].parse().unwrap();
-    let var_condition: f64 = cc["var_condition"].parse().unwrap();
-    let var_residual: f64 = cc["var_residual"].parse().unwrap();
+    let f_cohort: f64 = cc["f_statistic_cohort"].parse().unwrap();
+    let f_condition: f64 = cc["f_statistic_condition"].parse().unwrap();
+    let p_cohort: f64 = cc["p_value_cohort"].parse().unwrap();
+    let p_condition: f64 = cc["p_value_condition"].parse().unwrap();
     assert!(
-        var_cohort > var_condition,
-        "cohort_confounded: var_cohort={var_cohort}, var_condition={var_condition}"
+        f_cohort > f_condition,
+        "cohort_confounded: F_cohort={f_cohort}, F_condition={f_condition}"
     );
+    assert!(p_cohort < 0.01, "cohort_confounded p_cohort {p_cohort} ≥ 0.01");
     assert!(
-        var_cohort > var_residual,
-        "cohort_confounded: var_cohort={var_cohort}, var_residual={var_residual}"
+        p_condition > 0.05,
+        "cohort_confounded p_condition {p_condition} < 0.05"
     );
 
-    // condition_specific: most variance should be in condition, not cohort.
+    // condition_specific: reverse.
     let cs = by_id["condition_specific"];
-    let var_cohort: f64 = cs["var_cohort"].parse().unwrap();
-    let var_condition: f64 = cs["var_condition"].parse().unwrap();
-    let var_residual: f64 = cs["var_residual"].parse().unwrap();
-    assert!(
-        var_condition > var_cohort,
-        "condition_specific: var_condition={var_condition}, var_cohort={var_cohort}"
-    );
-    assert!(
-        var_condition > var_residual,
-        "condition_specific: var_condition={var_condition}, var_residual={var_residual}"
-    );
+    let f_cohort: f64 = cs["f_statistic_cohort"].parse().unwrap();
+    let f_condition: f64 = cs["f_statistic_condition"].parse().unwrap();
+    let p_cohort: f64 = cs["p_value_cohort"].parse().unwrap();
+    let p_condition: f64 = cs["p_value_condition"].parse().unwrap();
+    assert!(f_condition > f_cohort);
+    assert!(p_condition < 0.01);
+    assert!(p_cohort > 0.05);
 
-    // cohort_shared (pure noise): neither factor dominates the
-    // residual at the level we see in the planted archetypes.
+    // cohort_shared (pure noise): neither factor should clear 0.05.
     let sh = by_id["cohort_shared"];
-    let var_cohort: f64 = sh["var_cohort"].parse().unwrap();
-    let var_condition: f64 = sh["var_condition"].parse().unwrap();
-    let var_residual: f64 = sh["var_residual"].parse().unwrap();
+    let p_cohort: f64 = sh["p_value_cohort"].parse().unwrap();
+    let p_condition: f64 = sh["p_value_condition"].parse().unwrap();
     assert!(
-        var_cohort < var_residual,
-        "cohort_shared: var_cohort={var_cohort}, var_residual={var_residual}"
-    );
-    assert!(
-        var_condition < var_residual,
-        "cohort_shared: var_condition={var_condition}, var_residual={var_residual}"
+        p_cohort > 0.05 && p_condition > 0.05,
+        "cohort_shared: p_cohort={p_cohort}, p_condition={p_condition}"
     );
 
     // Sidecar.
