@@ -1,14 +1,31 @@
 # Atman feature requests
 
 Open batch for the cross-cohort decomposition / alignment methods track.
-The DE surface is mature (paired-t, welch, OLS-formula, mixed, limma,
-DEqMS, msqrob). The next frontier for atman as a standalone methods tool
-is rigor around the `decompose ica` + `align programs` pair: null
-calibration, compositional handling, alignment uncertainty, projection,
-and a benchmark harness that lets the tool be cited on its own merits.
+The DE surface is mature (paired-t, welch, OLS-formula, mixed, limma
++ DEqMS, msqrob with Huber robust, ensemble consensus dispatcher) and
+every post-hoc family for multi-level OLS (Sidak, Tukey HSD via
+from-scratch studentized range, Dunnett via equicorrelated
+multivariate-t). The next frontier for atman as a standalone methods
+tool is rigor around the `decompose ica` + `align programs` pair:
+projection onto a trained atlas, benchmark harness, and data-driven
+module discovery.
 
 All items below keep commandment 8 (Rust, SQLite, local, deterministic,
 no cloud except PubMed API) and the canonical TSV contract.
+
+Open priorities at the time of writing (2026-04-20):
+
+- **Priority 4** — `atman align project` (cohort projection onto atlas)
+- **Priority 6** — `atman bench decompose` (head-to-head benchmark harness)
+- **Priority 8** — `atman modules discover` (data-driven WGCNA-style modules)
+- Residual deferrals: Jaccard/Spearman metrics in `align bootstrap`
+  (Priority 3); unbalanced Dunnett–Hsu via Genz–Bretz (Priority 9).
+
+Also shipped 2026-04-20 outside the original request batch:
+**Cross-method consensus DE dispatcher (`atman de --test ensemble`)** —
+runs every applicable DE method on the same inputs and emits a
+per-protein VALIDATED / PROVISIONAL / INSUFFICIENT grade with Stouffer
+ensemble p/q.
 
 ---
 
@@ -33,25 +50,25 @@ scale after QC. See `docs/analytical-roadmap.md` §8 for details.
 
 ---
 
-## ~~Priority 3: Bootstrap alignment uncertainty (`atman align bootstrap`)~~ *(v1 shipped 2026-04-20)*
+## ~~Priority 3: Bootstrap alignment uncertainty (`atman align bootstrap`)~~ *(shipped 2026-04-20)*
 
 Subject-level bootstrap that resamples subjects within every cohort
 with replacement, re-runs FastICA per cohort, re-aligns with cosine
 similarity, and emits per-PE-archetype `bootstrap_prob_universal`,
-`bootstrap_prob_multi`, and a percentile CI band. Deterministic
+`bootstrap_prob_multi`, percentile CI band, Shannon entropy over
+the n_cohorts histogram, and a BCa CI whose acceleration is
+estimated by pooled subject-level jackknife. Deterministic
 SplitMix64`(seed, iter)` sub-seeds. See
 `docs/analytical-roadmap.md` §8 for details.
 
-**Deferred to a follow-on request:**
+**Retired in DEBT-4 (commit `e418c07`, 2026-04-20):** BCa CI,
+`alignment_entropy`, and planted-fixture magnitude assertion on
+`bootstrap_prob_multi ≥ 0.7 ∧ entropy < 1.0 ∧ bca_upper ≥ 2` for
+the universal archetype.
+
+**Still deferred:**
 
 - Jaccard and Spearman metrics (v1 is cosine-only).
-- BCa CI (v1 is percentile).
-- `alignment_entropy` metric over recovered cohort-membership
-  patterns.
-- Stress-test against the planted-universal + planted-specific
-  fixture at larger scale — v1 tests verify schema, refusal, and
-  determinism; the bundled synthetic fixture is tiny for test
-  speed and doesn't assert specific probability magnitudes.
 
 ---
 
@@ -118,21 +135,22 @@ uncertainty intervals.
 
 ---
 
-## ~~Priority 5: Archetype variance decomposition (`atman decompose variance`)~~ *(v1 shipped 2026-04-20)*
+## ~~Priority 5: Archetype variance decomposition (`atman decompose variance`)~~ *(shipped 2026-04-20)*
 
 Mixed-model variance partition per archetype reusing the
 `atman de --test mixed` REML engine. Accepts formulas like
 `"cohort + condition + (1|subject_id)"`, outputs per-factor
-Type-I projection variance, random-intercept variance, ICC, and
-per-coefficient Wald summaries. See
-`docs/analytical-roadmap.md` §8 for details.
+Type III sums of squares, F-statistic, df, p-value, random-
+intercept variance, ICC, and per-coefficient Wald summaries.
+See `docs/analytical-roadmap.md` §8 for details.
 
-**Deferred to a follow-on request:**
+**Retired in DEBT-2 (commit `c81e5cc`, 2026-04-20):** Type III
+SS (Wald-form) and per-factor omnibus F-tests, with parity to
+R's `car::Anova(type = 3)` at ≥ 6 decimals on a 48-sample 3-factor
+balanced fixture (max |Δss| = 1.9e-6, max |ΔF| = 1.5e-5,
+max |Δp| = 3.7e-7).
 
-- Type II / III sums of squares (correlation-adjusted variance
-  partition). v1 is Type I.
-- Per-factor omnibus F-tests (v1 reports per-coefficient max|t|
-  and min p as a factor summary).
+**Still deferred:** none.
 
 ---
 
@@ -375,24 +393,32 @@ and canonical-TSV contract on top.
 
 ---
 
-## Priority 9: Post-hoc contrasts for multi-level OLS (`atman de --post-hoc`) — **omnibus F shipped 2026-04-20; post-hoc deferred**
+## ~~Priority 9: Post-hoc contrasts for multi-level OLS (`atman de --post-hoc`)~~ *(shipped 2026-04-20)*
 
-**Shipped:** per-protein omnibus F-test via
-`atman de --test ols --omnibus-factor <name>`. Output
-`de_omnibus.tsv` carries `f_statistic, df_num, df_den, p_value,
-bh_q` with BH-adjustment within each (comparison, panel) family.
-Integration test on a 3-stage synthetic cohort confirms clean
-discrimination (RESPONDER F≈21, NONRESPONDER F≈0.2). See
-`docs/analytical-roadmap.md` §8 for details.
+**Shipped:**
 
-**Deferred:** Tukey HSD, Dunnett, and Sidak post-hoc pairwise
-contrasts. Tukey HSD requires the studentized-range distribution;
-Dunnett requires multivariate-t — neither is in `statrs`. Sidak on
-a user-supplied `--contrast-list` is the natural next increment
-and the most useful fallback since it works off the existing
-`contrast_inference` helper already in `atman-core::de`.
+- Per-protein omnibus F-test via `atman de --test ols
+  --omnibus-factor <name>`. Output `de_omnibus.tsv` carries
+  `f_statistic, df_num, df_den, p_value, bh_q` with BH-adjustment
+  within each (comparison, panel) family.
+- Sidak on a user-supplied `--contrast-list` — DEBT-1 (`2f9f61a`),
+  parity to R `lm` + linear contrasts + Sidak at 1e-6 on a
+  36-sample 3-level fixture.
+- Tukey HSD via from-scratch studentized range distribution —
+  DEBT-5 (`1ac2e06`), nested 128×48 Gauss–Legendre; parity to R's
+  `ptukey` at ≥ 3 decimals on α = 0.05 critical values for
+  `k ∈ {3, 4, 5}`.
+- Dunnett via equicorrelated multivariate-t — DEBT-6 (`1c58d78`),
+  Dunnett–Curnow one-variate-plus-idiosyncratic reduction to a 2D
+  quadrature at `ρ = 0.5`; parity to R `qmvt`-based critical values
+  at ≤ 1e-2.
 
-Spec below preserved for the follow-on work:
+See `docs/analytical-roadmap.md` §8 for details.
+
+**Still deferred:** unbalanced Dunnett–Hsu (heterogeneous per-pair
+correlations via Genz–Bretz on an arbitrary correlation matrix).
+
+Spec below preserved for future reference:
 
 ---
 
