@@ -177,6 +177,14 @@ pub struct BootstrapArgs {
     #[arg(long, default_value_t = 20)]
     min_subjects: usize,
 
+    /// Similarity metric used both to group bootstrap programs into
+    /// archetypes and to match bootstrap/jackknife archetypes back
+    /// to the point estimate. `cosine` (default) is fastest and
+    /// sign-invariant; `jaccard` uses top-`--top-n` loading sets;
+    /// `spearman` uses absolute rank correlation.
+    #[arg(long, default_value = "cosine")]
+    metric: String,
+
     /// Drop assays with more than this fraction of missing samples
     /// per cohort (matches `decompose ica`).
     #[arg(long, default_value_t = 0.0)]
@@ -270,6 +278,12 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         args.seed
     );
 
+    let metric = match args.metric.as_str() {
+        "cosine" => AlignMetric::Cosine,
+        "jaccard" => AlignMetric::Jaccard,
+        "spearman" => AlignMetric::Spearman,
+        other => bail!("--metric {other:?}; expected cosine, jaccard, or spearman"),
+    };
     let params = BootstrapParams {
         k: args.k,
         n_boot: args.n_boot,
@@ -280,6 +294,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         max_iter: args.max_iter,
         tol: args.tol,
         min_subjects: args.min_subjects,
+        metric,
     };
     let rows: Vec<BootstrapRow> =
         align_bootstrap(&matrices, params).map_err(|e| anyhow::anyhow!(e))?;
@@ -323,6 +338,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
             "k": args.k,
             "n-boot": args.n_boot,
             "seed": args.seed,
+            "metric": args.metric,
             "cosine-tau": args.cosine_tau,
             "match-tau": args.match_tau,
             "top-n": args.top_n,

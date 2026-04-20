@@ -28,9 +28,8 @@
 //! SplitMix64 derivation over `(seed, iter)`. Jackknife is
 //! deterministic — the single ICA seed per cohort is reused.
 
-use crate::align::{build_archetypes, AlignMetric, AlignedProgram};
+use crate::align::{build_archetypes, similarity, AlignMetric, AlignedProgram};
 use crate::ica::{canonicalize_ica, fast_ica, CanonicalIca, Xoshiro256pp};
-use crate::stats::cosine;
 use statrs::distribution::{ContinuousCDF, Normal};
 
 #[derive(Debug, Clone)]
@@ -51,15 +50,23 @@ pub struct BootstrapParams {
     pub seed: u64,
     pub top_n: usize,
     pub cosine_tau: f64,
-    /// Floor on cosine similarity between the point-estimate
-    /// representative and a bootstrap program for the bootstrap
-    /// archetype containing that program to be considered a match.
+    /// Floor on similarity between the point-estimate representative
+    /// and a bootstrap/jackknife program for the archetype containing
+    /// that program to be considered a match. Units follow `metric`
+    /// (cosine ∈ [0,1], Jaccard ∈ [0,1], |Spearman| ∈ [0,1]).
     pub match_tau: f64,
     pub max_iter: usize,
     pub tol: f64,
     /// Bootstrap iterations abort with an error when any cohort has
     /// fewer than this many distinct subjects.
     pub min_subjects: usize,
+    /// Similarity metric used both to align bootstrap programs into
+    /// archetypes and to match bootstrap/jackknife archetypes back to
+    /// the point-estimate archetypes. Cosine (default) is fastest and
+    /// sign-invariant; Jaccard is set-based over the top-`top_n`
+    /// loadings by `|value|`; Spearman uses the absolute rank
+    /// correlation.
+    pub metric: AlignMetric,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -144,13 +151,14 @@ fn fit_and_canonicalize(
 
 /// Run the cross-cohort alignment on already-canonicalized programs,
 /// returning `(programs, archetype_labels)` parallel to the input.
-/// Uses cosine similarity with `tau` threshold; no reciprocal-best
+/// Uses `metric` similarity with `tau` threshold; no reciprocal-best
 /// filter (caller handles that upstream if desired).
 fn align_canonicals(
     canonicals: &[(String, CanonicalIca)],
     protein_labels: &[String],
     top_n: usize,
     cosine_tau: f64,
+    metric: AlignMetric,
 ) -> (Vec<AlignedProgram>, Vec<usize>) {
     let mut programs: Vec<AlignedProgram> = Vec::new();
     for (cohort, canon) in canonicals {
@@ -166,7 +174,7 @@ fn align_canonicals(
     let _ = protein_labels; // kept for a future labelled-output path
     let labels = build_archetypes(
         &programs,
-        AlignMetric::Cosine,
+        metric,
         top_n,
         cosine_tau,
         false, // reciprocal_best
@@ -207,18 +215,21 @@ fn group_archetypes(
 }
 
 /// Match a point-estimate archetype to the jackknife/bootstrap
-/// archetype whose representative has maximum absolute cosine
-/// similarity. Returns `None` when the best similarity is below
-/// `match_tau` or the resampled pipeline produced no archetypes.
+/// archetype whose representative has maximum `metric` similarity
+/// (`|cosine|` / Jaccard-top-N / `|Spearman|`, all in `[0, 1]`).
+/// Returns `None` when the best similarity is below `match_tau` or
+/// the resampled pipeline produced no archetypes.
 fn match_pe_archetype(
     pe_rep: &[f64],
     bs_archetypes: &[(usize, Vec<String>, Vec<f64>)],
     match_tau: f64,
+    metric: AlignMetric,
+    top_n: usize,
 ) -> Option<usize> {
     let mut best_sim = f64::NEG_INFINITY;
     let mut best_n: Option<usize> = None;
     for (_, bs_cohorts, bs_rep) in bs_archetypes {
-        let sim = cosine(pe_rep, bs_rep).unwrap_or(0.0).abs();
+        let sim = similarity(pe_rep, bs_rep, metric, top_n);
         if sim > best_sim {
             best_sim = sim;
             best_n = Some(bs_cohorts.len());
@@ -339,14 +350,20 @@ fn point_estimate_match_counts(
         })
         .collect();
     let (progs, labels) =
-        align_canonicals(&canons, universe, params.top_n, params.cosine_tau);
+        align_canonicals(&canons, universe, params.top_n, params.cosine_tau, params.metric);
     let archetypes = group_archetypes(&progs, &labels);
     pe_archetypes
         .iter()
         .map(|(_, _, pe_rep)| {
-            match_pe_archetype(pe_rep, &archetypes, params.match_tau)
-                .map(|n| n as f64)
-                .unwrap_or(0.0)
+            match_pe_archetype(
+                pe_rep,
+                &archetypes,
+                params.match_tau,
+                params.metric,
+                params.top_n,
+            )
+            .map(|n| n as f64)
+            .unwrap_or(0.0)
         })
         .collect()
 }
@@ -455,7 +472,7 @@ pub fn align_bootstrap(
         })
         .collect();
     let (pe_programs, pe_labels) =
-        align_canonicals(&pe_canons, universe, params.top_n, params.cosine_tau);
+        align_canonicals(&pe_canons, universe, params.top_n, params.cosine_tau, params.metric);
     let pe_archetypes = group_archetypes(&pe_programs, &pe_labels);
     if pe_archetypes.is_empty() {
         return Ok(Vec::new());
@@ -490,13 +507,19 @@ pub fn align_bootstrap(
             })
             .collect();
         let (bs_programs, bs_labels) =
-            align_canonicals(&bs_canons, universe, params.top_n, params.cosine_tau);
+            align_canonicals(&bs_canons, universe, params.top_n, params.cosine_tau, params.metric);
         let bs_archetypes = group_archetypes(&bs_programs, &bs_labels);
 
         // Match every PE archetype to at most one bootstrap archetype
         // by max cosine between representative loadings.
         for (ai, (_, _, pe_rep)) in pe_archetypes.iter().enumerate() {
-            match match_pe_archetype(pe_rep, &bs_archetypes, params.match_tau) {
+            match match_pe_archetype(
+                pe_rep,
+                &bs_archetypes,
+                params.match_tau,
+                params.metric,
+                params.top_n,
+            ) {
                 Some(n) => acc[ai].observe(n, n_total_cohorts),
                 None => acc[ai].observe_miss(),
             }
@@ -646,6 +669,7 @@ mod tests {
             max_iter: 20,
             tol: 1e-2,
             min_subjects: 5,
+            metric: AlignMetric::Cosine,
         };
         let err = align_bootstrap(&[a], p).unwrap_err();
         assert!(err.contains("at least 2 cohorts"));
@@ -665,6 +689,7 @@ mod tests {
             max_iter: 20,
             tol: 1e-2,
             min_subjects: 5,
+            metric: AlignMetric::Cosine,
         };
         let err = align_bootstrap(&[a, b], p).unwrap_err();
         assert!(err.contains("min-subjects"), "unexpected: {err}");
@@ -685,6 +710,7 @@ mod tests {
             max_iter: 20,
             tol: 1e-2,
             min_subjects: 5,
+            metric: AlignMetric::Cosine,
         };
         let err = align_bootstrap(&[a, b], p).unwrap_err();
         assert!(err.contains("mismatch"), "unexpected: {err}");
@@ -704,6 +730,7 @@ mod tests {
             max_iter: 40,
             tol: 1e-2,
             min_subjects: 5,
+            metric: AlignMetric::Cosine,
         };
         let rows = align_bootstrap(&[a, b], p).unwrap();
         for r in &rows {
@@ -763,6 +790,40 @@ mod tests {
     }
 
     #[test]
+    fn align_bootstrap_accepts_every_metric_without_changing_row_count() {
+        let a = toy_cohort("A", 20, 15, 1);
+        let b = toy_cohort("B", 20, 15, 2);
+        let base = BootstrapParams {
+            k: 2,
+            n_boot: 3,
+            seed: 20260418,
+            top_n: 5,
+            cosine_tau: 0.0,
+            match_tau: 0.0,
+            max_iter: 40,
+            tol: 1e-2,
+            min_subjects: 5,
+            metric: AlignMetric::Cosine,
+        };
+        let cos_rows = align_bootstrap(&[a.clone(), b.clone()], base).unwrap();
+        let mut jac = base;
+        jac.metric = AlignMetric::Jaccard;
+        let jac_rows = align_bootstrap(&[a.clone(), b.clone()], jac).unwrap();
+        let mut spr = base;
+        spr.metric = AlignMetric::Spearman;
+        let spr_rows = align_bootstrap(&[a, b], spr).unwrap();
+        // Different metric ⇒ different archetype alignment ⇒ row
+        // count can differ across metrics, but each must produce
+        // valid, finite-stat rows.
+        for rows in [&cos_rows, &jac_rows, &spr_rows] {
+            for r in rows.iter() {
+                assert!(r.alignment_entropy.is_finite());
+                assert!(r.bootstrap_prob_multi >= 0.0 && r.bootstrap_prob_multi <= 1.0);
+            }
+        }
+    }
+
+    #[test]
     fn align_bootstrap_is_deterministic() {
         let a = toy_cohort("A", 20, 15, 1);
         let b = toy_cohort("B", 20, 15, 2);
@@ -776,6 +837,7 @@ mod tests {
             max_iter: 40,
             tol: 1e-2,
             min_subjects: 5,
+            metric: AlignMetric::Cosine,
         };
         let x = align_bootstrap(&[a.clone(), b.clone()], p).unwrap();
         let y = align_bootstrap(&[a, b], p).unwrap();
