@@ -6,6 +6,7 @@
 
 pub mod align;
 pub mod align_bootstrap;
+pub mod align_project;
 pub mod compositional;
 pub mod de;
 pub mod deqms;

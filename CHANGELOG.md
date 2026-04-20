@@ -8,6 +8,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Cohort projection onto a trained atlas (`atman align project`).**
+  New subcommand alongside `align programs` / `align bootstrap`. Reads
+  the archetype TSV emitted by a prior `align programs` plus the
+  per-cohort loading TSVs it was built from, assembles an atlas loading
+  matrix by averaging member programs per multi-member archetype on
+  the intersection protein universe, loads a new cohort's canonical
+  abundance matrix (remapping `assay_id`→label via the cohort's
+  `proteins.tsv`), applies a compositional transform, and solves for
+  per-subject activations via Cholesky on the normal equations under
+  either `--projection ls` (plain least-squares) or `--projection ridge
+  --ridge-lambda <λ>` (default). Outputs `projected_activations.tsv`
+  (subject × archetype), `projection_qc.tsv` (per-subject
+  `residual_norm`, `coverage_fraction`, `n_present`, `n_missing`),
+  and a run sidecar recording the atlas inputs, transform, projection
+  method, and the list of atlas proteins absent from the cohort.
+  Integration tests verify planted-coefficient recovery to 1e-3 on
+  full coverage, partial-coverage warning when the cohort drops an
+  atlas protein, and clean handling of zero-intersection cohorts.
+  Closes Priority 4.
 - **Dunnett post-hoc (`atman de --post-hoc dunnett`).** Compares
   every non-reference level of the factor to the (alphabetically
   first) reference level under the joint multivariate-t distribution

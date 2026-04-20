@@ -5,6 +5,8 @@ use atman_core::align::{
 use atman_core::align_bootstrap::{
     align_bootstrap, BootstrapParams, BootstrapRow, CohortMatrix,
 };
+use atman_core::align_project::{project, Atlas, ProjectionMethod};
+use atman_core::compositional::{apply_transform, Transform};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use csv::ReaderBuilder;
 use serde_json::json;
@@ -30,6 +32,10 @@ enum Command {
     /// Subject-level bootstrap of cross-cohort archetype alignment
     /// producing per-archetype universality probabilities.
     Bootstrap(BootstrapArgs),
+    /// Project a new cohort's subject × protein matrix onto a trained
+    /// atlas of cross-cohort archetype loading vectors, emitting
+    /// per-subject activations without re-running the alignment.
+    Project(ProjectArgs),
 }
 
 #[derive(ClapArgs, Debug)]
@@ -112,6 +118,7 @@ pub fn run(args: Args) -> Result<()> {
     match args.command {
         Command::Programs(args) => run_programs(args),
         Command::Bootstrap(args) => run_bootstrap(args),
+        Command::Project(args) => run_project(args),
     }
 }
 
@@ -967,4 +974,554 @@ fn run_sweep(
         output.display()
     );
     Ok(())
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct ProjectArgs {
+    /// Path to the archetype TSV emitted by a prior `align programs`.
+    #[arg(long)]
+    atlas_archetypes: PathBuf,
+
+    /// Comma-separated `cohort_label=loadings_tsv` list — the same
+    /// per-cohort loading TSVs that were fed to the `align programs`
+    /// run that produced `--atlas-archetypes`.
+    #[arg(long)]
+    atlas_loadings: String,
+
+    /// Label column in each atlas loading TSV: `gene_symbol` (default),
+    /// `assay_id`, or `protein`.
+    #[arg(long, default_value = "gene_symbol")]
+    label_col: String,
+
+    /// Canonical Atman directory for the cohort to project.
+    #[arg(long)]
+    cohort_dir: PathBuf,
+
+    /// Compositional transform applied to the cohort matrix before
+    /// projection. Must match the transform used at atlas training
+    /// time (caller's responsibility to verify — the atlas's own
+    /// `transform_applied.json` records the training-time choice).
+    #[arg(long, default_value = "none")]
+    transform: String,
+
+    /// Reference gene symbol for `alr` / `ratio-anchor` transforms.
+    #[arg(long)]
+    alr_reference: Option<String>,
+
+    /// Projection method: `ls` (plain least-squares — fails when the
+    /// atlas is rank-deficient) or `ridge` (default, with
+    /// `--ridge-lambda`).
+    #[arg(long, default_value = "ridge")]
+    projection: String,
+
+    /// Ridge penalty on the normal equations. Ignored when
+    /// `--projection ls`.
+    #[arg(long, default_value_t = 0.01)]
+    ridge_lambda: f64,
+
+    /// Canonical input filename for the new cohort: `qc` (default) or `raw`.
+    #[arg(long, default_value = "qc")]
+    source: String,
+
+    /// Drop assays with more than this fraction of missing samples
+    /// in the new cohort (before projection).
+    #[arg(long, default_value_t = 0.0)]
+    max_missing_fraction: f64,
+
+    /// Imputation for residual missingness: `none` (fail) or `mean`.
+    #[arg(long, default_value = "none")]
+    impute: String,
+
+    /// Output directory for `projected_activations.tsv`,
+    /// `projection_qc.tsv`, and the run sidecar.
+    #[arg(long)]
+    output_dir: PathBuf,
+}
+
+fn parse_atlas_loadings(
+    spec: &str,
+) -> Result<Vec<(String, PathBuf)>> {
+    let mut out = Vec::new();
+    for chunk in spec.split(',') {
+        let chunk = chunk.trim();
+        if chunk.is_empty() {
+            continue;
+        }
+        let (cohort, path) = chunk
+            .split_once('=')
+            .with_context(|| format!("--atlas-loadings chunk {chunk:?} is not cohort=path"))?;
+        let cohort = cohort.trim().to_string();
+        let path = PathBuf::from(path.trim());
+        if cohort.is_empty() {
+            bail!("--atlas-loadings chunk {chunk:?} has empty cohort label");
+        }
+        out.push((cohort, path));
+    }
+    if out.is_empty() {
+        bail!("--atlas-loadings resolved to zero entries");
+    }
+    Ok(out)
+}
+
+fn read_atlas_archetypes(
+    path: &Path,
+) -> Result<Vec<(String, String, String, usize, usize)>> {
+    let mut reader = ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(path)
+        .with_context(|| format!("opening {:?}", path))?;
+    let headers = reader.headers()?.clone();
+    let col = |name: &str| {
+        headers
+            .iter()
+            .position(|h| h == name)
+            .with_context(|| format!("{:?} missing {name} column", path))
+    };
+    let id = col("archetype_id")?;
+    let cohort = col("cohort")?;
+    let program = col("program")?;
+    let n_members = col("n_members")?;
+    let n_cohorts = col("n_cohorts")?;
+    let mut out = Vec::new();
+    for row in reader.records() {
+        let row = row?;
+        out.push((
+            row[id].to_string(),
+            row[cohort].to_string(),
+            row[program].to_string(),
+            row[n_members].parse().unwrap_or(0),
+            row[n_cohorts].parse().unwrap_or(0),
+        ));
+    }
+    Ok(out)
+}
+
+fn parse_transform(name: &str, alr_reference: Option<&str>, labels: &[String]) -> Result<Transform> {
+    match name {
+        "none" => Ok(Transform::None),
+        "clr" => Ok(Transform::Clr),
+        "alr" => {
+            let reference = alr_reference
+                .context("--transform alr requires --alr-reference <gene>")?;
+            let idx = labels
+                .iter()
+                .position(|l| l == reference)
+                .with_context(|| {
+                    format!("--alr-reference {reference:?} not in cohort labels")
+                })?;
+            Ok(Transform::Alr { reference_index: idx })
+        }
+        "ratio-anchor" => {
+            let reference = alr_reference
+                .context("--transform ratio-anchor requires --alr-reference <gene>")?;
+            let idx = labels
+                .iter()
+                .position(|l| l == reference)
+                .with_context(|| {
+                    format!("--alr-reference {reference:?} not in cohort labels")
+                })?;
+            Ok(Transform::RatioAnchor { reference_index: idx })
+        }
+        "ilr" => Ok(Transform::Ilr),
+        other => bail!("unknown --transform {other:?}; expected none|clr|alr|ilr|ratio-anchor"),
+    }
+}
+
+fn run_project(args: ProjectArgs) -> Result<()> {
+    let started_at = SystemTime::now();
+    let impute_mean = match args.impute.as_str() {
+        "none" => false,
+        "mean" => true,
+        other => bail!("--impute {other:?}; expected none or mean"),
+    };
+    let method = match args.projection.as_str() {
+        "ls" | "least-squares" => ProjectionMethod::LeastSquares,
+        "ridge" => {
+            if !(args.ridge_lambda.is_finite() && args.ridge_lambda >= 0.0) {
+                bail!("--ridge-lambda must be finite and >= 0");
+            }
+            ProjectionMethod::Ridge(args.ridge_lambda)
+        }
+        other => bail!("--projection {other:?}; expected ls or ridge"),
+    };
+
+    // Parse atlas-loadings, read each per-cohort loadings TSV into
+    // (program → Vec<(label, value)>). Reuse the existing
+    // read_loadings helper used by `align programs`.
+    let loadings_spec = parse_atlas_loadings(&args.atlas_loadings)?;
+    let mut per_cohort_programs: BTreeMap<
+        String,
+        BTreeMap<String, BTreeMap<String, f64>>,
+    > = BTreeMap::new();
+    for (cohort_label, path) in &loadings_spec {
+        let rows = read_loadings(path, &args.label_col)?;
+        let by_program = per_cohort_programs
+            .entry(cohort_label.clone())
+            .or_default();
+        for (program, label, value) in rows {
+            by_program.entry(program).or_default().insert(label, value);
+        }
+    }
+
+    // Read atlas archetypes; for each archetype, keep only rows whose
+    // cohort was passed on `--atlas-loadings`.
+    let archetype_rows = read_atlas_archetypes(&args.atlas_archetypes)?;
+    let known_cohorts: BTreeSet<String> =
+        per_cohort_programs.keys().cloned().collect();
+    let mut by_archetype: BTreeMap<String, Vec<(String, String, usize, usize)>> =
+        BTreeMap::new();
+    for (id, cohort, program, n_members, n_cohorts) in archetype_rows {
+        if !known_cohorts.contains(&cohort) {
+            // Silently drop — the archetype may have member programs
+            // from cohorts we didn't pass, in which case we'd be
+            // averaging an incomplete set.
+            continue;
+        }
+        by_archetype
+            .entry(id)
+            .or_default()
+            .push((cohort, program, n_members, n_cohorts));
+    }
+    if by_archetype.is_empty() {
+        bail!(
+            "no archetypes survived the cohort filter — does --atlas-loadings \
+             cover the cohorts in --atlas-archetypes?"
+        );
+    }
+
+    // Intersection protein universe across the participating atlas
+    // cohorts. Any archetype whose members span cohorts outside the
+    // intersection contributes only on the intersection labels.
+    let mut universe: Option<BTreeSet<String>> = None;
+    for programs in per_cohort_programs.values() {
+        let mut cohort_labels: BTreeSet<String> = BTreeSet::new();
+        for label_map in programs.values() {
+            for l in label_map.keys() {
+                cohort_labels.insert(l.clone());
+            }
+        }
+        universe = Some(match universe {
+            Some(u) => u.intersection(&cohort_labels).cloned().collect(),
+            None => cohort_labels,
+        });
+    }
+    let universe: Vec<String> = universe
+        .map(|u| {
+            let mut v: Vec<String> = u.into_iter().collect();
+            v.sort();
+            v
+        })
+        .unwrap_or_default();
+    if universe.is_empty() {
+        bail!("atlas cohorts share zero protein labels after intersection");
+    }
+
+    // Build atlas: one loading row per multi-member archetype, mean
+    // across member programs' loading vectors on the intersection
+    // universe.
+    let mut atlas = Atlas {
+        protein_labels: universe.clone(),
+        archetype_ids: Vec::new(),
+        loadings: Vec::new(),
+        n_members: Vec::new(),
+        n_cohorts: Vec::new(),
+    };
+    for (id, members) in &by_archetype {
+        // Skip singletons — projection only makes sense for
+        // archetypes that are reproducible across cohorts.
+        if members.iter().all(|(_, _, n, _)| *n < 2) {
+            continue;
+        }
+        let mut sum = vec![0.0_f64; universe.len()];
+        let mut n_present = 0usize;
+        for (cohort, program, _, _) in members {
+            let labels = match per_cohort_programs
+                .get(cohort)
+                .and_then(|p| p.get(program))
+            {
+                Some(m) => m,
+                None => continue,
+            };
+            for (i, label) in universe.iter().enumerate() {
+                if let Some(&v) = labels.get(label) {
+                    sum[i] += v;
+                }
+            }
+            n_present += 1;
+        }
+        if n_present == 0 {
+            continue;
+        }
+        let mean: Vec<f64> = sum.iter().map(|s| s / n_present as f64).collect();
+        let n_cohort_set: BTreeSet<&str> =
+            members.iter().map(|(c, _, _, _)| c.as_str()).collect();
+        atlas.archetype_ids.push(id.clone());
+        atlas.loadings.push(mean);
+        atlas.n_members.push(n_present);
+        atlas.n_cohorts.push(n_cohort_set.len());
+    }
+    if atlas.archetype_ids.is_empty() {
+        bail!(
+            "no multi-member archetypes assembled from the atlas inputs — \
+             every archetype looked like a singleton on the intersection universe"
+        );
+    }
+    eprintln!(
+        "align project: atlas k={} p={} cohorts_used={}",
+        atlas.archetype_ids.len(),
+        atlas.protein_labels.len(),
+        per_cohort_programs.len()
+    );
+
+    // Load the new cohort's canonical abundance matrix (subjects × proteins).
+    // `load_cohort_matrix` returns proteins keyed by assay_id; the
+    // atlas is keyed by `--label-col` (default gene_symbol), so remap
+    // the cohort's protein labels via the cohort's proteins.tsv.
+    let mut cohort_matrix = load_cohort_matrix(
+        &args.cohort_dir,
+        "cohort",
+        &args.source,
+        args.max_missing_fraction,
+        impute_mean,
+    )?;
+    {
+        use std::collections::HashMap;
+        let proteins_path = args.cohort_dir.join("proteins.tsv");
+        let mut reader = ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(true)
+            .from_path(&proteins_path)
+            .with_context(|| format!("opening {:?}", proteins_path))?;
+        let headers = reader.headers()?.clone();
+        let assay_idx = headers
+            .iter()
+            .position(|h| h == "assay_id")
+            .context("cohort proteins.tsv missing assay_id")?;
+        let label_idx = headers
+            .iter()
+            .position(|h| h == args.label_col.as_str())
+            .or_else(|| headers.iter().position(|h| h == "gene_symbol"))
+            .or_else(|| headers.iter().position(|h| h == "protein"))
+            .with_context(|| {
+                format!(
+                    "cohort proteins.tsv missing label column {:?}",
+                    args.label_col
+                )
+            })?;
+        let mut assay_to_label: HashMap<String, String> = HashMap::new();
+        for row in reader.records() {
+            let row = row?;
+            assay_to_label.insert(
+                row[assay_idx].to_string(),
+                row[label_idx].trim().to_string(),
+            );
+        }
+        let mut remapped: Vec<String> = Vec::with_capacity(cohort_matrix.protein_labels.len());
+        let mut keep_mask: Vec<bool> = Vec::with_capacity(cohort_matrix.protein_labels.len());
+        for assay_id in &cohort_matrix.protein_labels {
+            match assay_to_label.get(assay_id) {
+                Some(label) if !label.is_empty() => {
+                    remapped.push(label.clone());
+                    keep_mask.push(true);
+                }
+                _ => {
+                    // No label resolvable — drop this column from the
+                    // cohort universe; the atlas intersection will
+                    // naturally exclude it.
+                    keep_mask.push(false);
+                }
+            }
+        }
+        if keep_mask.iter().all(|k| !k) {
+            bail!(
+                "cohort proteins.tsv has no rows with a non-empty {:?} column",
+                args.label_col
+            );
+        }
+        // Apply the mask to both labels and every row of the matrix.
+        cohort_matrix.protein_labels = remapped;
+        for row in &mut cohort_matrix.data {
+            let filtered: Vec<f64> = row
+                .iter()
+                .zip(keep_mask.iter())
+                .filter_map(|(v, k)| if *k { Some(*v) } else { None })
+                .collect();
+            *row = filtered;
+        }
+    }
+    // Apply the transform in the cohort's own protein ordering.
+    let transform = parse_transform(
+        &args.transform,
+        args.alr_reference.as_deref(),
+        &cohort_matrix.protein_labels,
+    )?;
+    let transformed = apply_transform(&cohort_matrix.data, transform)
+        .map_err(|e| anyhow::anyhow!("transform failed: {e}"))?;
+    // For ILR the ordering changes; we emit a clear error because
+    // post-transform labels won't match the atlas universe.
+    if args.transform == "ilr" {
+        bail!(
+            "--transform ilr is not supported in `align project` v1: ILR \
+             changes the coordinate ordering so atlas labels would not \
+             line up with the transformed cohort columns"
+        );
+    }
+    // Subjects are the original sample_ids for the cohort — recover
+    // them by re-reading samples.tsv (load_cohort_matrix doesn't
+    // preserve them). Use read_samples.
+    let subject_ids = {
+        use std::io::Read;
+        let path = args.cohort_dir.join("samples.tsv");
+        let mut text = String::new();
+        std::fs::File::open(&path)
+            .with_context(|| format!("opening {:?}", path))?
+            .read_to_string(&mut text)?;
+        let mut lines = text.lines();
+        let header = lines.next().context("samples.tsv empty")?;
+        let cols: Vec<&str> = header.split('\t').collect();
+        let sid_idx = cols
+            .iter()
+            .position(|c| *c == "sample_id")
+            .context("samples.tsv missing sample_id")?;
+        let is_control_idx = cols.iter().position(|c| *c == "is_control");
+        let mut subs = Vec::new();
+        for line in lines {
+            let row: Vec<&str> = line.split('\t').collect();
+            if let Some(idx) = is_control_idx {
+                if row.get(idx).copied().unwrap_or("0") == "1" {
+                    continue;
+                }
+            }
+            if let Some(&sid) = row.get(sid_idx) {
+                subs.push(sid.to_string());
+            }
+        }
+        subs
+    };
+    if subject_ids.len() != transformed.len() {
+        bail!(
+            "sample_id count {} != transformed matrix rows {}; \
+             this should not happen — report as a bug",
+            subject_ids.len(),
+            transformed.len()
+        );
+    }
+
+    let result = project(
+        &atlas,
+        &cohort_matrix.protein_labels,
+        &subject_ids,
+        &transformed,
+        method,
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
+
+    std::fs::create_dir_all(&args.output_dir)
+        .with_context(|| format!("creating {:?}", args.output_dir))?;
+    let activations_path = args.output_dir.join("projected_activations.tsv");
+    write_projected_activations(&activations_path, &result)?;
+    let qc_path = args.output_dir.join("projection_qc.tsv");
+    write_projection_qc(&qc_path, &result)?;
+    eprintln!(
+        "align project: wrote {} subjects × {} archetypes; avg coverage = {:.3}",
+        result.subject_ids.len(),
+        result.archetype_ids.len(),
+        if result.qc.is_empty() {
+            0.0
+        } else {
+            result.qc.iter().map(|q| q.coverage_fraction).sum::<f64>()
+                / result.qc.len() as f64
+        }
+    );
+
+    let finished_at = SystemTime::now();
+    let mut labeled: Vec<(String, PathBuf)> = Vec::new();
+    labeled.push(("atlas_archetypes".into(), args.atlas_archetypes.clone()));
+    for (cohort, path) in &loadings_spec {
+        labeled.push((format!("atlas_loadings_{}", cohort), path.clone()));
+    }
+    let file = match args.source.as_str() {
+        "qc" => "qc_measurements.tsv",
+        _ => "measurements.tsv",
+    };
+    labeled.push((
+        format!("cohort_{file}"),
+        args.cohort_dir.join(file),
+    ));
+    labeled.push(("cohort_samples".into(), args.cohort_dir.join("samples.tsv")));
+    labeled.push(("cohort_proteins".into(), args.cohort_dir.join("proteins.tsv")));
+    let refs: Vec<(&str, &Path)> = labeled
+        .iter()
+        .map(|(l, p)| (l.as_str(), p.as_path()))
+        .collect();
+    let input_dir_sha256 = hash_labeled_inputs(&refs)?;
+    let sidecar = sidecar_path_for(&activations_path);
+    write_run_sidecar(
+        &sidecar,
+        "align project",
+        json!({
+            "atlas-archetypes": args.atlas_archetypes.display().to_string(),
+            "atlas-loadings": args.atlas_loadings,
+            "label-col": args.label_col,
+            "cohort-dir": args.cohort_dir.display().to_string(),
+            "transform": args.transform,
+            "alr-reference": args.alr_reference,
+            "projection": args.projection,
+            "ridge-lambda": args.ridge_lambda,
+            "source": args.source,
+            "max-missing-fraction": args.max_missing_fraction,
+            "impute": args.impute,
+            "atlas-proteins-missing-in-cohort": result.atlas_proteins_missing_in_cohort,
+            "atlas-k": atlas.archetype_ids.len(),
+            "atlas-p": atlas.protein_labels.len(),
+        }),
+        &input_dir_sha256,
+        &[activations_path.clone(), qc_path.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("align project: sidecar={}", sidecar.display());
+    Ok(())
+}
+
+fn write_projected_activations(
+    path: &Path,
+    result: &atman_core::align_project::ProjectionResult,
+) -> Result<()> {
+    let mut buf = String::from("sample_id");
+    for a in &result.archetype_ids {
+        buf.push('\t');
+        buf.push_str(a);
+    }
+    buf.push('\n');
+    for (si, sid) in result.subject_ids.iter().enumerate() {
+        buf.push_str(sid);
+        for &v in &result.activations[si] {
+            buf.push('\t');
+            buf.push_str(&format!("{v:.6}"));
+        }
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+fn write_projection_qc(
+    path: &Path,
+    result: &atman_core::align_project::ProjectionResult,
+) -> Result<()> {
+    let mut buf = String::from(
+        "sample_id\tresidual_norm\tcoverage_fraction\tn_present\tn_missing\n",
+    );
+    for q in &result.qc {
+        buf.push_str(&format!(
+            "{}\t{:.6}\t{:.6}\t{}\t{}\n",
+            q.subject_id,
+            q.residual_norm,
+            q.coverage_fraction,
+            q.n_present,
+            q.n_missing,
+        ));
+    }
+    atomic_write(path, buf.as_bytes())
 }
