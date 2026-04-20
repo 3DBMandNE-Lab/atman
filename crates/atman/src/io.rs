@@ -876,6 +876,64 @@ pub fn write_de_report(path: &Path, rows: &[DeReportRow]) -> Result<()> {
     atomic_write(path, buf.as_bytes())
 }
 
+/// One row of `de_ensemble.tsv` — per (comparison, protein)
+/// cross-method summary. Produced only by `atman de --test ensemble`.
+pub struct EnsembleRow {
+    pub comparison: String,
+    pub panel: String,
+    pub assay_id: String,
+    pub gene_symbol: String,
+    pub uniprot: String,
+    pub n_applied: usize,
+    pub n_significant: usize,
+    pub n_sign_consistent: usize,
+    pub majority_sign: f64,
+    pub ensemble_p: Option<f64>,
+    pub ensemble_q: Option<f64>,
+    pub grade: String,
+    pub methods_applied: String,
+    pub methods_skipped: String,
+}
+
+pub fn write_de_ensemble(path: &Path, rows: &[EnsembleRow]) -> Result<()> {
+    let mut buf = String::from(
+        "comparison\tpanel\tassay_id\tgene_symbol\tuniprot\t\
+         n_applied\tn_significant\tn_sign_consistent\tmajority_sign\t\
+         ensemble_p\tensemble_q\tgrade\tmethods_applied\tmethods_skipped\n",
+    );
+    for r in rows {
+        buf.push_str(&r.comparison);
+        buf.push('\t');
+        buf.push_str(&r.panel);
+        buf.push('\t');
+        buf.push_str(&r.assay_id);
+        buf.push('\t');
+        buf.push_str(&r.gene_symbol);
+        buf.push('\t');
+        buf.push_str(&r.uniprot);
+        buf.push('\t');
+        buf.push_str(&r.n_applied.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_significant.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_sign_consistent.to_string());
+        buf.push('\t');
+        buf.push_str(&format_float(r.majority_sign));
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.ensemble_p);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.ensemble_q);
+        buf.push('\t');
+        buf.push_str(&r.grade);
+        buf.push('\t');
+        buf.push_str(&r.methods_applied);
+        buf.push('\t');
+        buf.push_str(&r.methods_skipped);
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
 fn push_opt_f64(buf: &mut String, v: Option<f64>) {
     if let Some(x) = v {
         buf.push_str(&format!("{}", x));
@@ -965,6 +1023,52 @@ mod tests {
         let body = text.lines().nth(1).unwrap();
         assert!(body.contains("0.5")); // s2_trend
         assert!(body.contains("limma-eBayes-robust-trend"));
+    }
+
+    #[test]
+    fn de_ensemble_tsv_roundtrips_all_columns() {
+        let d = TempDir::new().unwrap();
+        let p = d.path().join("de_ensemble.tsv");
+        let row = EnsembleRow {
+            comparison: "PT2-PR2".into(),
+            panel: "Inflammation".into(),
+            assay_id: "OID12345".into(),
+            gene_symbol: "HSPA1A".into(),
+            uniprot: "P08107".into(),
+            n_applied: 4,
+            n_significant: 4,
+            n_sign_consistent: 4,
+            majority_sign: 1.0,
+            ensemble_p: Some(1e-9),
+            ensemble_q: Some(1e-8),
+            grade: "VALIDATED".into(),
+            methods_applied: "welch-t,ols,limma,msqrob".into(),
+            methods_skipped: "paired-t".into(),
+        };
+        write_de_ensemble(&p, &[row]).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        let header = text.lines().next().unwrap();
+        for col in [
+            "comparison",
+            "panel",
+            "assay_id",
+            "gene_symbol",
+            "uniprot",
+            "n_applied",
+            "n_significant",
+            "n_sign_consistent",
+            "majority_sign",
+            "ensemble_p",
+            "ensemble_q",
+            "grade",
+            "methods_applied",
+            "methods_skipped",
+        ] {
+            assert!(header.contains(col), "missing column {col}: {header}");
+        }
+        let body = text.lines().nth(1).unwrap();
+        assert!(body.contains("VALIDATED"));
+        assert!(body.contains("HSPA1A"));
     }
 
     #[test]
