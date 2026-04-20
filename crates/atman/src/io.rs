@@ -7,7 +7,8 @@
 use anyhow::{anyhow, Context, Result};
 use atman_core::{
     fold_change::FoldChangePanel, matrix::DubeWidePanel, Abundance, AssayId, Batch, DetectionLimit,
-    MeasurementRecord, Platform, ProteinIdentity, QcFlag, Sample,
+    MeasurementRecord, PeptideIdentity, PeptideMeasurementRecord, Platform, ProteinIdentity,
+    QcFlag, Sample,
 };
 use csv::StringRecord;
 use sha2::{Digest, Sha256};
@@ -356,6 +357,171 @@ pub fn read_proteins(path: &Path) -> Result<Vec<ProteinIdentity>> {
     Ok(out)
 }
 
+/// peptides.tsv reader: peptide catalog keyed by `peptide_id`, with the
+/// parent protein's `assay_id` required and sequence/charge/modification
+/// columns optional. Header-indexed.
+pub fn read_peptides(path: &Path) -> Result<Vec<PeptideIdentity>> {
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(path)
+        .with_context(|| format!("opening {:?}", path))?;
+    let headers = reader
+        .headers()
+        .with_context(|| format!("reading headers from {:?}", path))?
+        .clone();
+    let col: HashMap<String, usize> = headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.to_string(), i))
+        .collect();
+    let need = |name: &str| -> Result<usize> {
+        col.get(name)
+            .copied()
+            .ok_or_else(|| anyhow!("missing column {:?} in {:?}", name, path))
+    };
+    let c_pep = need("peptide_id")?;
+    let c_assay = need("assay_id")?;
+    let c_seq = col.get("sequence").copied();
+    let c_charge = col.get("charge").copied();
+    let c_mods = col.get("modifications").copied();
+    let c_mc = col.get("missed_cleavages").copied();
+    let mut out = Vec::new();
+    for result in reader.records() {
+        let row = result.with_context(|| format!("reading peptide row from {:?}", path))?;
+        let charge = match c_charge.and_then(|i| row.get(i)) {
+            Some(s) if !s.is_empty() => Some(
+                s.parse::<i32>()
+                    .with_context(|| format!("charge parse in {:?}", path))?,
+            ),
+            _ => None,
+        };
+        let missed = match c_mc.and_then(|i| row.get(i)) {
+            Some(s) if !s.is_empty() => Some(
+                s.parse::<u32>()
+                    .with_context(|| format!("missed_cleavages parse in {:?}", path))?,
+            ),
+            _ => None,
+        };
+        out.push(PeptideIdentity {
+            peptide_id: row[c_pep].to_string(),
+            assay_id: AssayId(row[c_assay].to_string()),
+            sequence: c_seq.and_then(|i| row.get(i)).and_then(empty_to_none),
+            charge,
+            modifications: c_mods.and_then(|i| row.get(i)).and_then(empty_to_none),
+            missed_cleavages: missed,
+        });
+    }
+    Ok(out)
+}
+
+/// peptides.tsv writer.
+pub fn write_peptides(path: &Path, peptides: &[PeptideIdentity]) -> Result<()> {
+    let mut buf =
+        String::from("peptide_id\tassay_id\tsequence\tcharge\tmodifications\tmissed_cleavages\n");
+    for p in peptides {
+        buf.push_str(&p.peptide_id);
+        buf.push('\t');
+        buf.push_str(&p.assay_id.0);
+        buf.push('\t');
+        buf.push_str(&p.sequence.clone().unwrap_or_default());
+        buf.push('\t');
+        if let Some(c) = p.charge {
+            buf.push_str(&c.to_string());
+        }
+        buf.push('\t');
+        buf.push_str(&p.modifications.clone().unwrap_or_default());
+        buf.push('\t');
+        if let Some(m) = p.missed_cleavages {
+            buf.push_str(&m.to_string());
+        }
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+/// peptide_measurements.tsv reader. One row per (sample, peptide) pair.
+/// Header-indexed.
+pub fn read_peptide_measurements(path: &Path) -> Result<Vec<PeptideMeasurementRecord>> {
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(path)
+        .with_context(|| format!("opening {:?}", path))?;
+    let headers = reader
+        .headers()
+        .with_context(|| format!("reading headers from {:?}", path))?
+        .clone();
+    let col: HashMap<String, usize> = headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.to_string(), i))
+        .collect();
+    let need = |name: &str| -> Result<usize> {
+        col.get(name)
+            .copied()
+            .ok_or_else(|| anyhow!("missing column {:?} in {:?}", name, path))
+    };
+    let c_sample = need("sample_id")?;
+    let c_pep = need("peptide_id")?;
+    let c_abund = need("abundance")?;
+    let c_unit = need("abundance_unit")?;
+    let c_drop = need("dropped_by_qc")?;
+    let c_below = need("below_lod")?;
+    let mut out = Vec::new();
+    for result in reader.records() {
+        let row = result.with_context(|| format!("reading peptide measurement from {:?}", path))?;
+        let dropped: bool = row[c_drop].parse::<u8>().map(|v| v != 0).unwrap_or(false);
+        let abund_str = &row[c_abund];
+        let abundance: f64 = if abund_str.is_empty() {
+            f64::NAN
+        } else {
+            abund_str
+                .parse()
+                .with_context(|| format!("peptide abundance parse in {:?}", path))?
+        };
+        let below_lod: bool = row[c_below].parse::<u8>().map(|v| v != 0).unwrap_or(false);
+        out.push(PeptideMeasurementRecord {
+            sample_id: row[c_sample].to_string(),
+            peptide_id: row[c_pep].to_string(),
+            abundance,
+            abundance_unit: row[c_unit].to_string(),
+            dropped_by_qc: dropped,
+            below_lod,
+        });
+    }
+    Ok(out)
+}
+
+/// peptide_measurements.tsv writer.
+pub fn write_peptide_measurements(
+    path: &Path,
+    records: &[PeptideMeasurementRecord],
+) -> Result<()> {
+    let mut buf = String::from(
+        "sample_id\tpeptide_id\tabundance\tabundance_unit\tdropped_by_qc\tbelow_lod\n",
+    );
+    for r in records {
+        buf.push_str(&r.sample_id);
+        buf.push('\t');
+        buf.push_str(&r.peptide_id);
+        buf.push('\t');
+        if r.dropped_by_qc || !r.abundance.is_finite() {
+            // masked — leave cell empty so reader sees NaN
+        } else {
+            buf.push_str(&format!("{}", r.abundance));
+        }
+        buf.push('\t');
+        buf.push_str(&r.abundance_unit);
+        buf.push('\t');
+        buf.push_str(&(r.dropped_by_qc as u8).to_string());
+        buf.push('\t');
+        buf.push_str(&(r.below_lod as u8).to_string());
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
 /// proteins.tsv writer.
 pub fn write_proteins(path: &Path, proteins: &[ProteinIdentity]) -> Result<()> {
     let mut buf = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
@@ -565,6 +731,11 @@ pub struct DeResultRow {
     pub f_p_value: Option<f64>,
     pub f_bh_q: Option<f64>,
     pub lfc_threshold: Option<f64>,
+    // Appended by the msqrob peptide-level ridge mixed model. `None`
+    // for non-msqrob tests; empty TSV cells on write.
+    pub n_peptides_observed: Option<usize>,
+    pub peptide_variance_ratio: Option<f64>,
+    pub ridge_lambda: Option<f64>,
 }
 
 pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
@@ -574,7 +745,8 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
          effect_size\teffect_size_method\tci_low\tci_high\twilcoxon_p\twilcoxon_method\t\
          median_diff\ttrimmed_mean_diff\t\
          s2_trend\ts2_prior\ts2_posterior\tdf_prior\tdf_total\t\
-         f_statistic\tf_p_value\tf_bh_q\tlfc_threshold\n",
+         f_statistic\tf_p_value\tf_bh_q\tlfc_threshold\t\
+         n_peptides_observed\tpeptide_variance_ratio\tridge_lambda\n",
     );
     for r in rows {
         buf.push_str(&r.panel);
@@ -638,6 +810,14 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
         push_opt_f64(&mut buf, r.f_bh_q);
         buf.push('\t');
         push_opt_f64(&mut buf, r.lfc_threshold);
+        buf.push('\t');
+        if let Some(n) = r.n_peptides_observed {
+            buf.push_str(&n.to_string());
+        }
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.peptide_variance_ratio);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.ridge_lambda);
         buf.push('\n');
     }
     atomic_write(path, buf.as_bytes())
@@ -754,6 +934,9 @@ mod tests {
             f_p_value: Some(0.05),
             f_bh_q: Some(0.1),
             lfc_threshold: Some(0.0),
+            n_peptides_observed: None,
+            peptide_variance_ratio: None,
+            ridge_lambda: None,
         };
         write_de_results(&p, &[row]).unwrap();
         let text = std::fs::read_to_string(&p).unwrap();

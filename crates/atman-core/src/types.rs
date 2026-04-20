@@ -157,6 +157,47 @@ impl MeasurementRecord {
     }
 }
 
+/// Peptide catalog entry for MS-based proteomics, keyed by
+/// `(AssayId, peptide_id)`. `assay_id` points at the parent protein in
+/// `proteins.tsv`; peptide-level differential abundance models aggregate
+/// `PeptideMeasurementRecord` rows grouped by `assay_id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PeptideIdentity {
+    pub peptide_id: String,
+    pub assay_id: AssayId,
+    pub sequence: Option<String>,
+    pub charge: Option<i32>,
+    pub modifications: Option<String>,
+    pub missed_cleavages: Option<u32>,
+}
+
+/// One sample × one peptide abundance measurement. Primary key is
+/// `(sample_id, peptide_id)`. Abundance units are recorded as a free-form
+/// string (for example `log2_intensity` or `log2_maxlfq`) so downstream
+/// commands can reason about log-scale assumptions without the platform
+/// enum churn required by `MeasurementRecord`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PeptideMeasurementRecord {
+    pub sample_id: String,
+    pub peptide_id: String,
+    pub abundance: f64,
+    pub abundance_unit: String,
+    pub dropped_by_qc: bool,
+    pub below_lod: bool,
+}
+
+impl PeptideMeasurementRecord {
+    /// Returns `None` when the record is masked by QC, otherwise the
+    /// f64 abundance. Mirrors `MeasurementRecord::effective_abundance`.
+    pub fn effective_abundance(&self) -> Option<f64> {
+        if self.dropped_by_qc || !self.abundance.is_finite() {
+            None
+        } else {
+            Some(self.abundance)
+        }
+    }
+}
+
 /// A biological or control sample.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sample {

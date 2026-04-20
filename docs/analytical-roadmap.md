@@ -408,6 +408,58 @@ Acceptance:
 - Integration tests cover missing proteins, sign inconsistency, and
   heterogeneity metrics.
 
+## Phase 6: Peptide-Level Inference
+
+### 14. Peptide-level ridge mixed model (`atman de --test msqrob`) (implemented)
+
+Per-protein ridge-regularized linear mixed model fit over peptide-level
+measurements. Random intercept per peptide, REML 1D profile over the
+variance ratio, L2 ridge on non-intercept fixed-effect coefficients.
+
+Command:
+
+```bash
+atman de \
+  --input-dir out \
+  --output-dir out_msqrob \
+  --test msqrob \
+  --peptide-measurements out/peptide_measurements.tsv \
+  --peptide-metadata out/peptides.tsv \
+  --groups Case-Control \
+  --ridge-lambda 0.5 \
+  --min-peptides 2 \
+  --min-pairs 5
+```
+
+New canonical files (additive; protein-level files unchanged):
+
+- `peptide_measurements.tsv`: `sample_id, peptide_id, abundance,
+  abundance_unit, dropped_by_qc, below_lod`
+- `peptides.tsv`: `peptide_id, assay_id, sequence, charge, modifications,
+  missed_cleavages`
+
+Acceptance:
+
+- `de_results.tsv` gains `n_peptides_observed`, `peptide_variance_ratio`,
+  `ridge_lambda` columns for msqrob rows (empty for other test types).
+- `effect_size_method = "msqrob-ridge"` on every fitted row.
+- Sign convention matches the rest of `atman de`: reported effect is
+  `mean_a − mean_b` for an `A-B` comparison.
+- `--ridge-lambda auto` parses but currently equals `0.0`; data-driven
+  selection is a follow-on.
+- `--min-peptides` refuses proteins with too few observed peptides,
+  emitting `skip_reason = "insufficient_peptides"`.
+- Integration tests cover direction recovery on a 3-protein synthetic
+  fixture, column presence, `auto` default, CLI rejection of peptide
+  flags under non-msqrob tests, and failure on missing peptide inputs.
+
+Follow-ons this unlocks:
+
+- **DEqMS peptide-count-weighted variance** on top of `--test limma`
+  (peptide count per protein joins cleanly via `peptides.tsv`).
+- **proDA-style probabilistic missingness** (joint abundance + detection
+  likelihood) using the same peptide schema.
+
 ## Implemented Build Order
 
 1. `atman validate`
@@ -423,6 +475,7 @@ Acceptance:
 11. Module scoring
 12. ORA enrichment
 13. Meta-analysis
+14. Peptide-level ridge mixed model
 
 ## Release Readiness Status
 

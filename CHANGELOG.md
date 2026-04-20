@@ -8,6 +8,37 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Peptide-level ridge mixed model (`atman de --test msqrob`).**
+  Per-protein linear mixed model over peptide-level measurements with a
+  random intercept per peptide, REML 1D profile over the variance
+  ratio `τ = σ²_peptide / σ²_res`, and an L2 ridge penalty on
+  non-intercept fixed-effect coefficients. Collapses protein rollup,
+  imputation, and per-protein variance estimation into one joint fit in
+  the msqrob2 tradition. Reads two new canonical TSVs —
+  `peptide_measurements.tsv` (sample × peptide abundances) and
+  `peptides.tsv` (peptide catalog with parent `assay_id`) — alongside
+  `samples.tsv` and `proteins.tsv`. Output extends `de_results.tsv` with
+  three additive columns: `n_peptides_observed`,
+  `peptide_variance_ratio`, `ridge_lambda`. Sign convention matches the
+  rest of `atman de` (`mean_a − mean_b`). `--ridge-lambda auto` is
+  currently equivalent to `0.0` (data-driven selection is a follow-on).
+  `--min-peptides` defaults to 2; proteins below the threshold emit
+  `skip_reason = "insufficient_peptides"`. Per-comparison
+  empirical-Bayes variance shrinkage via limma's `fit_f_dist` across
+  all fitted proteins (`atman_core::msqrob::squeeze_variance`) matches
+  msqrob2's `squeezeVarRob` step and populates the existing
+  `s2_prior`, `s2_posterior`, `df_prior`, `df_total` columns in
+  `de_results.tsv`. Validated on the CPTAC Study 6 UPS1 spike-in
+  (30-protein MaxQuant peptides.txt subset from statOmics/MSqRobData):
+  9/9 UPS1 proteins recover the expected negative A–B direction; 100%
+  sign agreement with msqrob2 on all 11 signal proteins (|effect|
+  ≥ 0.3 log₂); **median per-protein |atman − msqrob2| = 0.118 log₂**
+  across 26 jointly-fitted proteins (test tolerance 0.40), using
+  msqrob2 v1.16 run through the canonical vignette workflow
+  (`log2 → center.median → median-summarise → msqrob(~condition)`) on
+  the identical fixture. Reference script
+  `crates/atman/tests/fixtures/msqrob2_cptac_reference.R` regenerates
+  the `msqrob2_cptac_reference.tsv` baseline.
 - **limma-grade eBayes + F-tests (`atman de --test limma`).** Pure-Rust
   port of limma 3.x's core `eBayes` path: moderated t-statistic with
   empirical-Bayes variance shrinkage, parametric-quadratic mean–variance

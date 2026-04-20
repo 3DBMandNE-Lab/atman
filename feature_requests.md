@@ -1,8 +1,10 @@
 # Atman feature requests
 
-No open requests. The 2026-04-19 CSF cross-disease batch shipped the same
-day, and the follow-on P0 run-sidecar request (universal invocation
-provenance across every subcommand) shipped immediately after.
+No open requests. The 2026-04-20 peptide-level msqrob request
+(`atman de --test msqrob`) shipped the same day. Natural follow-ons are
+noted in `docs/analytical-roadmap.md` §6: DEqMS peptide-count variance
+weighting on top of the limma path, and proDA-style probabilistic
+missingness on the same peptide schema.
 
 ## How to implement a feature request
 

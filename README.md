@@ -154,6 +154,19 @@ atman de \
     --lfc-threshold 0.5 \
     --min-pairs 5
 
+# msqrob peptide-level ridge mixed model. One model per protein over its
+# peptides, random intercept per peptide, ridge penalty on non-intercept
+# fixed effects. Requires peptide_measurements.tsv + peptides.tsv.
+atman de \
+    --input-dir out --output-dir out_msqrob \
+    --test msqrob \
+    --peptide-measurements out/peptide_measurements.tsv \
+    --peptide-metadata out/peptides.tsv \
+    --groups "Case-Control" \
+    --ridge-lambda 0.5 \
+    --min-peptides 2 \
+    --min-pairs 5
+
 atman bootstrap protein \
     --input-dir out \
     --groups "PT2-PT1" \
@@ -200,6 +213,7 @@ atman meta \
 Common outputs:
 
 - `measurements.tsv`, `qc_measurements.tsv`, `samples.tsv`, `proteins.tsv`
+- `peptide_measurements.tsv`, `peptides.tsv` (msqrob peptide-level input)
 - optional `validate_report.tsv`
 - `report/qc_summary.tsv`, `report/sample_qc.tsv`, `report/protein_qc.tsv`,
   `report/condition_counts.tsv`
@@ -261,6 +275,12 @@ also the adapter target for non-Olink sources:
 - `proteins.tsv`: assay IDs, UniProt IDs, gene symbols, panel metadata
 - `measurements.tsv`: one row per sample-assay abundance measurement
 - `qc_measurements.tsv`: same schema after QC masking
+- `peptides.tsv`: peptide catalog mapping `peptide_id → assay_id` (parent
+  protein) plus optional sequence, charge, modifications,
+  missed_cleavages. Input to `atman de --test msqrob`.
+- `peptide_measurements.tsv`: one row per sample × peptide abundance.
+  Schema: `sample_id, peptide_id, abundance, abundance_unit,
+  dropped_by_qc, below_lod`.
 
 Downstream commands operate on these files, so each stage can be inspected,
 rerun, or replaced independently.

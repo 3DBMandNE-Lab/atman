@@ -12,12 +12,14 @@ pub mod ica;
 pub mod ingest;
 pub mod limma;
 pub mod matrix;
+pub mod msqrob;
 pub mod qc;
 pub mod sample_id;
 pub mod stats;
 pub mod types;
 
 pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};
+pub use msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
 pub use errors::IngestError;
 pub use fold_change::{
     compute_log2_fc, Comparison, FoldChangeInput, FoldChangeOutput, FoldChangePanel,
@@ -26,6 +28,6 @@ pub use ingest::{IngestOutput, ProteomeIngest};
 pub use matrix::{DubeWidePanel, DubeWideRow};
 pub use sample_id::{DubeSampleIdParser, ParsedSampleId, SampleIdParser};
 pub use types::{
-    Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, ProteinIdentity,
-    QcFlag, Sample,
+    Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, PeptideIdentity,
+    PeptideMeasurementRecord, Platform, ProteinIdentity, QcFlag, Sample,
 };
