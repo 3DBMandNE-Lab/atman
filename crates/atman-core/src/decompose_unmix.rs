@@ -503,6 +503,95 @@ pub struct UnmixResult {
     pub residual_norms: Vec<f64>,
 }
 
+#[derive(Debug, Clone)]
+pub struct KSweepRow {
+    pub k: usize,
+    pub mean_residual_norm: f64,
+    pub marginal_improvement: f64,
+}
+
+/// Sweep `k ∈ [k_min, k_max]`, compute the mean per-sample
+/// reconstruction residual at each k, and pick the smallest `k`
+/// whose marginal improvement over `k − 1` falls below
+/// `elbow_threshold × peak_improvement`. Standard WGCNA-style
+/// scree-elbow heuristic, bounded and deterministic.
+///
+/// Returns `(chosen_k, sweep_rows)`. When every marginal
+/// improvement remains above the threshold, falls back to `k_max`.
+pub fn select_k_auto(
+    data: &[Vec<f64>],
+    k_min: usize,
+    k_max: usize,
+    seed: u64,
+    endmember_method: EndmemberMethod,
+    abundance_method: AbundanceMethod,
+    fcls_max_iter: usize,
+    fcls_tol: f64,
+    elbow_threshold: f64,
+) -> Result<(usize, Vec<KSweepRow>), String> {
+    if k_min < 2 || k_max < k_min {
+        return Err(format!("invalid sweep range k_min={k_min}, k_max={k_max}"));
+    }
+    if k_max > data.len() / 2 {
+        return Err(format!(
+            "k_max={k_max} > n_samples/2={}; sweep is under-determined",
+            data.len() / 2
+        ));
+    }
+    let mut residuals: Vec<(usize, f64)> = Vec::with_capacity(k_max - k_min + 1);
+    for k in k_min..=k_max {
+        let result = unmix(
+            data,
+            k,
+            seed,
+            endmember_method,
+            abundance_method,
+            fcls_max_iter,
+            fcls_tol,
+        )?;
+        let n = result.residual_norms.len();
+        let mean = if n > 0 {
+            result.residual_norms.iter().sum::<f64>() / n as f64
+        } else {
+            f64::NAN
+        };
+        residuals.push((k, mean));
+    }
+    let mut rows: Vec<KSweepRow> = Vec::with_capacity(residuals.len());
+    let mut peak_improvement = 0.0_f64;
+    for i in 0..residuals.len() {
+        let marginal = if i == 0 {
+            0.0
+        } else {
+            (residuals[i - 1].1 - residuals[i].1).max(0.0)
+        };
+        peak_improvement = peak_improvement.max(marginal);
+        rows.push(KSweepRow {
+            k: residuals[i].0,
+            mean_residual_norm: residuals[i].1,
+            marginal_improvement: marginal,
+        });
+    }
+    // Pick smallest k (> k_min) whose marginal improvement is small
+    // relative to the sweep's peak improvement. A value of 1.0 means
+    // "pick k_min"; a value near 0 means "only stop when residual is
+    // completely flat." Default 0.10 approximates the eye-inspection
+    // elbow on proteomics fixtures.
+    let mut chosen = k_max;
+    for row in rows.iter().skip(1) {
+        if peak_improvement <= 0.0 {
+            chosen = row.k;
+            break;
+        }
+        if row.marginal_improvement / peak_improvement < elbow_threshold {
+            // Stop at the previous k — the one before the knee.
+            chosen = (row.k - 1).max(k_min);
+            break;
+        }
+    }
+    Ok((chosen, rows))
+}
+
 /// End-to-end: endmember extraction (VCA or N-FINDR) → abundance
 /// estimation → per-sample reconstruction residual.
 pub fn unmix(
@@ -730,6 +819,49 @@ mod tests {
         let sum: f64 = p.iter().sum();
         assert!((sum - 1.0).abs() < 1e-12);
         assert!(p.iter().all(|x| *x >= -1e-15));
+    }
+
+    #[test]
+    fn select_k_auto_picks_planted_k_on_planted_3_fixture() {
+        let (data, _, _) = planted_unmix_fixture(80, 60, 3, 77);
+        let (chosen, rows) = select_k_auto(
+            &data,
+            2,
+            6,
+            42,
+            EndmemberMethod::Vca,
+            AbundanceMethod::Fcls,
+            200,
+            1e-7,
+            0.10,
+        )
+        .unwrap();
+        assert!(
+            chosen == 3 || chosen == 4,
+            "expected k ≈ 3 on planted-3 fixture, got {chosen}; sweep={:?}",
+            rows.iter().map(|r| (r.k, r.mean_residual_norm)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn select_k_auto_picks_planted_k_on_planted_5_fixture() {
+        let (data, _, _) = planted_unmix_fixture(120, 100, 5, 88);
+        let (chosen, _rows) = select_k_auto(
+            &data,
+            2,
+            8,
+            42,
+            EndmemberMethod::Vca,
+            AbundanceMethod::Fcls,
+            200,
+            1e-7,
+            0.10,
+        )
+        .unwrap();
+        assert!(
+            chosen == 5 || chosen == 6,
+            "expected k ≈ 5 on planted-5 fixture, got {chosen}"
+        );
     }
 
     #[test]

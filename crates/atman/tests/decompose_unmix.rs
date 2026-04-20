@@ -319,6 +319,55 @@ fn unmix_refuses_clr_plus_fcls_without_escape_hatch() {
 }
 
 #[test]
+fn unmix_k_auto_selects_planted_k_on_planted_3_fixture() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("cohort");
+    let output = tmp.path().join("k_auto_out");
+    let mut planted = vec![vec![0.0_f64; 30]; 3];
+    write_planted_cohort(&input, 20260420, &mut planted);
+
+    let status = run_atman(&[
+        "decompose", "unmix",
+        "--input-dir", input.to_str().unwrap(),
+        "--k", "auto",
+        "--k-min", "2",
+        "--k-max", "6",
+        "--k-elbow-threshold", "0.10",
+        "--method", "vca",
+        "--abundance", "fcls",
+        "--transform", "none",
+        "--seed", "42",
+        "--output-dir", output.to_str().unwrap(),
+    ]);
+    assert!(
+        status.status.success(),
+        "decompose unmix --k auto failed:\nstderr:\n{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let k_path = output.join("k_selection.tsv");
+    assert!(k_path.exists(), "k_selection.tsv must be emitted under --k auto");
+    let (header, rows) = parse_tsv(&k_path);
+    for col in ["k", "mean_residual_norm", "marginal_improvement", "chosen"] {
+        assert!(header.iter().any(|h| h == col), "missing {col}");
+    }
+    let chosen_rows: Vec<&HashMap<String, String>> = rows
+        .iter()
+        .filter(|r| r["chosen"] == "1")
+        .collect();
+    assert_eq!(chosen_rows.len(), 1, "expected exactly one chosen k");
+    let chosen_k: usize = chosen_rows[0]["k"].parse().unwrap();
+    assert!(
+        chosen_k == 3 || chosen_k == 4,
+        "--k auto should pick ≈ 3 on planted-3 fixture; got {chosen_k}"
+    );
+    // Final endmembers/abundances reflect the chosen k.
+    let (_, em_rows) = parse_tsv(&output.join("endmembers.tsv"));
+    let distinct: std::collections::HashSet<String> =
+        em_rows.iter().map(|r| r["endmember_id"].clone()).collect();
+    assert_eq!(distinct.len(), chosen_k);
+}
+
+#[test]
 fn unmix_is_deterministic_under_fixed_seed() {
     let tmp = tempfile::tempdir().unwrap();
     let input = tmp.path().join("cohort");

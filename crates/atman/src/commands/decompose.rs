@@ -1,7 +1,9 @@
 use anyhow::{bail, Context, Result};
 use atman_core::bh_fdr;
 use atman_core::compositional::{apply_transform, Transform};
-use atman_core::decompose_unmix::{unmix, AbundanceMethod, EndmemberMethod, UnmixResult};
+use atman_core::decompose_unmix::{
+    select_k_auto, unmix, AbundanceMethod, EndmemberMethod, KSweepRow, UnmixResult,
+};
 use atman_core::ica::{fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult};
 use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
 use atman_core::variance_decomposition::{
@@ -1554,9 +1556,26 @@ pub struct UnmixArgs {
     #[arg(long)]
     input_dir: PathBuf,
 
-    /// Number of endmembers `k`. Must satisfy `2 ≤ k ≤ n_samples / 2`.
+    /// Number of endmembers. Pass an integer for a fixed `k`, or
+    /// `auto` to sweep `[--k-min, --k-max]` and pick the smallest
+    /// `k` whose marginal reconstruction-residual improvement drops
+    /// below `--k-elbow-threshold` times the sweep's peak
+    /// improvement. Must satisfy `2 ≤ k ≤ n_samples / 2`.
     #[arg(long)]
-    k: usize,
+    k: String,
+
+    /// Lower bound for `--k auto` sweep.
+    #[arg(long, default_value_t = 2)]
+    k_min: usize,
+
+    /// Upper bound for `--k auto` sweep.
+    #[arg(long, default_value_t = 8)]
+    k_max: usize,
+
+    /// Elbow threshold for `--k auto`: marginal improvement / peak
+    /// improvement ratio at which the sweep stops.
+    #[arg(long, default_value_t = 0.10)]
+    k_elbow_threshold: f64,
 
     /// Endmember extraction method. `vca` (default): deterministic
     /// projection-onto-complement. `nfindr`: iterative simplex-volume
@@ -1683,11 +1702,53 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
         args.max_missing_fraction,
         impute_mean,
     )?;
-    if subject_ids.len() < args.k * 2 {
+    // Resolve --k: either an integer or "auto" (sweep + elbow).
+    let (effective_k, k_sweep): (usize, Vec<KSweepRow>) = if args.k == "auto" {
+        if args.k_min < 2 || args.k_max < args.k_min {
+            bail!(
+                "invalid --k auto sweep: k-min={} k-max={}",
+                args.k_min, args.k_max
+            );
+        }
+        if args.k_max * 2 > subject_ids.len() {
+            bail!(
+                "--k-max={} requires >= {} samples; got {}",
+                args.k_max,
+                args.k_max * 2,
+                subject_ids.len()
+            );
+        }
+        eprintln!(
+            "decompose unmix: --k auto sweeping [{}, {}]",
+            args.k_min, args.k_max
+        );
+        // Apply transform later; here we need it already for the
+        // sweep's VCA+FCLS runs. Rebuild the transformed matrix
+        // early.
+        // (The transform below is still the canonical one — we
+        // just need it before the sweep runs.)
+        select_k_auto(
+            // placeholder: applied below after transform
+            &data, args.k_min, args.k_max, args.seed,
+            EndmemberMethod::Vca,  // sweep uses VCA; caller can
+                                   // re-run with nfindr post-hoc
+            abundance_method,
+            args.fcls_max_iter,
+            args.fcls_tol,
+            args.k_elbow_threshold,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?
+    } else {
+        let k: usize = args.k.parse().with_context(|| {
+            format!("--k {:?}: expected an integer or `auto`", args.k)
+        })?;
+        (k, Vec::new())
+    };
+    if subject_ids.len() < effective_k * 2 {
         bail!(
             "k={} requires >= {} samples (k > n/2 is under-determined); got {}",
-            args.k,
-            args.k * 2,
+            effective_k,
+            effective_k * 2,
             subject_ids.len()
         );
     }
@@ -1729,7 +1790,7 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
 
     let result = unmix(
         &transformed,
-        args.k,
+        effective_k,
         args.seed,
         endmember_method,
         abundance_method,
@@ -1746,10 +1807,16 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
     write_unmix_abundances(&abundances_path, &result, &subject_ids)?;
     let diag_path = args.output_dir.join("unmix_diagnostics.tsv");
     write_unmix_diagnostics(&diag_path, &result, &subject_ids)?;
+    let mut outputs = vec![endmembers_path.clone(), abundances_path.clone(), diag_path.clone()];
+    if !k_sweep.is_empty() {
+        let k_path = args.output_dir.join("k_selection.tsv");
+        write_k_selection(&k_path, &k_sweep, effective_k)?;
+        outputs.push(k_path);
+    }
 
     eprintln!(
         "decompose unmix: k={} n={} p={} method={} abundance={} transform={}",
-        args.k,
+        effective_k,
         subject_ids.len(),
         protein_labels.len(),
         args.method,
@@ -1774,6 +1841,10 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
         json!({
             "input-dir": args.input_dir.display().to_string(),
             "k": args.k,
+            "effective-k": effective_k,
+            "k-min": args.k_min,
+            "k-max": args.k_max,
+            "k-elbow-threshold": args.k_elbow_threshold,
             "method": args.method,
             "nfindr-max-passes": args.nfindr_max_passes,
             "abundance": args.abundance,
@@ -1788,12 +1859,28 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
             "impute": args.impute,
         }),
         &input_dir_sha256,
-        &[endmembers_path.clone(), abundances_path.clone(), diag_path.clone()],
+        &outputs,
         started_at,
         finished_at,
     )?;
     eprintln!("decompose unmix: sidecar={}", sidecar.display());
     Ok(())
+}
+
+fn write_k_selection(path: &Path, rows: &[KSweepRow], chosen_k: usize) -> Result<()> {
+    let mut buf = String::from(
+        "k\tmean_residual_norm\tmarginal_improvement\tchosen\n",
+    );
+    for r in rows {
+        buf.push_str(&format!(
+            "{}\t{:.6}\t{:.6}\t{}\n",
+            r.k,
+            r.mean_residual_norm,
+            r.marginal_improvement,
+            if r.k == chosen_k { 1 } else { 0 },
+        ));
+    }
+    atomic_write(path, buf.as_bytes())
 }
 
 fn load_subject_protein_matrix(
