@@ -466,6 +466,57 @@ Follow-ons this unlocks:
 - **proDA-style probabilistic missingness** (joint abundance + detection
   likelihood) using the same peptide schema.
 
+## Phase 7: Cross-method Consensus
+
+### 16. Ensemble DE dispatcher (`atman de --test ensemble`) (implemented)
+
+Runs every applicable DE method on the same canonical inputs,
+Stouffer-combines per-method p-values within each (comparison,
+protein), BH-FDRs ensemble p-values across proteins, and assigns a
+VALIDATED / PROVISIONAL / INSUFFICIENT grade from the combined
+evidence plus cross-method sign agreement. Directly answers the
+"is this hit a model-choice artifact?" reviewer question that every
+proteomics paper faces — no other bulk-proteomics tool ships this.
+
+Command:
+
+```bash
+atman de --input-dir out --output-dir out_ensemble \
+  --test ensemble \
+  --ensemble-methods "paired-t,welch-t,limma,msqrob" \
+  --peptide-measurements out/peptide_measurements.tsv \
+  --peptide-metadata out/peptides.tsv \
+  --groups "PT2-PR2" --paired-by participant --min-pairs 5
+```
+
+Grading logic (post-BH):
+
+- **VALIDATED:** `ensemble_q < q_threshold` AND 100% of methods
+  agree on mean_diff sign.
+- **PROVISIONAL:** `ensemble_q < q_threshold` AND
+  `≥ provisional_sign_fraction` (default 0.50) agree on sign.
+- **INSUFFICIENT:** otherwise.
+
+Acceptance:
+
+- `de_ensemble.tsv` emits one row per (comparison, protein) with
+  `n_applied`, `n_significant`, `n_sign_consistent`, `majority_sign`,
+  `ensemble_p` (Stouffer), `ensemble_q` (BH within comparison),
+  `grade`, `methods_applied`, `methods_skipped`.
+- `de_results.tsv` gains a `method` column for bucketing per-method
+  rows.
+- Methods whose required inputs are missing are auto-skipped and
+  reported in `methods_skipped`; the run does not abort.
+- Implementation uses per-method sub-dispatch into tempdirs via
+  `Args: Clone`, re-reading each method's `de_results.tsv` before
+  aggregating. No refactor of the monolithic per-method paths was
+  required.
+- Integration tests cover (i) grade assignment on a synthetic 3-protein
+  fixture (UP/DN/ST known ground truth); (ii) auto-skip behaviour
+  when msqrob inputs are absent; (iii) real-data grading on the
+  bundled Dube heat-acclimation cohort — HSPA1A, HSPB1, DNAJB1 all
+  graded VALIDATED in PT2-PR2.
+
 ## Implemented Build Order
 
 1. `atman validate`
@@ -483,6 +534,7 @@ Follow-ons this unlocks:
 13. Meta-analysis
 14. Peptide-level ridge mixed model
 15. DEqMS peptide-count-weighted variance
+16. Cross-method ensemble DE dispatcher
 
 ## Release Readiness Status
 

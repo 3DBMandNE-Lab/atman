@@ -8,6 +8,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Cross-method consensus DE (`atman de --test ensemble`).** Runs
+  every applicable DE method on the same canonical inputs — paired-t,
+  welch-t, ols, mixed, limma (with or without DEqMS), msqrob — and
+  writes a per-(comparison, protein) agreement summary to
+  `de_ensemble.tsv` alongside the tagged per-method rows in
+  `de_results.tsv` (new `method` column). Per-method p-values are
+  Stouffer-combined into an `ensemble_p`, BH-FDR'd to `ensemble_q`
+  within each comparison; grade is **VALIDATED** when
+  `ensemble_q < --ensemble-q-threshold` (default 0.05) AND every
+  applicable method agrees on sign; **PROVISIONAL** when
+  ensemble_q is significant but at least `--ensemble-provisional-fraction`
+  (default 0.50) of methods agree on sign; **INSUFFICIENT**
+  otherwise. Method applicability is auto-detected: methods whose
+  required inputs are missing (e.g. msqrob without
+  `--peptide-measurements`) are listed in `methods_skipped` rather
+  than aborting the run. Thresholds are overridable
+  (`--ensemble-q-threshold`, `--ensemble-validated-fraction`,
+  `--ensemble-provisional-fraction`, `--ensemble-sign-fraction`).
+  Validated on the bundled Dube heat-acclimation cohort — all three
+  canonical heat-shock proteins present in the Olink panels (HSPA1A,
+  HSPB1, DNAJB1) are graded VALIDATED in PT2-PR2 with
+  `ensemble_q < 0.025` and positive majority sign.
 - **DEqMS peptide-count-weighted variance on `--test limma`
   (`atman de --test limma --peptide-metadata peptides.tsv`).**
   Swaps limma's parametric mean-variance trend covariate for

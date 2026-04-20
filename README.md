@@ -63,7 +63,7 @@ atman qc                 apply QC masking rules
 atman report qc          summarize QC, missingness, and condition support
 atman matrix             canonical long TSV -> per-panel wide NPX CSVs
 atman fold-change        compute per-panel log2 fold-change tables
-atman de                 paired, moderated, Welch, or OLS differential abundance
+atman de                 paired, Welch, OLS, mixed, limma, msqrob, or cross-method ensemble DE
 atman bootstrap protein  subject-level bootstrap intervals for protein effects
 atman bootstrap module   subject-level bootstrap intervals for module effects
 atman null               permutation/sign-flip null calibration for DE effects
@@ -158,6 +158,22 @@ atman de \
     --trend true \
     --min-pairs 5
 
+# Cross-method consensus DE. Runs every listed method on the same
+# canonical inputs, Stouffer-combines per-method p-values within each
+# (comparison, protein), BH-FDRs across proteins, and assigns a
+# VALIDATED / PROVISIONAL / INSUFFICIENT grade based on ensemble_q +
+# sign consistency. Methods with missing inputs (msqrob without
+# --peptide-measurements, etc.) are auto-skipped, not an error.
+atman de \
+    --input-dir out --output-dir out_ensemble \
+    --test ensemble \
+    --ensemble-methods "paired-t,welch-t,limma,msqrob" \
+    --peptide-measurements out/peptide_measurements.tsv \
+    --peptide-metadata out/peptides.tsv \
+    --groups "PT2-PR2" \
+    --paired-by participant \
+    --min-pairs 5
+
 # TREAT (minimum-effect test) at log2-FC threshold 0.5.
 atman de \
     --input-dir out --output-dir out_limma_treat \
@@ -240,6 +256,13 @@ Common outputs:
 - `module_scores.tsv`; optional module-score canonical TSVs for downstream DE
 - `ora.tsv`
 - `meta.tsv`
+- `de_ensemble.tsv` (ensemble mode): per-(comparison, protein)
+  cross-method agreement with `n_applied`, `n_significant`,
+  `n_sign_consistent`, `majority_sign`, `ensemble_p` (Stouffer),
+  `ensemble_q` (BH within comparison), `grade`
+  (VALIDATED / PROVISIONAL / INSUFFICIENT), `methods_applied`,
+  `methods_skipped`. `de_results.tsv` in ensemble mode additionally
+  tags every row with the emitting `method`.
 
 ## Reproducibility Check
 
