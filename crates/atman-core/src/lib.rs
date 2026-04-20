@@ -5,6 +5,7 @@
 //! 2023 published filtered NPX + log2 fold-change files.
 
 pub mod align;
+pub mod align_bootstrap;
 pub mod compositional;
 pub mod de;
 pub mod deqms;
@@ -23,6 +24,7 @@ pub mod stats;
 pub mod types;
 
 pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};
+pub use align_bootstrap::{align_bootstrap, resample_rows, BootstrapParams, BootstrapRow, CohortMatrix};
 pub use compositional::{apply_transform, Transform};
 pub use deqms::{deqms_shrink, tricube_moving_average, DeqmsShrinkage};
 pub use ica_null::{
