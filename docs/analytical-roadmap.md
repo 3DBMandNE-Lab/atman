@@ -716,6 +716,57 @@ Why it matters: gives a quantitative answer to "what fraction of
 this archetype is shared biology vs. between-cohort batch?" — the
 hardest-to-defend question in any cross-cohort factor paper.
 
+### 21. Multi-level omnibus F-test (`atman de --test ols --omnibus-factor`) (implemented, v1)
+
+Per-protein joint hypothesis test on a categorical factor's
+coefficients. Answers "does this protein respond to the factor at
+all?" — the omnibus question that precedes any specific pairwise
+contrast. Directly addresses the common workflow where users have
+≥ 3 levels of a categorical (`stage`, `diagnosis`, `dose`) and
+currently stitch pairwise DEs together by hand, losing omnibus
+information and FWER control.
+
+Command:
+
+```bash
+atman de --test ols \
+  --design "~ condition + stage" \
+  --contrast conditionCase \
+  --omnibus-factor stage \
+  --groups "Case-Control" \
+  --output-dir out_omnibus
+```
+
+Output `de_omnibus.tsv`:
+
+- `panel, assay_id, gene_symbol, factor, comparison,
+  f_statistic, df_num, df_den, p_value, bh_q`
+- `bh_q` is BH-adjusted within each `(comparison, panel)` family.
+- `df_num` = number of factor columns (levels − 1);
+  `df_den` = residual degrees of freedom from the OLS fit.
+
+Acceptance:
+
+- Unit tests verify `contrast_inference` matches OLS's own β / SE /
+  t / p on a single-coefficient contrast to 1e-10 and correctly
+  estimates `β_level_i − β_level_j` for a difference contrast.
+- Unit test verifies `omnibus_f_test` produces F > 10 / p < 0.001
+  on a planted 3-level signal and p > 0.05 on deterministic-noise
+  null data.
+- Integration test on a 3-stage 2-condition synthetic cohort shows
+  RESPONDER F≈21, NONRESPONDER F≈0.2, BH-q separation at 0.05 to
+  the expected side in both cases.
+- Refuses when combined with `--test welch-t`, `--test paired-t`,
+  or any test other than `ols`.
+- Refuses when no `--design` is supplied.
+
+v1 scope trim:
+
+- No automatic Tukey HSD or Dunnett pairwise contrasts (requires
+  studentized-range and multivariate-t distributions not in
+  statrs). User-supplied `--contrast-list` with Sidak adjustment
+  is the next increment on the post-hoc track.
+
 ## Implemented Build Order
 
 1. `atman validate`
@@ -738,6 +789,7 @@ hardest-to-defend question in any cross-cohort factor paper.
 18. Compositional transforms in decompose ica
 19. Bootstrap alignment uncertainty
 20. Archetype variance decomposition
+21. Multi-level omnibus F-test
 
 ## Release Readiness Status
 

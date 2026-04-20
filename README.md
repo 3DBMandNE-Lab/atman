@@ -132,6 +132,19 @@ atman de \
     --contrast conditionCase \
     --min-pairs 5
 
+# Multi-level omnibus F-test: report a per-protein F for whether a
+# categorical factor (here: stage with 3 levels CN/MCI/AD) has ANY
+# effect, alongside the standard pairwise contrast. Emits
+# de_omnibus.tsv with BH-adjusted q within each (comparison, panel).
+atman de \
+    --input-dir out --output-dir out_ols_omnibus \
+    --test ols \
+    --groups "Case-Control" \
+    --design "~ condition + stage" \
+    --contrast conditionCase \
+    --omnibus-factor stage \
+    --min-pairs 5
+
 # Repeated-measures random-intercept model.
 atman de \
     --input-dir out --output-dir out_mixed \

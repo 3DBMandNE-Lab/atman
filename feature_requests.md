@@ -363,7 +363,26 @@ and canonical-TSV contract on top.
 
 ---
 
-## Priority 9: Post-hoc contrasts for multi-level OLS (`atman de --post-hoc`)
+## Priority 9: Post-hoc contrasts for multi-level OLS (`atman de --post-hoc`) — **omnibus F shipped 2026-04-20; post-hoc deferred**
+
+**Shipped:** per-protein omnibus F-test via
+`atman de --test ols --omnibus-factor <name>`. Output
+`de_omnibus.tsv` carries `f_statistic, df_num, df_den, p_value,
+bh_q` with BH-adjustment within each (comparison, panel) family.
+Integration test on a 3-stage synthetic cohort confirms clean
+discrimination (RESPONDER F≈21, NONRESPONDER F≈0.2). See
+`docs/analytical-roadmap.md` §8 for details.
+
+**Deferred:** Tukey HSD, Dunnett, and Sidak post-hoc pairwise
+contrasts. Tukey HSD requires the studentized-range distribution;
+Dunnett requires multivariate-t — neither is in `statrs`. Sidak on
+a user-supplied `--contrast-list` is the natural next increment
+and the most useful fallback since it works off the existing
+`contrast_inference` helper already in `atman-core::de`.
+
+Spec below preserved for the follow-on work:
+
+---
 
 `atman de --test ols` fits the linear model and emits a single contrast
 specified via `--contrast`. For designs with ≥3 levels of a categorical

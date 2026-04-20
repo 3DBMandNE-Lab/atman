@@ -8,6 +8,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Multi-level OLS omnibus F-test (`atman de --test ols
+  --omnibus-factor <name>`).** For categorical factors with ≥ 3
+  levels (e.g. `stage` ∈ {CN, MCI, AD} or `diagnosis` across six
+  disease groups), emits a per-protein F-test of the joint
+  hypothesis that every level of the factor has zero coefficient.
+  Output `de_omnibus.tsv` carries `panel, assay_id, gene_symbol,
+  factor, comparison, f_statistic, df_num, df_den, p_value, bh_q`
+  (BH-adjusted within each `(comparison, panel)` family). The
+  factor's design columns are identified by prefix match on
+  `design_labels` from the existing OLS design builder, so no
+  additional formula machinery is needed. Atomic integration test
+  shows F≈21 / p<10⁻⁵ on a planted-responder protein and F≈0.2 /
+  p=0.83 on a stage-independent protein across a 24-sample 3-stage
+  fixture. Partially closes P9 of the methods track.
+  *Deferred to a follow-on:* Tukey HSD, Dunnett, and Sidak post-hoc
+  pairwise contrasts. Tukey/Dunnett require distributions not in
+  statrs (studentized range, multivariate-t); Sidak on a
+  user-supplied `--contrast-list` is tracked as the next increment.
 - **Archetype variance decomposition (`atman decompose variance`).**
   Partitions each archetype's subject-level activation variance into
   per-fixed-factor contributions, a random-intercept component, and
