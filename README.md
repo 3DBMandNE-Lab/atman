@@ -36,6 +36,39 @@ docker build -t atman:1.0.0 .
 docker run --rm atman:1.0.0 --help
 ```
 
+## Validation
+
+Atman's statistical tests are validated to numerical parity against
+canonical R references on published fixtures. Every reference file below
+ships in the repository; every reference script regenerates the reference
+TSV deterministically under a pinned R + Bioconductor version.
+
+| Test path | R reference | Fixture | Agreement | atman wall-clock |
+|---|---|---|---|---|
+| `de --test limma --peptide-metadata` (DEqMS trend) | Bioconductor `DEqMS::spectraCounteBayes` v1.26 | CPTAC Study 6 UPS1 spike-in (29-protein subset) | median per-protein `|atman − DEqMS|` = **0.000 log₂** (bit-for-bit match at 3 d.p. on every displayed protein) | 0.60 s |
+| `de --test msqrob` | `msqrob2::msqrob(~condition)` v1.16 via the canonical vignette workflow | CPTAC Study 6 UPS1 (30-protein subset from `statOmics/MSqRobData`) | median per-protein `|atman − msqrob2|` = **0.118 log₂** across 26 jointly-fitted proteins; **100% sign agreement** on all 11 signal proteins `\|effect\| ≥ 0.3 log₂`; 9/9 UPS1 proteins recover the expected negative direction | 0.01 s |
+| `de --test limma` (parametric eBayes, `trend=false`, `robust=false`) | `limma::eBayes` 3.x | 100-feature × 20-sample regression fixture | `\|atman − limma\|` < **1e-4** on `t`, `p_value`, `df_total`, `s2_post` | 0.06 s |
+| `de --post-hoc sidak --test ols` | `R lm()` + `pairwise.t.test(p.adjust = "bonferroni")` with Sidak re-derivation | Planted 3-level stage × 2-covariate fixture | `max abs diff` < **1e-6** on `estimate`, `posthoc_p`, `posthoc_adj_p` | 0.01 s |
+| `decompose variance --omnibus-factor` (Type III F) | `car::Anova(type = 3)` (Wald form) | Planted variance-attribution fixture | `max abs p diff` < **1e-6** | < 0.01 s |
+| Olink Explore NPX reproduction (`ingest`, `qc`, `matrix`, `fold-change`) | Dube et al. 2023 Scientific Data published tables | Dube heat-stress cohort (2 panels, 8 filtered NPX files, 8 log2-FC files) | filtered NPX files: **byte-exact** cell match; log2-FC files: match to **floating-point precision** (max delta 1.05e-15) | — |
+
+Wall-clock numbers are end-to-end test times on the release build
+(Apple M-series, single thread), including fixture I/O and binary
+invocation. They are upper bounds on the analytical compute cost per
+fixture.
+
+Reference scripts live alongside the fixtures in
+`crates/atman/tests/fixtures/`:
+
+- `deqms_cptac_reference.R`
+- `msqrob2_cptac_reference.R`
+- `gen_limma_reference.R`
+- `posthoc_sidak_reference.R`
+- `variance_type3_reference.R`
+
+The parity assertions above run on every `cargo test --workspace --release`
+invocation; CI fails if any drifts.
+
 ## Input Support
 
 Atman has three input modes, all landing on the same canonical TSV schema:
@@ -233,6 +266,13 @@ atman de \
 # VALIDATED / PROVISIONAL / INSUFFICIENT grade based on ensemble_q +
 # sign consistency. Methods with missing inputs (msqrob without
 # --peptide-measurements, etc.) are auto-skipped, not an error.
+#
+# INTERPRETIVE CAVEAT. Ensemble is a within-dataset robustness check,
+# not independent-study meta-analysis. paired-t, welch-t, ols, mixed,
+# limma, and msqrob all share most of their signal on the same
+# measurement matrix, so Stouffer p-values are not the meta-analytic
+# combination of independent studies. Read VALIDATED as "the finding
+# survives method swap on this dataset," not "independently replicated."
 atman de \
     --input-dir out --output-dir out_ensemble \
     --test ensemble \
