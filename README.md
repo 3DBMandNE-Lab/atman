@@ -308,20 +308,82 @@ in both acute heat comparisons.
 
 Every analysis subcommand that writes output files also writes a
 `<primary_output>.run.json` sidecar next to its main artifact (e.g.
-`loadings.tsv.run.json` alongside `loadings.tsv`). The sidecar captures:
+`loadings.tsv.run.json` alongside `loadings.tsv`). The sidecar has the
+following fields:
 
-- the atman binary version and git SHA,
-- the fully-resolved argument dict (including defaults),
-- a SHA-256 hash of the canonical input TSVs the command actually read,
-- SHA-256 hashes of every output file from this invocation,
-- ISO-8601 UTC start/finish timestamps and build target triple.
+| Field | Type | Meaning |
+|---|---|---|
+| `command` | string | The atman subcommand that was run (e.g. `"decompose ica"`, `"de"`). |
+| `args` | object | Fully-resolved argument dict, defaults included, kebab-case keys matching the CLI flag names. |
+| `atman_version` | string | `CARGO_PKG_VERSION` at build time. |
+| `atman_git_sha` | string | Git SHA at build time (set via `build.rs`; empty when built outside a git checkout). |
+| `os_arch` | string | Build-time Rust target triple (e.g. `aarch64-apple-darwin`). |
+| `input_dir_sha256` | string | SHA-256 over a sorted `basename\tsha256(contents)` roll-up of the canonical input TSVs the command actually read. Missing files are skipped. See note below on the planned per-file replacement. |
+| `output_files` | object | `{<output_path>: "sha256:<hex>"}` for every artifact written, excluding the sidecar itself. |
+| `started_at` | string | ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`) at the start of the invocation. |
+| `finished_at` | string | Same, at end of invocation. |
+| `exit_code` | integer | `0` on success. Sidecar is only written on success, so the field is uniformly `0`; retained so batch auditors can filter this field without branching on its presence. |
 
-Reviewers can reproduce a run from the sidecar alone — no need to chase
-the driver script. Commands with sidecar output: `ingest-matrix`,
-`validate` (when `--report` is set), `report qc`, `decompose ica`,
-`align programs`, `coupling`, `null`, `enrich gprofiler`, `de`, `bootstrap
-protein`, `bootstrap module`, `bootstrap program`, `meta`, and `ratio`.
-The plan-level `atman run` manifest already covers its own provenance.
+Commands that write a sidecar: `ingest-matrix`, `validate` (when
+`--report` is set), `report qc`, `decompose ica`, `decompose unmix`,
+`align programs`, `align project`, `align bootstrap`, `coupling`,
+`null`, `enrich gprofiler`, `de`, `bootstrap protein`,
+`bootstrap module`, `bootstrap program`, `meta`, and `ratio`. The
+plan-level `atman run` manifest covers its own provenance independently.
+
+#### Reproducing a single seed
+
+For multi-seed commands, per-seed PRNG state derives deterministically
+from the master `--seed` recorded in the sidecar:
+
+- **Multi-seed FastICA** (`decompose ica --n-seeds N`) uses
+  `seed_i = seed.wrapping_add(i)` for `i ∈ [0, n_seeds)`. To reproduce
+  the `i`-th seed's result in isolation, run a single-seed
+  `decompose ica` with `--seed (sidecar.seed + i)` and `--n-seeds 1`.
+- **Bootstrap iterations** (`align bootstrap`, `bootstrap protein`,
+  `bootstrap module`, `decompose unmix --n-boot`) derive per-iteration
+  sub-seeds from `(seed, iter)` via SplitMix64 (see
+  `atman_core::decompose_unmix::bootstrap_sub_seed` / the identical
+  function in `align_bootstrap`). Same scheme across all bootstrap
+  modules, so the same top-level `--seed` produces the same iteration
+  stream everywhere.
+
+#### Resolved vs requested parameters
+
+Some arguments carry a selection rule rather than a concrete value
+(e.g. `decompose ica --k cumulative-variance=0.80` picks `k` at
+runtime from the spectrum; `decompose unmix --k auto` sweeps and
+picks the elbow). The sidecar today records the **rule** in `args`
+but not the **resolved value**. If a reviewer needs the integer `k`
+that was actually used, read it from the primary output TSV
+(`loadings.tsv` column count) or the companion diagnostics TSV
+(`k_selection.tsv` for `decompose unmix --k auto`). Recording the
+resolved value alongside the rule is a planned sidecar schema
+change; see below.
+
+#### Planned schema evolution
+
+Known asymmetries against `output_files` and build-environment gaps
+will be addressed in a follow-on commit that bumps the sidecar to
+`schema_version: 1`:
+
+- `inputs_sha256: {relative_path: sha256}` replaces the roll-up
+  `input_dir_sha256`, matching the per-file shape already used by
+  `output_files`.
+- `schema_version: 1` for forward-compatible parsers.
+- `build_env` block — `rustc_version`, `cargo_lock_sha256`,
+  `profile` — so reproductions can pin the FP-reduction-order-
+  sensitive build environment behind the byte-exact Dube and
+  `Δ = 1.05e-15` log2-fold-change parity claims.
+- `reinvoke` — reconstructed command-line string for paste-and-run.
+- `run_uuid` — UUID per invocation so reviewers can cross-reference
+  independent reproductions.
+- `cwd_at_start` — explicit so relative paths in the sidecar are
+  anchored.
+- Resolved-value fields alongside rule-based args (e.g.
+  `k_resolved` when `--k` carried a rule).
+
+Old sidecars stay readable; the schema is additive.
 
 ### Plan manifests (`atman run`)
 
