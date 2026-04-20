@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use atman_core::bh_fdr;
+use atman_core::compositional::{apply_transform, Transform};
 use atman_core::ica::{fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult};
 use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
@@ -105,6 +106,36 @@ pub struct IcaArgs {
     /// Cohort label written into the activations table (optional; defaults to directory name).
     #[arg(long)]
     cohort: Option<String>,
+
+    /// Compositional transform applied to the sample × protein matrix
+    /// before ICA. Atman's canonical abundance is already on a log
+    /// scale, so these are linear operations on log values. `clr`
+    /// (per-sample mean centering) is the recommended default for
+    /// closed-sum proteomics. `alr` / `ratio-anchor` require
+    /// `--alr-reference` (a gene symbol). `ilr` emits loadings in
+    /// the Helmert coordinate basis rather than raw protein space.
+    #[arg(long, value_enum, default_value_t = TransformArg::None)]
+    transform: TransformArg,
+
+    /// Gene symbol (matched against `samples` metadata `gene_symbol`)
+    /// used as the reference for `--transform alr` or
+    /// `--transform ratio-anchor`. Ignored for other transforms.
+    #[arg(long)]
+    alr_reference: Option<String>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum TransformArg {
+    #[value(name = "none")]
+    None,
+    #[value(name = "clr")]
+    Clr,
+    #[value(name = "alr")]
+    Alr,
+    #[value(name = "ilr")]
+    Ilr,
+    #[value(name = "ratio-anchor")]
+    RatioAnchor,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -249,6 +280,8 @@ fn run_null(args: NullArgs) -> Result<()> {
         output_activations: PathBuf::new(),
         output_stability: PathBuf::new(),
         cohort: None,
+        transform: TransformArg::None,
+        alr_reference: None,
     };
     let matrix = load_matrix(&adapter)?;
     if args.k > matrix.samples.len() || args.k > matrix.assays.len() {
@@ -373,6 +406,7 @@ fn run_ica(args: IcaArgs) -> Result<()> {
     }
 
     let matrix = load_matrix(&args)?;
+    let (matrix, transform_meta) = apply_compositional(matrix, &args)?;
     let k = resolve_k(&matrix, &args)?;
     if k > matrix.samples.len() || k > matrix.assays.len() {
         bail!(
@@ -383,12 +417,13 @@ fn run_ica(args: IcaArgs) -> Result<()> {
     }
 
     eprintln!(
-        "decompose ica: n_samples={} n_assays={} k={} n_seeds={} threshold={}",
+        "decompose ica: n_samples={} n_assays={} k={} n_seeds={} threshold={} transform={}",
         matrix.samples.len(),
         matrix.assays.len(),
         k,
         args.n_seeds,
-        args.seed_stability_threshold
+        args.seed_stability_threshold,
+        transform_meta.name,
     );
 
     let mut runs = Vec::with_capacity(args.n_seeds);
@@ -424,6 +459,23 @@ fn run_ica(args: IcaArgs) -> Result<()> {
         args.output_stability.display()
     );
 
+    // Emit `transform_applied.json` next to the loadings whenever a
+    // non-`none` transform ran, so downstream tools can audit which
+    // coordinate system the archetypes live in.
+    let transform_applied_path = if transform_meta.name != "none" {
+        let p = args
+            .output_loadings
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("transform_applied.json");
+        write_transform_applied(&p, &transform_meta)?;
+        eprintln!("decompose ica: transform_applied={}", p.display());
+        Some(p)
+    } else {
+        None
+    };
+
     let finished_at = SystemTime::now();
     let canonical_inputs: &[&str] = match args.source.as_str() {
         "qc" => &["qc_measurements.tsv", "samples.tsv", "proteins.tsv"],
@@ -434,6 +486,14 @@ fn run_ica(args: IcaArgs) -> Result<()> {
     let stability_metric = match args.stability_metric {
         StabilityMetric::JaccardTop20 => "jaccard-top20",
     };
+    let mut outputs = vec![
+        args.output_loadings.clone(),
+        args.output_activations.clone(),
+        args.output_stability.clone(),
+    ];
+    if let Some(p) = &transform_applied_path {
+        outputs.push(p.clone());
+    }
     write_run_sidecar(
         &sidecar,
         "decompose ica",
@@ -457,13 +517,11 @@ fn run_ica(args: IcaArgs) -> Result<()> {
             "output-activations": args.output_activations.display().to_string(),
             "output-stability": args.output_stability.display().to_string(),
             "cohort": args.cohort,
+            "transform": transform_meta.name,
+            "alr-reference": transform_meta.alr_reference,
         }),
         &input_dir_sha256,
-        &[
-            args.output_loadings.clone(),
-            args.output_activations.clone(),
-            args.output_stability.clone(),
-        ],
+        &outputs,
         started_at,
         finished_at,
     )?;
@@ -687,6 +745,135 @@ fn load_matrix(args: &IcaArgs) -> Result<AbundanceMatrix> {
 /// Canonicalize an ICA result: sign-flip each program so its max |loading| is positive,
 /// then sort programs by descending max |loading|. This makes output deterministic
 /// under sign ambiguity and yields stable program ordering for reporting.
+/// Metadata written into `transform_applied.json` alongside
+/// `loadings.tsv` whenever a non-`none` transform runs. Lets reviewers
+/// audit which coordinate system the archetypes live in.
+struct TransformMeta {
+    name: &'static str,
+    alr_reference: Option<String>,
+    n_input_proteins: usize,
+    n_output_coords: usize,
+}
+
+fn apply_compositional(
+    matrix: AbundanceMatrix,
+    args: &IcaArgs,
+) -> Result<(AbundanceMatrix, TransformMeta)> {
+    let transform_name = match args.transform {
+        TransformArg::None => "none",
+        TransformArg::Clr => "clr",
+        TransformArg::Alr => "alr",
+        TransformArg::Ilr => "ilr",
+        TransformArg::RatioAnchor => "ratio-anchor",
+    };
+    if args.transform == TransformArg::None {
+        let n = matrix.assays.len();
+        return Ok((
+            matrix,
+            TransformMeta {
+                name: transform_name,
+                alr_reference: None,
+                n_input_proteins: n,
+                n_output_coords: n,
+            },
+        ));
+    }
+    if matches!(args.transform, TransformArg::Ilr)
+        && args.alr_reference.is_some()
+    {
+        eprintln!("decompose ica: --alr-reference is ignored for --transform ilr");
+    }
+    let needs_reference = matches!(
+        args.transform,
+        TransformArg::Alr | TransformArg::RatioAnchor
+    );
+    let resolved_reference: Option<(usize, String)> = if needs_reference {
+        let gene = match args.alr_reference.as_deref() {
+            Some(g) if !g.is_empty() => g,
+            _ => bail!(
+                "--transform {transform_name} requires --alr-reference <gene_symbol>"
+            ),
+        };
+        let idx = matrix
+            .assays
+            .iter()
+            .position(|a| a.gene_symbol == gene)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--alr-reference {gene:?} not found among {} assays",
+                    matrix.assays.len()
+                )
+            })?;
+        Some((idx, gene.to_string()))
+    } else {
+        None
+    };
+    let core_transform = match args.transform {
+        TransformArg::None => Transform::None,
+        TransformArg::Clr => Transform::Clr,
+        TransformArg::Ilr => Transform::Ilr,
+        TransformArg::Alr => Transform::Alr {
+            reference_index: resolved_reference.as_ref().unwrap().0,
+        },
+        TransformArg::RatioAnchor => Transform::RatioAnchor {
+            reference_index: resolved_reference.as_ref().unwrap().0,
+        },
+    };
+    let n_input = matrix.assays.len();
+    let transformed = apply_transform(&matrix.data, core_transform)
+        .map_err(|e| anyhow::anyhow!("transform {transform_name} failed: {e}"))?;
+    let n_output = if transformed.is_empty() {
+        0
+    } else {
+        transformed[0].len()
+    };
+    let assays = if matches!(args.transform, TransformArg::Ilr) {
+        // ILR coordinates are in the Helmert basis, not raw
+        // protein space. Emit synthetic assay IDs so downstream
+        // writers don't try to match them back to a protein.
+        (0..n_output)
+            .map(|i| AssayInfo {
+                assay_id: format!("ilr_coord_{:03}", i + 1),
+                gene_symbol: format!("ILR{:03}", i + 1),
+            })
+            .collect()
+    } else {
+        matrix.assays
+    };
+    Ok((
+        AbundanceMatrix {
+            samples: matrix.samples,
+            assays,
+            data: transformed,
+        },
+        TransformMeta {
+            name: transform_name,
+            alr_reference: resolved_reference.map(|(_, g)| g),
+            n_input_proteins: n_input,
+            n_output_coords: n_output,
+        },
+    ))
+}
+
+fn write_transform_applied(path: &Path, meta: &TransformMeta) -> Result<()> {
+    let mut obj = serde_json::Map::new();
+    obj.insert("transform".into(), json!(meta.name));
+    obj.insert(
+        "alr_reference".into(),
+        match &meta.alr_reference {
+            Some(g) => json!(g),
+            None => serde_json::Value::Null,
+        },
+    );
+    obj.insert("n_input_proteins".into(), json!(meta.n_input_proteins));
+    obj.insert("n_output_coords".into(), json!(meta.n_output_coords));
+    atomic_write(
+        path,
+        serde_json::to_string_pretty(&serde_json::Value::Object(obj))?.as_bytes(),
+    )?;
+    Ok(())
+}
+
 fn canonicalize(result: &IcaResult) -> CanonicalIca {
     let k = result.mixing[0].len();
     let p = result.mixing.len();
