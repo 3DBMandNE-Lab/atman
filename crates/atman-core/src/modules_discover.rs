@@ -1,0 +1,740 @@
+//! Data-driven module discovery on a subject × protein matrix.
+//!
+//! Soft-thresholded signed-|r| adjacency + topological overlap matrix
+//! (TOM) + UPGMA hierarchical clustering on `1 − TOM`, with a fixed
+//! height cut and a minimum module-size filter. Matches the core of
+//! WGCNA's workflow without importing the R package.
+//!
+//! v1 methods:
+//! - `wgcna-soft`: soft-power `|r|^β` adjacency; auto-β picks the
+//!   smallest integer β ∈ {1..20} whose scale-free topology `R² ≥ 0.8`
+//!   and slope < 0.
+//! - `hard-threshold`: binary adjacency at `|r| ≥ threshold`; connected
+//!   components become modules.
+//!
+//! Consensus clustering (resample subjects, aggregate co-assignments)
+//! and dynamic tree-cut are documented follow-ons. v1 uses a fixed
+//! `--cut-height` on the UPGMA dendrogram plus a `--min-module-size`
+//! floor; features not assigned to any surviving module land in the
+//! `grey` catch-all, matching WGCNA convention.
+
+use crate::stats;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Similarity {
+    Pearson,
+    Spearman,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModuleAssignment {
+    pub feature: String,
+    /// `"grey"` for unassigned features; otherwise `"M01"`, `"M02"`, …
+    pub module: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModuleReportRow {
+    pub module: String,
+    pub size: usize,
+    pub mean_within_abs_correlation: f64,
+    pub hub_feature: String,
+    /// Fraction of within-module variance explained by the module's
+    /// first principal component (the WGCNA "module eigengene"
+    /// variance-explained metric).
+    pub eigenprotein_pc1_variance_explained: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SoftPowerSweepRow {
+    pub beta: usize,
+    pub scale_free_r_squared: f64,
+    pub slope: f64,
+    pub mean_k: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiscoveryResult {
+    pub modules: Vec<ModuleAssignment>,
+    pub report: Vec<ModuleReportRow>,
+    pub soft_power_sweep: Vec<SoftPowerSweepRow>,
+    /// Chosen β (0 for `hard-threshold`).
+    pub soft_power_chosen: usize,
+}
+
+/// Pairwise |similarity| over subjects. `data` is subject-major:
+/// `data[i][j]` is subject i's value at feature j. Returns a
+/// `p × p` matrix with 1.0 on the diagonal.
+pub fn pairwise_abs_similarity(data: &[Vec<f64>], sim: Similarity) -> Vec<Vec<f64>> {
+    if data.is_empty() {
+        return Vec::new();
+    }
+    let p = data[0].len();
+    // Transpose to column-major: `col[j][i]` = subject i at feature j.
+    let mut col: Vec<Vec<f64>> = vec![Vec::with_capacity(data.len()); p];
+    for row in data {
+        for (j, v) in row.iter().enumerate() {
+            col[j].push(*v);
+        }
+    }
+    let mut out = vec![vec![0.0_f64; p]; p];
+    for i in 0..p {
+        out[i][i] = 1.0;
+        for j in (i + 1)..p {
+            let r = match sim {
+                Similarity::Pearson => stats::pearson(&col[i], &col[j]),
+                Similarity::Spearman => stats::spearman(&col[i], &col[j]),
+            };
+            let v = r.unwrap_or(0.0).abs();
+            out[i][j] = v;
+            out[j][i] = v;
+        }
+    }
+    out
+}
+
+/// Soft-threshold: `a_ij = |r_ij|^β` element-wise. Diagonal stays at 1.
+pub fn soft_adjacency(abs_sim: &[Vec<f64>], beta: usize) -> Vec<Vec<f64>> {
+    let p = abs_sim.len();
+    let mut out = vec![vec![0.0_f64; p]; p];
+    let b = beta as i32;
+    for i in 0..p {
+        for j in 0..p {
+            if i == j {
+                out[i][j] = 1.0;
+            } else {
+                out[i][j] = abs_sim[i][j].powi(b);
+            }
+        }
+    }
+    out
+}
+
+/// Topological overlap matrix. For signed-weighted adjacency `a`:
+///
+/// ```text
+/// TOM_ij = (Σ_u a_iu · a_uj + a_ij) / (min(k_i, k_j) + 1 − a_ij)
+/// ```
+///
+/// where `k_i = Σ_{u ≠ i} a_iu`. Diagonal = 1.
+pub fn compute_tom(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let p = a.len();
+    // k_i = row sum excluding diagonal.
+    let k: Vec<f64> = (0..p).map(|i| (0..p).map(|u| if u == i { 0.0 } else { a[i][u] }).sum()).collect();
+    let mut out = vec![vec![0.0_f64; p]; p];
+    for i in 0..p {
+        out[i][i] = 1.0;
+        for j in (i + 1)..p {
+            // Σ_{u ≠ i, j} a_iu · a_uj.
+            let mut l_ij = 0.0;
+            for u in 0..p {
+                if u == i || u == j {
+                    continue;
+                }
+                l_ij += a[i][u] * a[u][j];
+            }
+            let num = l_ij + a[i][j];
+            let den = k[i].min(k[j]) + 1.0 - a[i][j];
+            let tom = if den > 0.0 { num / den } else { 0.0 };
+            out[i][j] = tom;
+            out[j][i] = tom;
+        }
+    }
+    out
+}
+
+/// Scale-free topology R² + slope for a given adjacency. Histograms
+/// the connectivity `k_i = Σ_{u≠i} a_iu` into `n_bins` log-bins,
+/// fits `log10 p(k) = α + slope · log10 k`, returns `(R², slope, mean_k)`.
+pub fn scale_free_r_squared(a: &[Vec<f64>], n_bins: usize) -> (f64, f64, f64) {
+    let p = a.len();
+    if p == 0 {
+        return (0.0, 0.0, 0.0);
+    }
+    let ks: Vec<f64> = (0..p)
+        .map(|i| (0..p).map(|u| if u == i { 0.0 } else { a[i][u] }).sum())
+        .collect();
+    let mean_k = ks.iter().sum::<f64>() / ks.len() as f64;
+    let max_k = ks.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    if max_k <= 0.0 || n_bins < 2 {
+        return (0.0, 0.0, mean_k);
+    }
+    // Uniform log-bins on (0, max_k].
+    let lo = (ks.iter().cloned().filter(|v| *v > 0.0).fold(f64::INFINITY, f64::min)).max(1e-6);
+    let hi = max_k;
+    let log_lo = lo.ln();
+    let log_hi = hi.ln();
+    let width = (log_hi - log_lo) / n_bins as f64;
+    if !(width.is_finite() && width > 0.0) {
+        return (0.0, 0.0, mean_k);
+    }
+    let mut counts = vec![0usize; n_bins];
+    let mut bin_centers = vec![0.0_f64; n_bins];
+    for b in 0..n_bins {
+        bin_centers[b] = ((log_lo + (b as f64 + 0.5) * width)).exp();
+    }
+    for &k in &ks {
+        if k <= 0.0 {
+            continue;
+        }
+        let idx = (((k.ln() - log_lo) / width) as i64)
+            .max(0)
+            .min(n_bins as i64 - 1) as usize;
+        counts[idx] += 1;
+    }
+    // Fit log10 p vs log10 k on non-empty bins.
+    let xs: Vec<f64> = counts.iter().zip(bin_centers.iter())
+        .filter(|(&c, _)| c > 0)
+        .map(|(_, &k)| k.log10())
+        .collect();
+    let ys: Vec<f64> = counts.iter().zip(bin_centers.iter())
+        .filter(|(&c, _)| c > 0)
+        .map(|(&c, _)| (c as f64 / p as f64).log10())
+        .collect();
+    if xs.len() < 3 {
+        return (0.0, 0.0, mean_k);
+    }
+    // Simple OLS slope + R².
+    let n = xs.len() as f64;
+    let mx = xs.iter().sum::<f64>() / n;
+    let my = ys.iter().sum::<f64>() / n;
+    let mut sxx = 0.0;
+    let mut sxy = 0.0;
+    let mut syy = 0.0;
+    for (x, y) in xs.iter().zip(ys.iter()) {
+        sxx += (x - mx) * (x - mx);
+        sxy += (x - mx) * (y - my);
+        syy += (y - my) * (y - my);
+    }
+    if sxx <= 0.0 {
+        return (0.0, 0.0, mean_k);
+    }
+    let slope = sxy / sxx;
+    let r2 = if syy > 0.0 { (sxy * sxy) / (sxx * syy) } else { 0.0 };
+    (r2, slope, mean_k)
+}
+
+/// Sweep β ∈ 1..=max_beta and pick the smallest whose scale-free
+/// R² ≥ r2_target AND slope < 0. Returns `(chosen_beta, sweep_rows)`.
+/// If no β meets the criterion, returns the β with largest R² as a
+/// fallback (and logs nothing — caller inspects the diagnostics).
+pub fn auto_soft_power(
+    abs_sim: &[Vec<f64>],
+    max_beta: usize,
+    r2_target: f64,
+    n_bins: usize,
+) -> (usize, Vec<SoftPowerSweepRow>) {
+    let mut rows = Vec::with_capacity(max_beta);
+    let mut best: Option<(usize, f64)> = None;
+    let mut chosen: Option<usize> = None;
+    for beta in 1..=max_beta {
+        let adj = soft_adjacency(abs_sim, beta);
+        let (r2, slope, mean_k) = scale_free_r_squared(&adj, n_bins);
+        rows.push(SoftPowerSweepRow {
+            beta,
+            scale_free_r_squared: r2,
+            slope,
+            mean_k,
+        });
+        if chosen.is_none() && r2 >= r2_target && slope < 0.0 {
+            chosen = Some(beta);
+        }
+        if best.map(|(_, r)| r2 > r).unwrap_or(true) {
+            best = Some((beta, r2));
+        }
+    }
+    let picked = chosen.or(best.map(|(b, _)| b)).unwrap_or(1);
+    (picked, rows)
+}
+
+/// Average-linkage (UPGMA) hierarchical clustering on a symmetric
+/// `p × p` dissimilarity matrix. Returns a vector of merge events
+/// `(left_cluster, right_cluster, height, cluster_size)`; cluster
+/// indices `< p` are leaves, indices `≥ p` are internal merges
+/// (id = p + event_index).
+pub fn upgma(dissim: &[Vec<f64>]) -> Vec<(usize, usize, f64, usize)> {
+    let p = dissim.len();
+    if p == 0 {
+        return Vec::new();
+    }
+    // Active cluster ids and sizes.
+    let mut active: Vec<usize> = (0..p).collect();
+    let mut sizes: Vec<usize> = vec![1; p];
+    let mut next_id = p;
+    // Distance matrix indexed by active position.
+    let mut d: Vec<Vec<f64>> = dissim.iter().map(|row| row.clone()).collect();
+    let mut merges = Vec::with_capacity(p.saturating_sub(1));
+    while active.len() > 1 {
+        // Find the smallest off-diagonal distance.
+        let (mut a, mut b, mut best) = (0usize, 1usize, f64::INFINITY);
+        for i in 0..active.len() {
+            for j in (i + 1)..active.len() {
+                if d[i][j] < best {
+                    best = d[i][j];
+                    a = i;
+                    b = j;
+                }
+            }
+        }
+        let ca = active[a];
+        let cb = active[b];
+        let sa = sizes[a];
+        let sb = sizes[b];
+        let merged_size = sa + sb;
+        merges.push((ca, cb, best, merged_size));
+        // Compute new row: UPGMA weighted average.
+        let mut new_row = vec![0.0_f64; active.len()];
+        for k in 0..active.len() {
+            if k == a || k == b {
+                continue;
+            }
+            new_row[k] = (sa as f64 * d[a][k] + sb as f64 * d[b][k]) / merged_size as f64;
+        }
+        // Replace a's row/col with the merged row; remove b.
+        for k in 0..active.len() {
+            d[a][k] = new_row[k];
+            d[k][a] = new_row[k];
+        }
+        d[a][a] = 0.0;
+        // Drop b.
+        d.remove(b);
+        for row in &mut d {
+            row.remove(b);
+        }
+        active[a] = next_id;
+        sizes[a] = merged_size;
+        active.remove(b);
+        sizes.remove(b);
+        next_id += 1;
+    }
+    merges
+}
+
+/// Cut an UPGMA tree at a fixed `height`: any merge with height ≤
+/// `height` joins its two sub-clusters. Returns a feature → cluster-id
+/// mapping for each of the `p` leaves.
+pub fn cut_tree_by_height(merges: &[(usize, usize, f64, usize)], p: usize, height: f64) -> Vec<usize> {
+    let mut parent: Vec<usize> = (0..p + merges.len()).collect();
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        if parent[x] == x {
+            return x;
+        }
+        let r = find(parent, parent[x]);
+        parent[x] = r;
+        r
+    }
+    for (event_idx, (a, b, h, _)) in merges.iter().enumerate() {
+        if *h <= height {
+            let ra = find(&mut parent, *a);
+            let rb = find(&mut parent, *b);
+            let merged_id = p + event_idx;
+            parent[ra] = merged_id;
+            parent[rb] = merged_id;
+        }
+    }
+    (0..p).map(|i| find(&mut parent, i)).collect()
+}
+
+/// Run the full discovery pipeline on a subject × protein matrix.
+pub fn discover(
+    data: &[Vec<f64>],
+    feature_labels: &[String],
+    sim: Similarity,
+    method: DiscoveryMethod,
+    cut_height: f64,
+    min_module_size: usize,
+) -> Result<DiscoveryResult, String> {
+    if data.is_empty() || feature_labels.is_empty() {
+        return Err("empty input matrix".into());
+    }
+    let p = feature_labels.len();
+    if data.iter().any(|row| row.len() != p) {
+        return Err("non-rectangular input matrix".into());
+    }
+    let abs_sim = pairwise_abs_similarity(data, sim);
+
+    let (adjacency, sweep, chosen_beta) = match method {
+        DiscoveryMethod::WgcnaSoft { beta: None, r2_target, n_bins, max_beta } => {
+            let (picked, rows) = auto_soft_power(&abs_sim, max_beta, r2_target, n_bins);
+            (soft_adjacency(&abs_sim, picked), rows, picked)
+        }
+        DiscoveryMethod::WgcnaSoft { beta: Some(b), .. } => {
+            (soft_adjacency(&abs_sim, b), Vec::new(), b)
+        }
+        DiscoveryMethod::HardThreshold { threshold } => {
+            let mut adj = vec![vec![0.0_f64; p]; p];
+            for i in 0..p {
+                adj[i][i] = 1.0;
+                for j in (i + 1)..p {
+                    let v = if abs_sim[i][j] >= threshold { 1.0 } else { 0.0 };
+                    adj[i][j] = v;
+                    adj[j][i] = v;
+                }
+            }
+            (adj, Vec::new(), 0)
+        }
+    };
+    let tom = compute_tom(&adjacency);
+    let mut dissim = vec![vec![0.0_f64; p]; p];
+    for i in 0..p {
+        for j in 0..p {
+            dissim[i][j] = if i == j { 0.0 } else { (1.0 - tom[i][j]).max(0.0) };
+        }
+    }
+    let merges = upgma(&dissim);
+    let assignments = cut_tree_by_height(&merges, p, cut_height);
+
+    // Rename cluster ids to compact M01/M02/…; filter by min_module_size
+    // (below-threshold members go to "grey").
+    use std::collections::BTreeMap;
+    let mut cluster_members: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, c) in assignments.iter().enumerate() {
+        cluster_members.entry(*c).or_default().push(i);
+    }
+    let mut module_for: Vec<String> = vec!["grey".into(); p];
+    let mut next_module = 1usize;
+    let mut kept_modules: Vec<(String, Vec<usize>)> = Vec::new();
+    for (_c, members) in cluster_members {
+        if members.len() >= min_module_size {
+            let name = format!("M{next_module:02}");
+            for &i in &members {
+                module_for[i] = name.clone();
+            }
+            kept_modules.push((name, members));
+            next_module += 1;
+        }
+    }
+    let grey_members: Vec<usize> = (0..p).filter(|i| module_for[*i] == "grey").collect();
+    if !grey_members.is_empty() {
+        kept_modules.push(("grey".into(), grey_members));
+    }
+    let modules: Vec<ModuleAssignment> = feature_labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| ModuleAssignment {
+            feature: label.clone(),
+            module: module_for[i].clone(),
+        })
+        .collect();
+
+    // Per-module report.
+    let mut report = Vec::with_capacity(kept_modules.len());
+    for (name, members) in &kept_modules {
+        let size = members.len();
+        let mean_abs_r = {
+            if size < 2 {
+                0.0
+            } else {
+                let mut s = 0.0;
+                let mut c = 0;
+                for i in 0..members.len() {
+                    for j in (i + 1)..members.len() {
+                        s += abs_sim[members[i]][members[j]];
+                        c += 1;
+                    }
+                }
+                if c > 0 { s / c as f64 } else { 0.0 }
+            }
+        };
+        // Hub = member with highest sum of adjacency to other module members.
+        let hub = members
+            .iter()
+            .map(|&i| {
+                let k: f64 = members
+                    .iter()
+                    .filter(|&&j| j != i)
+                    .map(|&j| adjacency[i][j])
+                    .sum();
+                (i, k)
+            })
+            .fold((members[0], f64::NEG_INFINITY), |acc, x| {
+                if x.1 > acc.1 { x } else { acc }
+            })
+            .0;
+        let pc1_var_explained = eigenprotein_pc1_variance_explained(data, members);
+        report.push(ModuleReportRow {
+            module: name.clone(),
+            size,
+            mean_within_abs_correlation: mean_abs_r,
+            hub_feature: feature_labels[hub].clone(),
+            eigenprotein_pc1_variance_explained: pc1_var_explained,
+        });
+    }
+
+    Ok(DiscoveryResult {
+        modules,
+        report,
+        soft_power_sweep: sweep,
+        soft_power_chosen: chosen_beta,
+    })
+}
+
+/// PC1 variance fraction via power iteration on the within-module
+/// sample × feature submatrix's covariance. Cheap and deterministic.
+fn eigenprotein_pc1_variance_explained(data: &[Vec<f64>], members: &[usize]) -> f64 {
+    if members.len() < 2 || data.is_empty() {
+        return 0.0;
+    }
+    let n = data.len();
+    let m = members.len();
+    // Center columns.
+    let mut x = vec![vec![0.0_f64; m]; n];
+    for (j, &mi) in members.iter().enumerate() {
+        let mut sum = 0.0;
+        for i in 0..n {
+            sum += data[i][mi];
+        }
+        let mean = sum / n as f64;
+        for i in 0..n {
+            x[i][j] = data[i][mi] - mean;
+        }
+    }
+    // Total variance = trace(XᵀX) / (n − 1).
+    let mut total = 0.0;
+    for j in 0..m {
+        let mut s = 0.0;
+        for i in 0..n {
+            s += x[i][j] * x[i][j];
+        }
+        total += s;
+    }
+    if total <= 0.0 {
+        return 0.0;
+    }
+    // Power iteration on XᵀX (m × m).
+    let mut v = vec![1.0_f64 / (m as f64).sqrt(); m];
+    for _ in 0..80 {
+        // u = X v
+        let mut u = vec![0.0_f64; n];
+        for i in 0..n {
+            let mut s = 0.0;
+            for j in 0..m {
+                s += x[i][j] * v[j];
+            }
+            u[i] = s;
+        }
+        // v_new = Xᵀ u
+        let mut v_new = vec![0.0_f64; m];
+        for j in 0..m {
+            let mut s = 0.0;
+            for i in 0..n {
+                s += x[i][j] * u[i];
+            }
+            v_new[j] = s;
+        }
+        let norm = v_new.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if norm == 0.0 {
+            return 0.0;
+        }
+        for vj in &mut v_new {
+            *vj /= norm;
+        }
+        let delta: f64 = v
+            .iter()
+            .zip(v_new.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        v = v_new;
+        if delta < 1e-10 {
+            break;
+        }
+    }
+    // Eigenvalue = v' XᵀX v = ||X v||².
+    let mut u = vec![0.0_f64; n];
+    for i in 0..n {
+        let mut s = 0.0;
+        for j in 0..m {
+            s += x[i][j] * v[j];
+        }
+        u[i] = s;
+    }
+    let pc1_var = u.iter().map(|v| v * v).sum::<f64>();
+    if total > 0.0 {
+        (pc1_var / total).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DiscoveryMethod {
+    WgcnaSoft {
+        /// Explicit β; `None` ⇒ auto-sweep.
+        beta: Option<usize>,
+        r2_target: f64,
+        n_bins: usize,
+        max_beta: usize,
+    },
+    HardThreshold {
+        threshold: f64,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn two_block_fixture(seed: u64) -> (Vec<Vec<f64>>, Vec<String>) {
+        // 40 subjects × (20 block-1 + 20 block-2 + 40 background) features.
+        // Two planted blocks of 20 correlated features each, plus 40
+        // uncorrelated noise features. Block scores driven by a shared
+        // per-subject latent so within-block |r| is high; background
+        // features are independent N(0, 1) per subject/feature.
+        use std::num::Wrapping;
+        let n = 40usize;
+        let block = 20usize;
+        let noise = 40usize;
+        let p = 2 * block + noise;
+        let mut state = Wrapping(seed);
+        let mut next = || {
+            state = state * Wrapping(6364136223846793005_u64) + Wrapping(1442695040888963407_u64);
+            let u = ((state.0 >> 33) as f64) / (u32::MAX as f64);
+            // Crude Box-Muller on the fly using a second draw.
+            state = state * Wrapping(6364136223846793005_u64) + Wrapping(1442695040888963407_u64);
+            let v = ((state.0 >> 33) as f64) / (u32::MAX as f64);
+            let u = u.max(1e-12);
+            (-2.0_f64 * u.ln()).sqrt() * (2.0 * std::f64::consts::PI * v).cos()
+        };
+        let mut data = vec![vec![0.0_f64; p]; n];
+        for i in 0..n {
+            let z1 = next();
+            let z2 = next();
+            for j in 0..block {
+                data[i][j] = 2.0 * z1 + 0.3 * next();
+            }
+            for j in 0..block {
+                data[i][block + j] = 2.0 * z2 + 0.3 * next();
+            }
+            for j in 0..noise {
+                data[i][2 * block + j] = next();
+            }
+        }
+        let labels: Vec<String> = (0..p).map(|j| format!("F{j:03}")).collect();
+        (data, labels)
+    }
+
+    #[test]
+    fn upgma_recovers_two_planted_blocks() {
+        let (data, labels) = two_block_fixture(123);
+        let out = discover(
+            &data,
+            &labels,
+            Similarity::Pearson,
+            DiscoveryMethod::WgcnaSoft {
+                beta: None,
+                r2_target: 0.8,
+                n_bins: 10,
+                max_beta: 20,
+            },
+            0.5,
+            10,
+        )
+        .unwrap();
+        // Two non-grey modules expected.
+        let non_grey: Vec<&ModuleReportRow> =
+            out.report.iter().filter(|r| r.module != "grey").collect();
+        assert!(
+            non_grey.len() >= 2,
+            "expected ≥2 non-grey modules, got {}: {:?}",
+            non_grey.len(),
+            out.report
+        );
+        // Each should have ≥ 15 members — not perfect recovery (noise
+        // can steal members) but clean separation.
+        let big_modules = non_grey.iter().filter(|r| r.size >= 15).count();
+        assert!(
+            big_modules >= 2,
+            "expected ≥2 modules of size ≥ 15, got {}: {:?}",
+            big_modules,
+            non_grey.iter().map(|r| (&r.module, r.size)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn eigenprotein_variance_is_between_zero_and_one() {
+        let (data, labels) = two_block_fixture(456);
+        let out = discover(
+            &data,
+            &labels,
+            Similarity::Pearson,
+            DiscoveryMethod::WgcnaSoft {
+                beta: Some(6),
+                r2_target: 0.8,
+                n_bins: 10,
+                max_beta: 20,
+            },
+            0.5,
+            10,
+        )
+        .unwrap();
+        for r in &out.report {
+            assert!(
+                (0.0..=1.0 + 1e-9).contains(&r.eigenprotein_pc1_variance_explained),
+                "{} eigenprotein variance out of range: {}",
+                r.module,
+                r.eigenprotein_pc1_variance_explained
+            );
+            if r.module != "grey" && r.size >= 5 {
+                // Non-grey block should have high PC1 fraction.
+                assert!(
+                    r.eigenprotein_pc1_variance_explained > 0.5,
+                    "{} should have high PC1 variance explained; got {}",
+                    r.module,
+                    r.eigenprotein_pc1_variance_explained
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_input_is_rejected() {
+        let empty: Vec<Vec<f64>> = Vec::new();
+        let labels: Vec<String> = Vec::new();
+        let err = discover(
+            &empty,
+            &labels,
+            Similarity::Pearson,
+            DiscoveryMethod::HardThreshold { threshold: 0.5 },
+            0.5,
+            3,
+        )
+        .unwrap_err();
+        assert!(err.contains("empty"));
+    }
+
+    #[test]
+    fn hard_threshold_path_produces_nonempty_result() {
+        let (data, labels) = two_block_fixture(789);
+        let out = discover(
+            &data,
+            &labels,
+            Similarity::Pearson,
+            DiscoveryMethod::HardThreshold { threshold: 0.3 },
+            0.5,
+            10,
+        )
+        .unwrap();
+        assert!(!out.modules.is_empty());
+    }
+
+    #[test]
+    fn soft_power_auto_picks_beta_between_1_and_max_beta() {
+        let (data, labels) = two_block_fixture(321);
+        let out = discover(
+            &data,
+            &labels,
+            Similarity::Pearson,
+            DiscoveryMethod::WgcnaSoft {
+                beta: None,
+                r2_target: 0.8,
+                n_bins: 10,
+                max_beta: 20,
+            },
+            0.5,
+            10,
+        )
+        .unwrap();
+        assert!(out.soft_power_chosen >= 1 && out.soft_power_chosen <= 20);
+        assert_eq!(out.soft_power_sweep.len(), 20);
+    }
+}

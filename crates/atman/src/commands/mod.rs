@@ -15,6 +15,7 @@ pub mod matrix;
 pub mod meta;
 pub mod module_de;
 pub mod module_trajectory;
+pub mod modules;
 pub mod network;
 pub mod null;
 pub mod programs;

@@ -8,6 +8,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Data-driven module discovery (`atman modules discover`).** New
+  top-level command family. WGCNA-style pipeline in pure Rust:
+  subject-level pairwise |pearson| / |spearman| correlation → soft-
+  power adjacency `|r|^β` (β explicit or auto-selected to the
+  smallest integer with scale-free topology `R² ≥ 0.8` and slope
+  < 0) → topological overlap matrix (TOM) → UPGMA hierarchical
+  clustering on `1 − TOM` → fixed-height tree cut with
+  `--min-module-size` floor; features below threshold land in the
+  `grey` catch-all. Also supports `--method hard-threshold` (binary
+  adjacency + connected components). Outputs
+  `modules_discovered.tsv` (schema matches the existing
+  `modules.tsv` contract so it drops straight into
+  `atman score modules`/`module-de`), `module_discovery_report.tsv`
+  (per-module size, mean within-|r|, hub feature, module
+  eigengene PC1 variance fraction), and
+  `soft_power_diagnostics.tsv` (β sweep). Integration test recovers
+  two planted correlation blocks on a 40-subject × 80-protein
+  fixture: both 20-feature blocks concentrate into distinct
+  non-grey modules of size ≥ 15; refuses cleanly when retained
+  features fall below `--min-module-size`. Consensus resampling
+  and WGCNA's full dynamic tree cut are documented follow-ons.
+  Closes Priority 8.
 - **Cohort projection onto a trained atlas (`atman align project`).**
   New subcommand alongside `align programs` / `align bootstrap`. Reads
   the archetype TSV emitted by a prior `align programs` plus the

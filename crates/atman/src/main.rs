@@ -54,6 +54,8 @@ enum Command {
     ModuleTrajectory(commands::module_trajectory::Args),
     /// Module-level differential abundance (aggregate proteins into modules, test at module level).
     ModuleDe(commands::module_de::Args),
+    /// Data-driven module discovery (WGCNA-style soft-threshold TOM + UPGMA).
+    Modules(commands::modules::Args),
     /// Null calibration by label permutation or paired sign flip.
     Null(commands::null::Args),
     /// Feature-covariance network analysis (`influence` subcommand).
@@ -93,6 +95,7 @@ fn main() -> Result<()> {
         Command::Run(args) => commands::run::run(args),
         Command::ModuleTrajectory(args) => commands::module_trajectory::run(args),
         Command::ModuleDe(args) => commands::module_de::run(args),
+        Command::Modules(args) => commands::modules::run(args),
         Command::Null(args) => commands::null::run(args),
         Command::Network(args) => commands::network::run(args),
         Command::Ratio(args) => commands::ratio::run(args),

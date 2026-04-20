@@ -19,6 +19,7 @@ pub mod network;
 pub mod ingest;
 pub mod limma;
 pub mod matrix;
+pub mod modules_discover;
 pub mod msqrob;
 pub mod multivariate_t;
 pub mod qc;
