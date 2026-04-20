@@ -387,6 +387,111 @@ pub enum AbundanceMethod {
     Ucls,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum EndmemberMethod {
+    Vca,
+    /// Iterative simplex-volume maximization (N-FINDR, Winter 1999),
+    /// initialized from VCA's picks. Swaps each endmember with the
+    /// candidate sample that most increases the Gram-matrix
+    /// determinant of the simplex; repeats until a full pass produces
+    /// no swap or `max_passes` is exhausted.
+    Nfindr { max_passes: usize },
+}
+
+/// |det(Gram matrix of pairwise differences)| of a set of `k` feature
+/// vectors in `p`-space. Proportional to the squared volume of the
+/// simplex they span; zero for degenerate (coincident / collinear)
+/// vertex sets. Uses Cholesky on the symmetric positive semidefinite
+/// Gram to avoid a general determinant routine.
+pub fn simplex_gram_determinant(endmembers: &[Vec<f64>]) -> f64 {
+    let k = endmembers.len();
+    if k < 2 {
+        return 0.0;
+    }
+    let p = endmembers[0].len();
+    let km1 = k - 1;
+    let mut d = vec![vec![0.0_f64; p]; km1];
+    for i in 1..k {
+        for j in 0..p {
+            d[i - 1][j] = endmembers[i][j] - endmembers[0][j];
+        }
+    }
+    let mut g = vec![vec![0.0_f64; km1]; km1];
+    for i in 0..km1 {
+        for j in 0..km1 {
+            let mut s = 0.0;
+            for q in 0..p {
+                s += d[i][q] * d[j][q];
+            }
+            g[i][j] = s;
+        }
+    }
+    match cholesky_lower(&g) {
+        Some(l) => {
+            let mut det = 1.0;
+            for i in 0..km1 {
+                det *= l[i][i] * l[i][i];
+            }
+            det
+        }
+        None => 0.0,
+    }
+}
+
+/// N-FINDR endmember extraction. Initializes from VCA, then iterates:
+/// for each of the `k` endmember slots, try replacing it with every
+/// non-member sample; keep the swap that most increases
+/// `simplex_gram_determinant`. Stops when a full pass produces no
+/// swap or after `max_passes` iterations.
+pub fn nfindr(
+    data: &[Vec<f64>],
+    k: usize,
+    seed: u64,
+    max_passes: usize,
+) -> Result<VcaResult, String> {
+    let vca_result = vca(data, k, seed)?;
+    let mut selected = vca_result.endmember_sample_indices;
+    let mut loadings = vca_result.endmember_loadings;
+    let mut current_vol = simplex_gram_determinant(&loadings);
+    let n = data.len();
+    for _ in 0..max_passes {
+        let mut changed = false;
+        for slot in 0..k {
+            let mut best_idx = selected[slot];
+            let mut best_vol = current_vol;
+            for s in 0..n {
+                if selected
+                    .iter()
+                    .enumerate()
+                    .any(|(i, &v)| i != slot && v == s)
+                {
+                    continue;
+                }
+                let old_loading = std::mem::replace(&mut loadings[slot], data[s].clone());
+                let candidate_vol = simplex_gram_determinant(&loadings);
+                if candidate_vol > best_vol {
+                    best_vol = candidate_vol;
+                    best_idx = s;
+                }
+                loadings[slot] = old_loading;
+            }
+            if best_idx != selected[slot] {
+                loadings[slot] = data[best_idx].clone();
+                selected[slot] = best_idx;
+                current_vol = best_vol;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(VcaResult {
+        endmember_sample_indices: selected,
+        endmember_loadings: loadings,
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct UnmixResult {
     pub endmember_sample_indices: Vec<usize>,
@@ -398,22 +503,27 @@ pub struct UnmixResult {
     pub residual_norms: Vec<f64>,
 }
 
-/// End-to-end: VCA → abundance estimation → per-sample residual.
+/// End-to-end: endmember extraction (VCA or N-FINDR) → abundance
+/// estimation → per-sample reconstruction residual.
 pub fn unmix(
     data: &[Vec<f64>],
     k: usize,
     seed: u64,
-    method: AbundanceMethod,
+    endmember_method: EndmemberMethod,
+    abundance_method: AbundanceMethod,
     fcls_max_iter: usize,
     fcls_tol: f64,
 ) -> Result<UnmixResult, String> {
-    let vca_result = vca(data, k, seed)?;
+    let vca_result = match endmember_method {
+        EndmemberMethod::Vca => vca(data, k, seed)?,
+        EndmemberMethod::Nfindr { max_passes } => nfindr(data, k, seed, max_passes)?,
+    };
     let p = data[0].len();
     let n = data.len();
     let mut abundances = Vec::with_capacity(n);
     let mut residuals = Vec::with_capacity(n);
     for x in data {
-        let alpha = match method {
+        let alpha = match abundance_method {
             AbundanceMethod::Fcls => fcls(&vca_result.endmember_loadings, x, fcls_max_iter, fcls_tol)?,
             AbundanceMethod::Ucls => ucls(&vca_result.endmember_loadings, x)?,
         };
@@ -564,7 +674,7 @@ mod tests {
     #[test]
     fn fcls_satisfies_simplex_constraints_within_tolerance() {
         let (data, _planted, _dir_ab) = planted_unmix_fixture(60, 30, 3, 11);
-        let result = unmix(&data, 3, 42, AbundanceMethod::Fcls, 500, 1e-9).unwrap();
+        let result = unmix(&data, 3, 42, EndmemberMethod::Vca, AbundanceMethod::Fcls, 500, 1e-9).unwrap();
         for (i, row) in result.abundances.iter().enumerate() {
             let sum: f64 = row.iter().sum();
             assert!(
@@ -594,8 +704,8 @@ mod tests {
     #[test]
     fn unmix_is_deterministic_under_fixed_seed() {
         let (data, _, _) = planted_unmix_fixture(40, 20, 3, 55);
-        let a = unmix(&data, 3, 7, AbundanceMethod::Fcls, 300, 1e-9).unwrap();
-        let b = unmix(&data, 3, 7, AbundanceMethod::Fcls, 300, 1e-9).unwrap();
+        let a = unmix(&data, 3, 7, EndmemberMethod::Vca, AbundanceMethod::Fcls, 300, 1e-9).unwrap();
+        let b = unmix(&data, 3, 7, EndmemberMethod::Vca, AbundanceMethod::Fcls, 300, 1e-9).unwrap();
         assert_eq!(a.endmember_sample_indices, b.endmember_sample_indices);
         for (ra, rb) in a.abundances.iter().zip(b.abundances.iter()) {
             for (x, y) in ra.iter().zip(rb.iter()) {
@@ -623,6 +733,39 @@ mod tests {
     }
 
     #[test]
+    fn nfindr_volume_is_not_smaller_than_vca_volume() {
+        // Starting from VCA and swapping only when volume strictly
+        // increases, N-FINDR can never return a worse simplex.
+        let (data, _, _) = planted_unmix_fixture(80, 40, 3, 21);
+        let vca_r = vca(&data, 3, 99).unwrap();
+        let nfindr_r = nfindr(&data, 3, 99, 10).unwrap();
+        let vca_vol = simplex_gram_determinant(&vca_r.endmember_loadings);
+        let nfindr_vol = simplex_gram_determinant(&nfindr_r.endmember_loadings);
+        assert!(
+            nfindr_vol >= vca_vol - 1e-12,
+            "NFINDR simplex volume ({nfindr_vol}) must be ≥ VCA volume ({vca_vol})"
+        );
+    }
+
+    #[test]
+    fn nfindr_recovers_planted_endmembers_at_least_as_well_as_vca() {
+        let (data, planted, _) = planted_unmix_fixture(80, 40, 3, 31);
+        let vca_cos = best_matched_cosine(&planted, &vca(&data, 3, 99).unwrap().endmember_loadings);
+        let nfindr_cos = best_matched_cosine(
+            &planted,
+            &nfindr(&data, 3, 99, 10).unwrap().endmember_loadings,
+        );
+        // NFINDR should not *worsen* recovery; on clean fixtures it
+        // usually matches VCA exactly (VCA is already near-optimal).
+        for (i, (&v, &n)) in vca_cos.iter().zip(nfindr_cos.iter()).enumerate() {
+            assert!(
+                n >= v - 0.02,
+                "NFINDR regressed cosine for planted endmember {i}: vca={v}, nfindr={n}"
+            );
+        }
+    }
+
+    #[test]
     fn vca_refuses_k_greater_than_n_samples() {
         let data = vec![vec![1.0, 2.0]; 5];
         let err = vca(&data, 10, 1).unwrap_err();
@@ -639,7 +782,7 @@ mod tests {
     #[test]
     fn fcls_abundances_pearson_against_planted_is_high() {
         let (data, _endmembers, planted_ab) = planted_unmix_fixture(120, 60, 3, 30);
-        let result = unmix(&data, 3, 42, AbundanceMethod::Fcls, 1000, 1e-9).unwrap();
+        let result = unmix(&data, 3, 42, EndmemberMethod::Vca, AbundanceMethod::Fcls, 1000, 1e-9).unwrap();
         // Match recovered columns to planted columns via best absolute
         // cosine between recovered endmember loadings and planted.
         let p = data[0].len();

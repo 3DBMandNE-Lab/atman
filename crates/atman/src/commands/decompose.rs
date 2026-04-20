@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use atman_core::bh_fdr;
 use atman_core::compositional::{apply_transform, Transform};
-use atman_core::decompose_unmix::{unmix, AbundanceMethod, UnmixResult};
+use atman_core::decompose_unmix::{unmix, AbundanceMethod, EndmemberMethod, UnmixResult};
 use atman_core::ica::{fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult};
 use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
 use atman_core::variance_decomposition::{
@@ -1558,10 +1558,16 @@ pub struct UnmixArgs {
     #[arg(long)]
     k: usize,
 
-    /// Endmember extraction method. v1 supports `vca` only; `nfindr`
-    /// is a documented follow-on.
+    /// Endmember extraction method. `vca` (default): deterministic
+    /// projection-onto-complement. `nfindr`: iterative simplex-volume
+    /// maximization initialized from VCA.
     #[arg(long, default_value = "vca")]
     method: String,
+
+    /// Max N-FINDR passes (ignored for `--method vca`). A full pass
+    /// tries every (endmember slot × candidate sample) swap.
+    #[arg(long, default_value_t = 20)]
+    nfindr_max_passes: usize,
 
     /// Abundance estimator. `fcls` (default) enforces simplex
     /// constraints `α ≥ 0 ∧ Σα = 1`. `ucls` drops them.
@@ -1621,13 +1627,13 @@ pub struct UnmixArgs {
 
 fn run_unmix(args: UnmixArgs) -> Result<()> {
     let started_at = SystemTime::now();
-    if args.method != "vca" {
-        bail!(
-            "--method {:?} is not supported in v1; only `vca` is implemented. \
-             `nfindr` is a documented follow-on.",
-            args.method
-        );
-    }
+    let endmember_method = match args.method.as_str() {
+        "vca" => EndmemberMethod::Vca,
+        "nfindr" => EndmemberMethod::Nfindr {
+            max_passes: args.nfindr_max_passes,
+        },
+        other => bail!("--method {other:?}; expected `vca` or `nfindr`"),
+    };
     let abundance_method = match args.abundance.as_str() {
         "fcls" => AbundanceMethod::Fcls,
         "ucls" => AbundanceMethod::Ucls,
@@ -1725,6 +1731,7 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
         &transformed,
         args.k,
         args.seed,
+        endmember_method,
         abundance_method,
         args.fcls_max_iter,
         args.fcls_tol,
@@ -1768,6 +1775,7 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
             "input-dir": args.input_dir.display().to_string(),
             "k": args.k,
             "method": args.method,
+            "nfindr-max-passes": args.nfindr_max_passes,
             "abundance": args.abundance,
             "transform": args.transform,
             "alr-reference": args.alr_reference,
