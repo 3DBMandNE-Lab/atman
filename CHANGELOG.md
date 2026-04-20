@@ -8,6 +8,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Geometric compartmental unmixing (`atman decompose unmix`).**
+  Ports Vertex Component Analysis (Nascimento & Bioucas-Dias 2005) +
+  Fully Constrained Least Squares (Heinz & Chang 2001) from
+  hyperspectral remote sensing into atman's canonical TSV surface.
+  Where `decompose ica` returns statistically-independent abstract
+  axes, unmix returns *geometrically-identified pure endmembers*
+  with per-subject fractional abundances that sum to 1 under
+  non-negativity. VCA iteratively picks the most extreme sample
+  projection onto the orthogonal complement of already-found
+  endmembers (deterministic under `--seed` via SplitMix64); FCLS
+  solves `argmin_α ||x − Eα||² s.t. α ≥ 0 ∧ Σα = 1` via projected
+  gradient with Euclidean simplex projection (Duchi et al. 2008).
+  `--abundance ucls` drops the simplex constraint for compositional
+  transforms where `Σα = 1` has no meaning. Supports
+  `--transform {none,log,clr,alr,ratio-anchor}`; ILR is refused
+  because it changes feature ordering, and CLR/ALR combined with
+  FCLS is refused without `--allow-unconstrained-simplex` because
+  log-ratio coordinates don't admit a simplex interpretation.
+  Outputs `endmembers.tsv` (rank-ordered per endmember),
+  `abundances.tsv`, `unmix_diagnostics.tsv`, plus the standard
+  sidecar. v1 deliberately omits `nfindr`, `--k auto` (HySime),
+  `--n-boot` CI, and `--annotate-markers` — each is its own
+  follow-on. Integration tests verify planted-3-endmember recovery
+  at cosine ≥ 0.85, FCLS row-sum = 1 ± 1e-5 with non-negative
+  entries, determinism under fixed seed, refusal on `k > n/2`, and
+  refusal on CLR+FCLS without the escape hatch. Closes Priority 10.
 - **Cross-tool benchmark harness (`atman bench decompose`).** New
   top-level `atman bench` command family. Scores `atman decompose
   ica` against named external tools on a shared planted-archetype

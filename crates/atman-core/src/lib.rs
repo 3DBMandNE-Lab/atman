@@ -10,6 +10,7 @@ pub mod align_project;
 pub mod bench_decompose;
 pub mod compositional;
 pub mod de;
+pub mod decompose_unmix;
 pub mod deqms;
 pub mod ensemble;
 pub mod errors;

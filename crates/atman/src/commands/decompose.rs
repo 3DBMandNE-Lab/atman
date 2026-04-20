@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use atman_core::bh_fdr;
 use atman_core::compositional::{apply_transform, Transform};
+use atman_core::decompose_unmix::{unmix, AbundanceMethod, UnmixResult};
 use atman_core::ica::{fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult};
 use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
 use atman_core::variance_decomposition::{
@@ -34,6 +35,9 @@ enum Command {
     /// Partition archetype activation variance into fixed-effect,
     /// random-intercept, and residual components per archetype.
     Variance(VarianceArgs),
+    /// Geometric compartmental unmixing (VCA endmember extraction
+    /// + FCLS/UCLS abundance estimation).
+    Unmix(UnmixArgs),
 }
 
 #[derive(ClapArgs, Debug)]
@@ -156,6 +160,7 @@ pub fn run(args: Args) -> Result<()> {
         Command::Ica(args) => run_ica(args),
         Command::Null(args) => run_null(args),
         Command::Variance(args) => run_variance(args),
+        Command::Unmix(args) => run_unmix(args),
     }
 }
 
@@ -1540,5 +1545,415 @@ fn threshold_fraction(_threshold: f64) -> f64 {
     // default of "recover in at least 90% of seeds"); keeping it fixed avoids
     // introducing another user-facing knob for now.
     0.9
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct UnmixArgs {
+    /// Canonical Atman input directory (expects `qc_measurements.tsv`
+    /// or `measurements.tsv`, plus `samples.tsv`, `proteins.tsv`).
+    #[arg(long)]
+    input_dir: PathBuf,
+
+    /// Number of endmembers `k`. Must satisfy `2 ≤ k ≤ n_samples / 2`.
+    #[arg(long)]
+    k: usize,
+
+    /// Endmember extraction method. v1 supports `vca` only; `nfindr`
+    /// is a documented follow-on.
+    #[arg(long, default_value = "vca")]
+    method: String,
+
+    /// Abundance estimator. `fcls` (default) enforces simplex
+    /// constraints `α ≥ 0 ∧ Σα = 1`. `ucls` drops them.
+    #[arg(long, default_value = "fcls")]
+    abundance: String,
+
+    /// Pre-transform applied to the subject × protein matrix before
+    /// unmixing. `none` passes atman's already-log-scale canonical
+    /// data through; `clr` centers each subject row on its own mean
+    /// (valid only with `--abundance ucls`, or with
+    /// `--allow-unconstrained-simplex` for FCLS); `ilr` is refused
+    /// because it changes the feature ordering.
+    #[arg(long, default_value = "none")]
+    transform: String,
+
+    /// Reference gene symbol for `--transform alr` / `ratio-anchor`.
+    #[arg(long)]
+    alr_reference: Option<String>,
+
+    /// Escape hatch: run FCLS even with a compositional transform
+    /// whose simplex interpretation is debatable (CLR, ILR). Off by
+    /// default — FCLS's sum-to-one constraint has no natural
+    /// meaning on log-ratio coordinates.
+    #[arg(long, default_value_t = false)]
+    allow_unconstrained_simplex: bool,
+
+    /// Canonical measurements file: `qc` (default) or `raw`.
+    #[arg(long, default_value = "qc")]
+    source: String,
+
+    /// Seed for VCA's initial projection direction. Sub-seeds for
+    /// each VCA step derive from this via SplitMix64.
+    #[arg(long, default_value_t = 20260420)]
+    seed: u64,
+
+    /// FCLS maximum projected-gradient iterations.
+    #[arg(long, default_value_t = 1000)]
+    fcls_max_iter: usize,
+
+    /// FCLS convergence tolerance (`max |Δα|` between iterations).
+    #[arg(long, default_value_t = 1e-9)]
+    fcls_tol: f64,
+
+    /// Drop proteins with more than this fraction of missing samples.
+    #[arg(long, default_value_t = 0.0)]
+    max_missing_fraction: f64,
+
+    /// `--impute none|mean` for residual missingness.
+    #[arg(long, default_value = "none")]
+    impute: String,
+
+    /// Output directory for `endmembers.tsv`, `abundances.tsv`,
+    /// `unmix_diagnostics.tsv`.
+    #[arg(long)]
+    output_dir: PathBuf,
+}
+
+fn run_unmix(args: UnmixArgs) -> Result<()> {
+    let started_at = SystemTime::now();
+    if args.method != "vca" {
+        bail!(
+            "--method {:?} is not supported in v1; only `vca` is implemented. \
+             `nfindr` is a documented follow-on.",
+            args.method
+        );
+    }
+    let abundance_method = match args.abundance.as_str() {
+        "fcls" => AbundanceMethod::Fcls,
+        "ucls" => AbundanceMethod::Ucls,
+        other => bail!("--abundance {other:?}; expected fcls or ucls"),
+    };
+    match args.transform.as_str() {
+        "none" | "log" => {}
+        "clr" | "alr" | "ratio-anchor" => {
+            if matches!(abundance_method, AbundanceMethod::Fcls)
+                && !args.allow_unconstrained_simplex
+            {
+                bail!(
+                    "--transform {:?} combined with --abundance fcls is refused: \
+                     log-ratio coordinates do not admit a `Σα = 1` interpretation. \
+                     Pass --allow-unconstrained-simplex to override, or switch to \
+                     --abundance ucls.",
+                    args.transform
+                );
+            }
+        }
+        "ilr" => {
+            bail!(
+                "--transform ilr is refused in `decompose unmix`: ILR changes \
+                 the feature ordering, so recovered endmember loadings would \
+                 not line up with the input protein labels"
+            );
+        }
+        other => bail!("--transform {other:?}; expected none|log|clr|alr|ratio-anchor"),
+    }
+    let impute_mean = match args.impute.as_str() {
+        "none" => false,
+        "mean" => true,
+        other => bail!("--impute {other:?}; expected none or mean"),
+    };
+    if args.fcls_max_iter < 1 {
+        bail!("--fcls-max-iter must be >= 1");
+    }
+
+    // Load subject × protein matrix, keyed by gene_symbol.
+    let source_file = match args.source.as_str() {
+        "qc" => "qc_measurements.tsv",
+        "raw" => "measurements.tsv",
+        other => bail!("--source {other:?}; expected qc or raw"),
+    };
+    let (subject_ids, protein_labels, data) = load_subject_protein_matrix(
+        &args.input_dir.join(source_file),
+        args.max_missing_fraction,
+        impute_mean,
+    )?;
+    if subject_ids.len() < args.k * 2 {
+        bail!(
+            "k={} requires >= {} samples (k > n/2 is under-determined); got {}",
+            args.k,
+            args.k * 2,
+            subject_ids.len()
+        );
+    }
+    // Apply transform (if any) — "log" is a no-op on atman canonical
+    // data since it's already on a log scale.
+    let transform = match args.transform.as_str() {
+        "none" | "log" => Transform::None,
+        "clr" => Transform::Clr,
+        "alr" => {
+            let reference = args
+                .alr_reference
+                .as_deref()
+                .context("--transform alr requires --alr-reference <gene>")?;
+            let idx = protein_labels
+                .iter()
+                .position(|l| l == reference)
+                .with_context(|| {
+                    format!("--alr-reference {reference:?} not in protein labels")
+                })?;
+            Transform::Alr { reference_index: idx }
+        }
+        "ratio-anchor" => {
+            let reference = args
+                .alr_reference
+                .as_deref()
+                .context("--transform ratio-anchor requires --alr-reference <gene>")?;
+            let idx = protein_labels
+                .iter()
+                .position(|l| l == reference)
+                .with_context(|| {
+                    format!("--alr-reference {reference:?} not in protein labels")
+                })?;
+            Transform::RatioAnchor { reference_index: idx }
+        }
+        _ => unreachable!(),
+    };
+    let transformed = apply_transform(&data, transform)
+        .map_err(|e| anyhow::anyhow!("transform failed: {e}"))?;
+
+    let result = unmix(
+        &transformed,
+        args.k,
+        args.seed,
+        abundance_method,
+        args.fcls_max_iter,
+        args.fcls_tol,
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
+
+    std::fs::create_dir_all(&args.output_dir)
+        .with_context(|| format!("creating {:?}", args.output_dir))?;
+    let endmembers_path = args.output_dir.join("endmembers.tsv");
+    write_unmix_endmembers(&endmembers_path, &result, &protein_labels, &subject_ids)?;
+    let abundances_path = args.output_dir.join("abundances.tsv");
+    write_unmix_abundances(&abundances_path, &result, &subject_ids)?;
+    let diag_path = args.output_dir.join("unmix_diagnostics.tsv");
+    write_unmix_diagnostics(&diag_path, &result, &subject_ids)?;
+
+    eprintln!(
+        "decompose unmix: k={} n={} p={} method={} abundance={} transform={}",
+        args.k,
+        subject_ids.len(),
+        protein_labels.len(),
+        args.method,
+        args.abundance,
+        args.transform,
+    );
+
+    let finished_at = SystemTime::now();
+    let input_dir_sha256 = hash_canonical_inputs(
+        &args.input_dir,
+        &[
+            "qc_measurements.tsv",
+            "measurements.tsv",
+            "samples.tsv",
+            "proteins.tsv",
+        ],
+    )?;
+    let sidecar = sidecar_path_for(&endmembers_path);
+    write_run_sidecar(
+        &sidecar,
+        "decompose unmix",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "k": args.k,
+            "method": args.method,
+            "abundance": args.abundance,
+            "transform": args.transform,
+            "alr-reference": args.alr_reference,
+            "allow-unconstrained-simplex": args.allow_unconstrained_simplex,
+            "source": args.source,
+            "seed": args.seed,
+            "fcls-max-iter": args.fcls_max_iter,
+            "fcls-tol": args.fcls_tol,
+            "max-missing-fraction": args.max_missing_fraction,
+            "impute": args.impute,
+        }),
+        &input_dir_sha256,
+        &[endmembers_path.clone(), abundances_path.clone(), diag_path.clone()],
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("decompose unmix: sidecar={}", sidecar.display());
+    Ok(())
+}
+
+fn load_subject_protein_matrix(
+    path: &Path,
+    max_missing_fraction: f64,
+    impute_mean: bool,
+) -> Result<(Vec<String>, Vec<String>, Vec<Vec<f64>>)> {
+    let records = read_measurements_long(path)?;
+    let mut samples: BTreeSet<String> = BTreeSet::new();
+    let mut genes: BTreeSet<String> = BTreeSet::new();
+    let mut cells: BTreeMap<(String, String), f64> = BTreeMap::new();
+    for r in &records {
+        if r.dropped_by_qc {
+            continue;
+        }
+        let v = r.abundance.as_f64();
+        if !v.is_finite() {
+            continue;
+        }
+        let gene = match &r.gene_symbol {
+            Some(g) => g.clone(),
+            None => continue,
+        };
+        samples.insert(r.sample_id.clone());
+        genes.insert(gene.clone());
+        cells.insert((gene, r.sample_id.clone()), v);
+    }
+    let sample_list: Vec<String> = samples.into_iter().collect();
+    let gene_list: Vec<String> = genes.into_iter().collect();
+    if sample_list.is_empty() || gene_list.is_empty() {
+        bail!("no usable measurements in {:?}", path);
+    }
+    // Build with missingness map.
+    let mut raw = vec![vec![f64::NAN; gene_list.len()]; sample_list.len()];
+    for (si, sid) in sample_list.iter().enumerate() {
+        for (gi, gene) in gene_list.iter().enumerate() {
+            if let Some(&v) = cells.get(&(gene.clone(), sid.clone())) {
+                raw[si][gi] = v;
+            }
+        }
+    }
+    // Drop features exceeding the missing-fraction budget.
+    let n = sample_list.len() as f64;
+    let keep: Vec<bool> = (0..gene_list.len())
+        .map(|gi| {
+            let present = (0..sample_list.len())
+                .filter(|&si| raw[si][gi].is_finite())
+                .count();
+            let missing = 1.0 - (present as f64 / n);
+            missing <= max_missing_fraction + 1e-12
+        })
+        .collect();
+    let kept_genes: Vec<String> = gene_list
+        .iter()
+        .zip(keep.iter())
+        .filter_map(|(g, k)| if *k { Some(g.clone()) } else { None })
+        .collect();
+    if kept_genes.is_empty() {
+        bail!(
+            "no proteins retained after --max-missing-fraction {} filter",
+            max_missing_fraction
+        );
+    }
+    let mut data = vec![vec![0.0_f64; kept_genes.len()]; sample_list.len()];
+    for (new_gi, gi) in (0..gene_list.len()).filter(|i| keep[*i]).enumerate() {
+        // Compute column mean for imputation.
+        let mut sum = 0.0;
+        let mut count = 0usize;
+        for si in 0..sample_list.len() {
+            if raw[si][gi].is_finite() {
+                sum += raw[si][gi];
+                count += 1;
+            }
+        }
+        let mean = if count > 0 { sum / count as f64 } else { 0.0 };
+        for si in 0..sample_list.len() {
+            let v = raw[si][gi];
+            if v.is_finite() {
+                data[si][new_gi] = v;
+            } else if impute_mean {
+                data[si][new_gi] = mean;
+            } else {
+                bail!(
+                    "missing value at sample {} protein {}; rerun with --impute mean",
+                    sample_list[si],
+                    kept_genes[new_gi]
+                );
+            }
+        }
+    }
+    Ok((sample_list, kept_genes, data))
+}
+
+fn write_unmix_endmembers(
+    path: &Path,
+    result: &UnmixResult,
+    protein_labels: &[String],
+    subject_ids: &[String],
+) -> Result<()> {
+    let mut buf = String::from(
+        "endmember_id\tsource_sample_id\tprotein\tloading\trank_in_endmember\n",
+    );
+    for (ai, loading) in result.endmember_loadings.iter().enumerate() {
+        let src_idx = result.endmember_sample_indices[ai];
+        let source_sid = subject_ids
+            .get(src_idx)
+            .cloned()
+            .unwrap_or_else(|| format!("sample{src_idx}"));
+        // Rank proteins by |loading| within the endmember.
+        let mut ranking: Vec<(usize, f64)> = loading
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, v.abs()))
+            .collect();
+        ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        let mut rank_for = vec![0usize; loading.len()];
+        for (r, (i, _)) in ranking.iter().enumerate() {
+            rank_for[*i] = r + 1;
+        }
+        for (pi, &v) in loading.iter().enumerate() {
+            buf.push_str(&format!(
+                "E{:03}\t{}\t{}\t{:.6}\t{}\n",
+                ai + 1,
+                source_sid,
+                protein_labels[pi],
+                v,
+                rank_for[pi],
+            ));
+        }
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+fn write_unmix_abundances(
+    path: &Path,
+    result: &UnmixResult,
+    subject_ids: &[String],
+) -> Result<()> {
+    let mut buf = String::from("sample_id");
+    for ai in 0..result.endmember_loadings.len() {
+        buf.push('\t');
+        buf.push_str(&format!("E{:03}", ai + 1));
+    }
+    buf.push('\n');
+    for (si, sid) in subject_ids.iter().enumerate() {
+        buf.push_str(sid);
+        for &v in &result.abundances[si] {
+            buf.push('\t');
+            buf.push_str(&format!("{v:.6}"));
+        }
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+fn write_unmix_diagnostics(
+    path: &Path,
+    result: &UnmixResult,
+    subject_ids: &[String],
+) -> Result<()> {
+    let mut buf = String::from("sample_id\treconstruction_residual_norm\tabundance_sum\n");
+    for (si, sid) in subject_ids.iter().enumerate() {
+        let sum: f64 = result.abundances[si].iter().sum();
+        buf.push_str(&format!(
+            "{}\t{:.6}\t{:.6}\n",
+            sid, result.residual_norms[si], sum,
+        ));
+    }
+    atomic_write(path, buf.as_bytes())
 }
 
