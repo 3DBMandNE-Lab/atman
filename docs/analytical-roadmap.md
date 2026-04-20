@@ -572,6 +572,55 @@ level permutation null calibration. MOFA, consICA, fastICA+ICASSO
 rely on user-side scripting. Atman now provides it as a first-class
 CLI surface with sidecar provenance.
 
+### 18. Compositional transforms in `atman decompose ica` (implemented)
+
+First-class `--transform` flag exposing CLR, ALR, ILR, and
+ratio-anchor projections for closed-sum proteomics data. Writes a
+`transform_applied.json` audit file next to `loadings.tsv` so the
+coordinate system the archetypes live in is recorded in the run's
+provenance trail.
+
+Command:
+
+```bash
+atman decompose ica \
+  --input-dir out --k 20 \
+  --transform clr \
+  --seed 20260418 \
+  --output-loadings out/decomp_clr/loadings.tsv \
+  --output-activations out/decomp_clr/activations.tsv \
+  --output-stability out/decomp_clr/stability.tsv
+```
+
+Transforms (atman's canonical abundance is already log-scale, so
+these are linear operations on log values):
+
+- `none` — pass-through.
+- `clr` — per-sample mean centering of the log-abundance row.
+- `alr` — subtract a reference protein's log-abundance column
+  (`--alr-reference <gene_symbol>`, e.g. `ALB` for CSF).
+- `ilr` — Helmert orthonormal projection; outputs are in
+  `ilr_coord_*` coordinates (p − 1 dimensions), not raw proteins.
+- `ratio-anchor` — algebraically identical to ALR on log input;
+  preserved as a distinct tag for domain convention.
+
+Acceptance:
+
+- Pure transforms live in `atman-core::compositional`; 12 unit tests
+  cover invariants (CLR rows sum to 0, ALR reference column is 0,
+  ILR preserves CLR norm, constant-row maps to 0).
+- Integration tests cover CLR, ALR (valid + missing reference +
+  unknown gene), ILR dimensionality, and determinism across repeated
+  runs.
+- Run sidecar records `transform` and `alr-reference` alongside the
+  existing ICA knobs.
+
+Why it matters: closes the loop on a CSF-manuscript finding —
+albumin normalization is not a preprocessing hack, it is a
+compositional transform, and the decomposition result depends on
+which transform you chose. No standalone proteomics ICA tool
+currently exposes this as a first-class CLI option with provenance.
+
 ## Implemented Build Order
 
 1. `atman validate`
@@ -591,6 +640,7 @@ CLI surface with sidecar provenance.
 15. DEqMS peptide-count-weighted variance
 16. Cross-method ensemble DE dispatcher
 17. Archetype null calibration
+18. Compositional transforms in decompose ica
 
 ## Release Readiness Status
 

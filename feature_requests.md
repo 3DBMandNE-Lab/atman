@@ -22,73 +22,14 @@ k-size refusal, and an end-to-end smoke test against the Dube cohort. See
 
 ---
 
-## Priority 2: Compositional transforms in `atman decompose ica`
+## ~~Priority 2: Compositional transforms in `atman decompose ica`~~ *(shipped 2026-04-20)*
 
-Bulk proteomics is closed-sum (total intensity is a plate/panel-level
-artifact), so euclidean-geometry ICA on raw log2 abundance mixes real
-biology with scaling. Downstream analysts currently hack this at the
-`ingest-matrix` layer (per-sample albumin division, CLR, etc.). Atman
-should expose the transform as a first-class `decompose ica` option so
-the run sidecar records which geometry the archetypes live in.
-
-Command:
-
-```bash
-atman decompose ica \
-  --input-dir out \
-  --k 20 \
-  --transform clr \
-  --seed 20260418 \
-  --output-dir out/decomp_clr
-```
-
-Transforms:
-
-- `none` (default; current behavior; sample-centered log2)
-- `clr`: centered log-ratio. Per-sample: `x_i = log2(y_i) − mean_j
-  log2(y_j)` over proteins with `y > 0`. Zero handling:
-  `--zero-handling minprob` (replace zeros by per-protein 1st-percentile
-  non-zero value before log) or `--zero-handling keep-na` (drop from the
-  sample's log-ratio mean; preserves NA).
-- `alr`: additive log-ratio against a reference protein.
-  `--alr-reference ALB` or `--alr-reference-col reference_protein`. For
-  CSF: albumin is the domain-standard reference.
-- `ilr`: isometric log-ratio against an orthonormal Helmert basis.
-  Numerically better-conditioned than CLR when K is large.
-- `ratio-anchor`: per-sample divide by a chosen protein, then log2. No
-  transform on the others. Equivalent to the CSF-manuscript "albumin
-  normalization" pipeline.
-
-All transforms must be pure, idempotent, and reversible (where
-applicable; `ilr` has a closed-form inverse given the basis).
-
-Outputs:
-
-- Existing `loadings.tsv`, `activations.tsv`, `archetypes.tsv`, plus
-- `transform_applied.json` capturing the transform name, parameters,
-  reference choice, and zero-handling.
-
-Acceptance:
-
-- On a synthetic fixture with a planted compositional archetype (one
-  gene up, all others down proportionally to conserve the sample sum),
-  `--transform clr` recovers it cleanly while `--transform none` splits
-  it across multiple components.
-- CLR of a dataset with one protein set to its per-protein mean in
-  every sample must yield zero loading on that protein for every
-  archetype (invariance check).
-- Run sidecar records transform identity. Two runs with the same
-  `--transform` on the same inputs are byte-equal.
-- Integration tests under `crates/atman/tests/decompose_ica_transforms.rs`
-  covering the four non-default transforms + zero-handling branches +
-  the compositional recovery fixture.
-
-Why it matters for the methods paper: lets atman claim "geometry-aware
-decomposition for closed-sum data." No standalone proteomics ICA tool
-currently does this end-to-end. It also closes the loop on one of the
-biggest CSF-manuscript findings — albumin normalization isn't a
-preprocessing hack; it is a compositional transform, and the
-decomposition result depends on which transform you chose.
+Exposed `--transform {none,clr,alr,ilr,ratio-anchor}` with
+`--alr-reference <gene>` and a `transform_applied.json` audit file
+next to `loadings.tsv`. Pure transforms live in
+`atman-core::compositional`. Zero-handling deferred until linear-scale
+input routes exist; atman canonical data is already finite on a log
+scale after QC. See `docs/analytical-roadmap.md` §8 for details.
 
 ---
 

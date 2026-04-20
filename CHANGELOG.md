@@ -8,6 +8,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Compositional transforms in `atman decompose ica`
+  (`--transform {none,clr,alr,ilr,ratio-anchor}`).** Bulk proteomics
+  is closed-sum (total intensity is a plate/panel artifact), so
+  Euclidean-geometry ICA on raw log2 abundance mixes biology with
+  scaling. The transform is now a first-class CLI option with a
+  per-run `transform_applied.json` audit file recording the
+  geometry the archetypes live in. `clr` is sample-wise
+  mean-centering on log data; `alr` / `ratio-anchor` subtract a
+  reference gene's column (use `--alr-reference <gene_symbol>`);
+  `ilr` projects through a Helmert orthonormal basis (output
+  loadings in `ilr_coord_*` coordinates rather than raw proteins,
+  since ILR shrinks dimensionality by 1). Run sidecar captures
+  `transform` and `alr-reference`. Zero-handling is deferred
+  until linear-scale input routes exist — atman's canonical data
+  arrives finite on a log scale after QC, so no zero mapping is
+  needed on the common paths.
 - **Archetype null calibration (`atman decompose null`).** Permutation
   null for FastICA archetype stability: runs the multi-seed Jaccard
   stability metric on the real matrix, then runs it again on
