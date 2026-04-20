@@ -16,15 +16,19 @@ compartment fractions where ICA gives abstract axes.
 All items below keep commandment 8 (Rust, SQLite, local, deterministic,
 no cloud except PubMed API) and the canonical TSV contract.
 
-Open priorities at the time of writing (2026-04-20):
+Open priorities — all shipped 2026-04-20:
 
-- **Priority 4** — `atman align project` (cohort projection onto atlas)
-- **Priority 6** — `atman bench decompose` (head-to-head benchmark harness)
-- **Priority 8** — `atman modules discover` (data-driven WGCNA-style modules)
-- **Priority 10** — `atman decompose unmix` (geometric compartmental
-  unmixing via VCA + FCLS, ported from hyperspectral remote sensing)
-- Residual deferrals: Jaccard/Spearman metrics in `align bootstrap`
-  (Priority 3); unbalanced Dunnett–Hsu via Genz–Bretz (Priority 9).
+- ~~Priority 4~~ — `atman align project` ✅ (commit `0337f15`)
+- ~~Priority 6~~ — `atman bench decompose` ✅ (commit `e46bbed`)
+- ~~Priority 8~~ — `atman modules discover` ✅ (commit `92961c4`)
+- ~~Priority 10~~ — `atman decompose unmix` ✅ (commit `d61706c`)
+
+Residual deferrals on shipped features:
+
+- Jaccard/Spearman metrics in `align bootstrap` (Priority 3).
+- Unbalanced Dunnett–Hsu via Genz–Bretz (Priority 9).
+- NFINDR endmember extraction, `--k auto` HySime, `--n-boot` CI,
+  and `--annotate-markers` on `decompose unmix` (Priority 10).
 
 Also shipped 2026-04-20 outside the original request batch:
 **Cross-method consensus DE dispatcher (`atman de --test ensemble`)** —
@@ -506,6 +510,28 @@ use exactly this combination (two-way ANOVA + Tukey + Dunnett + Sidak)
 as the workhorse for their four-stage AD continuum design; the CSF
 cross-disease manuscript has the same shape (CN vs AD vs iNPH vs MS vs
 SIH vs PD) and currently hand-codes it in Python.
+
+---
+
+## ~~Priority 10: Compartmental unmixing (`atman decompose unmix`)~~ *(shipped 2026-04-20, commit `d61706c`)*
+
+**Shipped:** VCA endmember extraction + FCLS / UCLS abundance
+estimation in `atman-core::decompose_unmix`; CLI at
+`atman decompose unmix` with `--transform {none,log,clr,alr,
+ratio-anchor}` (CLR/ALR + FCLS gated on
+`--allow-unconstrained-simplex`; ILR refused). Integration tests
+verify planted-3-endmember recovery at cosine ≥ 0.85, FCLS row-sum
+= 1 ± 1e-5 with non-negative entries, determinism, and the `k > n/2`
++ CLR+FCLS refusal paths.
+
+**Still deferred:** NFINDR endmember extraction, `--k auto`
+(HySime-style virtual dimensionality), `--n-boot` subject-level
+bootstrap CI for loadings + abundances, `--annotate-markers` with
+ORA against supplied marker sets, and the CSF plasma-endmember
+real-data sanity assertion on `sih/qc_measurements.tsv` (requires
+the live atman_inputs_albnorm dataset).
+
+Spec below preserved for future reference:
 
 ---
 
