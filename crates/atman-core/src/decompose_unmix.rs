@@ -844,6 +844,103 @@ pub fn bootstrap_ci(
     ))
 }
 
+#[derive(Debug, Clone)]
+pub struct AnnotationRow {
+    pub endmember_id: String,
+    pub set_name: String,
+    pub universe_size: usize,
+    pub set_size_in_universe: usize,
+    pub top_n: usize,
+    pub overlap: usize,
+    pub p_value: f64,
+}
+
+/// Hypergeometric upper-tail: `P(X ≥ k)` for drawing `n` samples
+/// without replacement from a universe of size `N` containing `K`
+/// successes. Uses the statrs hypergeometric CDF.
+fn hypergeometric_upper_tail(n_universe: u64, k_success: u64, n_draw: u64, k_overlap: u64) -> f64 {
+    use statrs::distribution::{DiscreteCDF, Hypergeometric};
+    if n_draw == 0 || k_overlap == 0 {
+        return 1.0;
+    }
+    if k_overlap > k_success || k_overlap > n_draw {
+        return 0.0;
+    }
+    let dist = match Hypergeometric::new(n_universe, k_success, n_draw) {
+        Ok(d) => d,
+        Err(_) => return 1.0,
+    };
+    // P(X ≥ k) = 1 − P(X ≤ k − 1)
+    if k_overlap == 0 {
+        return 1.0;
+    }
+    (1.0 - dist.cdf(k_overlap - 1)).clamp(0.0, 1.0)
+}
+
+/// Per-endmember hypergeometric ORA against user-supplied marker
+/// sets. For each endmember, the `top_n` proteins by `|loading|`
+/// are tested for enrichment of each marker set's intersection with
+/// the observation universe. Returns one row per (endmember, set).
+pub fn ora_enrichment(
+    endmember_loadings: &[Vec<f64>],
+    protein_labels: &[String],
+    marker_sets: &std::collections::BTreeMap<String, Vec<String>>,
+    top_n: usize,
+) -> Vec<AnnotationRow> {
+    let n_universe = protein_labels.len();
+    if n_universe == 0 || endmember_loadings.is_empty() || marker_sets.is_empty() {
+        return Vec::new();
+    }
+    let top_n = top_n.min(n_universe);
+    use std::collections::BTreeSet;
+    let label_idx: std::collections::HashMap<&str, usize> = protein_labels
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.as_str(), i))
+        .collect();
+    // Pre-intersect each marker set with the observation universe.
+    let intersected: Vec<(String, BTreeSet<usize>)> = marker_sets
+        .iter()
+        .map(|(name, genes)| {
+            let hits: BTreeSet<usize> = genes
+                .iter()
+                .filter_map(|g| label_idx.get(g.as_str()).copied())
+                .collect();
+            (name.clone(), hits)
+        })
+        .collect();
+    let mut out = Vec::with_capacity(endmember_loadings.len() * intersected.len());
+    for (ai, loading) in endmember_loadings.iter().enumerate() {
+        let mut ranked: Vec<(usize, f64)> = loading
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, v.abs()))
+            .collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let top_set: BTreeSet<usize> =
+            ranked.iter().take(top_n).map(|(i, _)| *i).collect();
+        for (set_name, set_members) in &intersected {
+            let overlap = top_set.intersection(set_members).count();
+            let p = hypergeometric_upper_tail(
+                n_universe as u64,
+                set_members.len() as u64,
+                top_n as u64,
+                overlap as u64,
+            );
+            out.push(AnnotationRow {
+                endmember_id: format!("E{:03}", ai + 1),
+                set_name: set_name.clone(),
+                universe_size: n_universe,
+                set_size_in_universe: set_members.len(),
+                top_n,
+                overlap,
+                p_value: p,
+            });
+        }
+    }
+    out
+}
+
 fn cosine(a: &[f64], b: &[f64]) -> f64 {
     let dot: f64 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     let na: f64 = a.iter().map(|v| v * v).sum::<f64>().sqrt();
@@ -1079,6 +1176,45 @@ mod tests {
         )
         .unwrap();
         assert!(lci.is_none() && aci.is_none());
+    }
+
+    #[test]
+    fn ora_enrichment_detects_planted_marker_sets() {
+        // One endmember loads heavily on G000..G009 (block 0). Define
+        // a marker set that exactly covers those 10 genes — enrichment
+        // p-value should be tiny. A second marker set covers
+        // G020..G029 (not in block 0) — expect a high p-value.
+        let p = 30;
+        let mut loading = vec![0.0_f64; p];
+        for i in 0..10 {
+            loading[i] = 1.0 - 0.01 * (i as f64);
+        }
+        let labels: Vec<String> = (0..p).map(|i| format!("G{i:03}")).collect();
+        let mut marker_sets = std::collections::BTreeMap::new();
+        marker_sets.insert(
+            "true_set".into(),
+            (0..10).map(|i| format!("G{i:03}")).collect::<Vec<_>>(),
+        );
+        marker_sets.insert(
+            "decoy_set".into(),
+            (20..30).map(|i| format!("G{i:03}")).collect::<Vec<_>>(),
+        );
+        let rows = ora_enrichment(&[loading], &labels, &marker_sets, 10);
+        assert_eq!(rows.len(), 2);
+        let true_row = rows.iter().find(|r| r.set_name == "true_set").unwrap();
+        let decoy_row = rows.iter().find(|r| r.set_name == "decoy_set").unwrap();
+        assert_eq!(true_row.overlap, 10);
+        assert!(
+            true_row.p_value < 1e-6,
+            "true_set p should be tiny, got {}",
+            true_row.p_value
+        );
+        assert_eq!(decoy_row.overlap, 0);
+        assert!(
+            decoy_row.p_value > 0.5,
+            "decoy_set p should be ≈1, got {}",
+            decoy_row.p_value
+        );
     }
 
     #[test]

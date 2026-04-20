@@ -414,6 +414,74 @@ fn unmix_n_boot_emits_ci_columns_with_finite_ordered_bounds() {
 }
 
 #[test]
+fn unmix_annotate_markers_emits_endmember_annotations_tsv() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("cohort");
+    let output = tmp.path().join("annot_out");
+    let mut planted = vec![vec![0.0_f64; 30]; 3];
+    write_planted_cohort(&input, 20260420, &mut planted);
+
+    // Block 0 (E1) plants loading on genes G001..G010; build a
+    // marker-set TSV with one matching set and one decoy.
+    let markers_path = tmp.path().join("markers.tsv");
+    let mut markers = String::from("set_name\tgene_symbol\n");
+    for i in 1..=10 {
+        markers.push_str(&format!("block_1\tG{i:03}\n"));
+    }
+    for i in 21..=30 {
+        markers.push_str(&format!("decoy\tG{i:03}\n"));
+    }
+    std::fs::write(&markers_path, markers).unwrap();
+
+    let status = run_atman(&[
+        "decompose", "unmix",
+        "--input-dir", input.to_str().unwrap(),
+        "--k", "3",
+        "--annotate-markers", markers_path.to_str().unwrap(),
+        "--annotate-top-n", "10",
+        "--seed", "42",
+        "--output-dir", output.to_str().unwrap(),
+    ]);
+    assert!(
+        status.status.success(),
+        "decompose unmix --annotate-markers failed:\nstderr:\n{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let ann_path = output.join("endmember_annotations.tsv");
+    assert!(ann_path.exists());
+    let (header, rows) = parse_tsv(&ann_path);
+    for col in [
+        "endmember_id",
+        "set_name",
+        "universe_size",
+        "set_size_in_universe",
+        "top_n",
+        "overlap",
+        "p_value",
+    ] {
+        assert!(header.iter().any(|h| h == col), "missing {col}");
+    }
+    assert_eq!(rows.len(), 3 * 2, "expected 3 endmembers × 2 sets");
+
+    // At least one endmember must significantly enrich `block_1`
+    // (the matching planted set). At the same α its `decoy`
+    // enrichment must be non-significant.
+    let mut any_true_enriched = false;
+    for r in &rows {
+        if r["set_name"] == "block_1" {
+            let p: f64 = r["p_value"].parse().unwrap();
+            if p < 1e-3 {
+                any_true_enriched = true;
+            }
+        }
+    }
+    assert!(
+        any_true_enriched,
+        "expected at least one endmember to enrich block_1 at p < 1e-3"
+    );
+}
+
+#[test]
 fn unmix_is_deterministic_under_fixed_seed() {
     let tmp = tempfile::tempdir().unwrap();
     let input = tmp.path().join("cohort");

@@ -2,8 +2,8 @@ use anyhow::{bail, Context, Result};
 use atman_core::bh_fdr;
 use atman_core::compositional::{apply_transform, Transform};
 use atman_core::decompose_unmix::{
-    bootstrap_ci, select_k_auto, unmix, AbundanceCi, AbundanceMethod, EndmemberMethod,
-    KSweepRow, LoadingCi, UnmixResult,
+    bootstrap_ci, ora_enrichment, select_k_auto, unmix, AbundanceCi, AbundanceMethod,
+    AnnotationRow, EndmemberMethod, KSweepRow, LoadingCi, UnmixResult,
 };
 use atman_core::ica::{fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult};
 use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
@@ -1637,6 +1637,18 @@ pub struct UnmixArgs {
     #[arg(long, default_value_t = 0)]
     n_boot: usize,
 
+    /// Path to a marker-set TSV with columns (`set_name`,
+    /// `gene_symbol`) for hypergeometric ORA on each endmember's
+    /// top-N loadings. Emits `endmember_annotations.tsv` alongside
+    /// the other outputs.
+    #[arg(long)]
+    annotate_markers: Option<PathBuf>,
+
+    /// Top-N threshold used when ranking an endmember's proteins for
+    /// ORA against `--annotate-markers`.
+    #[arg(long, default_value_t = 20)]
+    annotate_top_n: usize,
+
     /// Drop proteins with more than this fraction of missing samples.
     #[arg(long, default_value_t = 0.0)]
     max_missing_fraction: f64,
@@ -1837,6 +1849,18 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
         write_k_selection(&k_path, &k_sweep, effective_k)?;
         outputs.push(k_path);
     }
+    if let Some(markers_path) = &args.annotate_markers {
+        let marker_sets = read_marker_sets(markers_path)?;
+        let ann_rows = ora_enrichment(
+            &result.endmember_loadings,
+            &protein_labels,
+            &marker_sets,
+            args.annotate_top_n,
+        );
+        let ann_path = args.output_dir.join("endmember_annotations.tsv");
+        write_endmember_annotations(&ann_path, &ann_rows)?;
+        outputs.push(ann_path);
+    }
 
     eprintln!(
         "decompose unmix: k={} n={} p={} method={} abundance={} transform={}",
@@ -1880,6 +1904,8 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
             "fcls-max-iter": args.fcls_max_iter,
             "fcls-tol": args.fcls_tol,
             "n-boot": args.n_boot,
+            "annotate-markers": args.annotate_markers.as_ref().map(|p| p.display().to_string()),
+            "annotate-top-n": args.annotate_top_n,
             "max-missing-fraction": args.max_missing_fraction,
             "impute": args.impute,
         }),
@@ -1890,6 +1916,56 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
     )?;
     eprintln!("decompose unmix: sidecar={}", sidecar.display());
     Ok(())
+}
+
+fn read_marker_sets(path: &Path) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut reader = ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(path)
+        .with_context(|| format!("opening {:?}", path))?;
+    let headers = reader.headers()?.clone();
+    let name_idx = headers
+        .iter()
+        .position(|h| h == "set_name")
+        .context("marker TSV missing set_name column")?;
+    let gene_idx = headers
+        .iter()
+        .position(|h| h == "gene_symbol")
+        .context("marker TSV missing gene_symbol column")?;
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for row in reader.records() {
+        let row = row?;
+        let name = row[name_idx].to_string();
+        let gene = row[gene_idx].trim().to_string();
+        if !name.is_empty() && !gene.is_empty() {
+            out.entry(name).or_default().push(gene);
+        }
+    }
+    if out.is_empty() {
+        bail!("marker TSV {:?} produced zero sets", path);
+    }
+    Ok(out)
+}
+
+fn write_endmember_annotations(path: &Path, rows: &[AnnotationRow]) -> Result<()> {
+    let mut buf = String::from(
+        "endmember_id\tset_name\tuniverse_size\tset_size_in_universe\t\
+         top_n\toverlap\tp_value\n",
+    );
+    for r in rows {
+        buf.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{:.6e}\n",
+            r.endmember_id,
+            r.set_name,
+            r.universe_size,
+            r.set_size_in_universe,
+            r.top_n,
+            r.overlap,
+            r.p_value,
+        ));
+    }
+    atomic_write(path, buf.as_bytes())
 }
 
 fn write_k_selection(path: &Path, rows: &[KSweepRow], chosen_k: usize) -> Result<()> {
