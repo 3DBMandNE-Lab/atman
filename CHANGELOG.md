@@ -8,6 +8,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Cross-tool benchmark harness (`atman bench decompose`).** New
+  top-level `atman bench` command family. Scores `atman decompose
+  ica` against named external tools on a shared planted-archetype
+  fixture. Scoring math in `atman-core::bench_decompose`: recovered
+  vs planted loading vectors matched via reciprocal-best absolute
+  cosine, then scored via `archetype_correlation`
+  (`|pearson|`), `recovery_jaccard` (top-N overlap), `runtime_seconds`,
+  and `determinism_score` (1.0 iff two repeated runs yield byte-equal
+  recovered loadings). Atman always runs natively via `fast_ica` +
+  `canonicalize_ica`. Other tools are invoked via thin shell
+  adapters at `bench/adapters/<tool>.sh` with a strict TSV-in /
+  TSV-out contract (`recovered_loadings.tsv` in the same 3-column
+  schema as `planted_loadings.tsv`); missing or failing adapters
+  produce a single `tool_not_available = 1` row rather than
+  aborting, so `--tools atman,fastica-icasso` still works on
+  machines where fastica-icasso isn't installed. Ships the v1
+  fixture at `bench/planted_archetypes_v1/` (2 archetypes × 20
+  proteins × 20 subjects, deterministic cubed-Gaussian activations);
+  atman recovers both planted archetypes at `|pearson| > 0.999`,
+  Jaccard 1.0, determinism 1.0. Closes Priority 6.
 - **Data-driven module discovery (`atman modules discover`).** New
   top-level command family. WGCNA-style pipeline in pure Rust:
   subject-level pairwise |pearson| / |spearman| correlation → soft-

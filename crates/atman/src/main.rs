@@ -56,6 +56,8 @@ enum Command {
     ModuleDe(commands::module_de::Args),
     /// Data-driven module discovery (WGCNA-style soft-threshold TOM + UPGMA).
     Modules(commands::modules::Args),
+    /// Cross-tool benchmark harness for decomposition methods.
+    Bench(commands::bench::Args),
     /// Null calibration by label permutation or paired sign flip.
     Null(commands::null::Args),
     /// Feature-covariance network analysis (`influence` subcommand).
@@ -96,6 +98,7 @@ fn main() -> Result<()> {
         Command::ModuleTrajectory(args) => commands::module_trajectory::run(args),
         Command::ModuleDe(args) => commands::module_de::run(args),
         Command::Modules(args) => commands::modules::run(args),
+        Command::Bench(args) => commands::bench::run(args),
         Command::Null(args) => commands::null::run(args),
         Command::Network(args) => commands::network::run(args),
         Command::Ratio(args) => commands::ratio::run(args),

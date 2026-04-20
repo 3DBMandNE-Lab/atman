@@ -6,9 +6,12 @@ The DE surface is mature (paired-t, welch, OLS-formula, mixed, limma
 every post-hoc family for multi-level OLS (Sidak, Tukey HSD via
 from-scratch studentized range, Dunnett via equicorrelated
 multivariate-t). The next frontier for atman as a standalone methods
-tool is rigor around the `decompose ica` + `align programs` pair:
-projection onto a trained atlas, benchmark harness, and data-driven
-module discovery.
+tool splits into two tracks: (i) rigor around the existing
+`decompose ica` + `align programs` pair — projection onto a trained
+atlas, benchmark harness, data-driven module discovery; and (ii) a
+cross-domain port of geometric compartmental unmixing (VCA + FCLS)
+from hyperspectral remote sensing, giving interpretable per-subject
+compartment fractions where ICA gives abstract axes.
 
 All items below keep commandment 8 (Rust, SQLite, local, deterministic,
 no cloud except PubMed API) and the canonical TSV contract.
@@ -18,6 +21,8 @@ Open priorities at the time of writing (2026-04-20):
 - **Priority 4** — `atman align project` (cohort projection onto atlas)
 - **Priority 6** — `atman bench decompose` (head-to-head benchmark harness)
 - **Priority 8** — `atman modules discover` (data-driven WGCNA-style modules)
+- **Priority 10** — `atman decompose unmix` (geometric compartmental
+  unmixing via VCA + FCLS, ported from hyperspectral remote sensing)
 - Residual deferrals: Jaccard/Spearman metrics in `align bootstrap`
   (Priority 3); unbalanced Dunnett–Hsu via Genz–Bretz (Priority 9).
 
@@ -504,23 +509,172 @@ SIH vs PD) and currently hand-codes it in Python.
 
 ---
 
+## Priority 10: Compartmental unmixing (`atman decompose unmix`)
+
+Atman's `decompose ica` returns statistically-independent axes; their
+biological interpretation is a post-hoc curation step. Hyperspectral
+remote sensing solved the same "each sample is a weighted mixture of a
+few pure endmember signatures" problem geometrically fifty years ago.
+Port Vertex Component Analysis (Nascimento & Bioucas-Dias 2005) for
+endmember extraction and Fully Constrained Least Squares (Heinz & Chang
+2001) for abundance estimation to give atman a command that returns
+interpretable *compartment fractions* — each subject lands as
+`(α_endmember_1, α_endmember_2, …)` summing to 1 under non-negativity,
+directly readable as compartmental composition without naming the
+compartments a priori. Complements `decompose ica` rather than
+replacing it: ICA gives statistically-independent abstract axes,
+unmixing gives geometrically-identified pure endmembers.
+
+Command:
+
+```bash
+atman decompose unmix \
+  --input out/qc_measurements.tsv \
+  --samples out/samples.tsv \
+  --k auto \
+  --method vca \
+  --abundance fcls \
+  --transform log \
+  --seed 20260418 \
+  --output-dir out_unmix
+```
+
+Methods:
+
+- `--method vca|nfindr`: geometric endmember extraction. `vca`
+  (default) iteratively finds extreme points by projecting onto the
+  orthogonal complement of already-found endmembers. `nfindr` maximizes
+  simplex volume spanned by a candidate endmember set.
+- `--abundance fcls|ucls`: per-sample abundance estimation. `fcls`
+  (default) solves `min ||x - Eα||²` subject to `α ≥ 0 ∧ Σα = 1`
+  (non-negative + sum-to-one). `ucls` drops the simplex constraint for
+  cases where sum-to-one is not meaningful (e.g. CLR-transformed
+  input); returns unconstrained least-squares abundances.
+- `--k <u32>|auto`: number of endmembers. `auto` sweeps
+  `k ∈ {2, …, 10}` and picks the smallest k where reconstruction
+  residual norm levels off (HySime-style virtual-dimensionality
+  criterion adapted for proteomics) or where the permutation-null
+  residual distribution no longer distinguishes the fit from noise
+  (reuses the Priority 1 null machinery).
+- `--transform log|clr|none`: pre-transform. `log` (default) for MS
+  intensity, `clr` for NPX / rank-quantile inputs, `none` for inputs
+  already on a log scale.
+- `--n-boot <u32>`: optional subject-level bootstrap for per-endmember
+  loading CI and per-abundance CI. Reuses the same
+  `Xoshiro256++(seed, iter)` sub-seed scheme as `align bootstrap`.
+- `--annotate-top <N>`: auto-annotate each endmember with top-N
+  proteins by `|loading|`. If `--annotate-markers <markers.tsv>` is
+  supplied, also runs ORA against the supplied marker sets and emits
+  enrichment p-values.
+
+Outputs:
+
+- `endmembers.tsv`: `endmember_id, protein_id, gene_symbol, loading,
+  loading_ci_lower, loading_ci_upper, rank_in_endmember`. One row per
+  (endmember × protein); CI columns filled only when `--n-boot > 0`.
+- `abundances.tsv`: `sample_id, subject_id, endmember_id, abundance,
+  abundance_ci_lower, abundance_ci_upper`. Row-sums over `endmember_id`
+  equal 1.0 within 1e-6 under `--abundance fcls`.
+- `unmix_diagnostics.tsv`: per-sample `reconstruction_residual_norm,
+  n_active_constraints, coverage_fraction` (fraction of endmember
+  universe present in the sample).
+- `endmember_annotations.tsv`: per-endmember top-N proteins plus ORA
+  hits when `--annotate-markers` is supplied.
+- `k_selection.tsv`: emitted when `--k auto`, reporting per-candidate-k
+  residual norm and chosen k.
+- run sidecar capturing `seed, k, method, abundance, transform,
+  n_boot, input_sha256`.
+
+Acceptance:
+
+- Deterministic under identical `--seed`. VCA's initial projection
+  direction and any tiebreaking use a fixed rule derived from the seed;
+  repeated runs byte-equal under byte-equal inputs.
+- Synthetic recovery fixture (3 planted pure endmembers × 50 proteins,
+  100 synthetic subjects drawn from Dirichlet-mixed abundances plus
+  Gaussian noise): `atman decompose unmix --k 3 --method vca` must
+  recover endmembers at pairwise cosine ≥ 0.9 with the planted
+  endmembers (after best-matching permutation) and reconstruct
+  abundances at Pearson correlation ≥ 0.95 with the planted Dirichlet
+  draws.
+- Compositional constraints under `--abundance fcls`: every abundance
+  must satisfy `abundance ≥ -1e-9`, every per-sample row-sum must equal
+  `1.0 ± 1e-6`, and no sample may have more than `k - 1` abundances
+  simultaneously at the zero constraint active-set (guards against
+  pathological rank collapse).
+- k auto-selection: on the planted-3 fixture, `--k auto` must select 3;
+  on a planted-5 fixture, `--k auto` must select 5.
+- CSF plasma-endmember sanity: on
+  `atman_inputs_albnorm/sih/qc_measurements.tsv`, at least one
+  recovered endmember must dominate-load a supplied plasma-protein
+  marker set (e.g. `{ALB, IGHG1, TF, HP, APOA1}`) at cosine ≥ 0.5 with
+  the marker-set indicator vector.
+- Refuses with a clear error when `k > n_samples / 2`
+  (under-determined).
+- Refuses with a clear error when `--abundance fcls` is combined with a
+  transform that does not admit a simplex interpretation (`clr`, `ilr`)
+  unless `--allow-unconstrained-simplex` is set.
+- Integration test under `crates/atman/tests/decompose_unmix.rs`
+  covering: synthetic recovery at k = 3, compositional-constraint
+  verification under FCLS, k-auto selection on planted-3 and planted-5
+  fixtures, CSF plasma-endmember sanity on SIH, determinism across
+  repeat runs, under-determined refusal, and
+  transform-incompatibility refusal.
+
+Why it matters for the methods paper: gives atman a first-class
+interpretable compartmental-decomposition command that no standalone
+proteomics tool currently exposes. ICA finds statistically independent
+abstract axes; unmixing finds *geometrically-identified pure
+endmembers* with per-subject fractional abundances that sum to 1 — the
+natural output when the generating model is a mixture of a few pure
+sources, which is exactly the model behind any convoluted biological
+fluid (CSF, plasma, urine, bile, pleural, ascitic, synovial, amniotic).
+Imported directly from a fifty-year-old solved problem in hyperspectral
+remote sensing (Nascimento & Bioucas-Dias 2005 for VCA; Heinz & Chang
+2001 for FCLS). Paper angle: *"Geometric compartmental deconvolution of
+biological fluids via hyperspectral-style endmember extraction,"* with
+atman's determinism, canonical-TSV contract, and per-abundance
+bootstrap CI as differentiators against any R/Python reference
+implementation ported straight out of remote-sensing textbooks.
+
+---
+
 ## Future directions (not yet spec'd)
 
-The following are deliberately held back until Priorities 1-9 ship,
+The following are deliberately held back until Priorities 1-10 ship,
 because each extends one of them and the priority-ordered design is
 cleaner once the foundations are tested:
 
-- **Missingness-aware ICA** (priority 10 candidate). Extend the
+- **Missingness-aware ICA** (priority 11 candidate). Extend the
   Priority 2 compositional transforms with a joint abundance +
   detection likelihood at decomposition time, same philosophy as
   `atman de --test msqrob` or proDA but at the component level. Lets
   archetypes be defined partly by "which proteins were detectable in
   this sample" — which is real biology for MNAR-heavy proteomics.
-- **Hierarchical / nested alignment** (priority 11 candidate). Site →
+- **Hierarchical / nested alignment** (priority 12 candidate). Site →
   cohort → cross-cohort alignment for consortium data where a single
   cohort has multiple acquisition sites. Requires Priority 3 bootstrap
   uncertainty to be in place so each level of the hierarchy carries
   its own confidence interval.
+- **PMF (positive matrix factorization) with per-cell uncertainty
+  weighting**, ported from atmospheric source apportionment (Paatero &
+  Tapper 1994). Sibling to Priority 10: where VCA+FCLS finds geometric
+  endmembers, PMF finds non-negative factors while natively weighting
+  each cell by its reciprocal analytical uncertainty. Useful for
+  DIA-MS inputs that ship per-protein-per-sample CV or detection-limit
+  flags. Implementable as `atman decompose pmf --uncertainty
+  measurements_cv.tsv`.
+- **MCR-ALS (multivariate curve resolution — alternating least
+  squares)** from chemometrics. Sibling to Priority 10: NMF with
+  chemistry-aware constraints (non-negativity, unimodality, closure)
+  applied to the protein-by-sample matrix. Implementable as
+  `atman decompose mcr`.
+- **Pooled-QC drift correction**, ported from untargeted metabolomics.
+  Standard practice there; near-absent in proteomics. Fit a per-protein
+  LOESS on injection order using interleaved pooled QC samples, correct
+  analytical drift before DE or decomposition. Implementable as
+  `atman qc drift --injection-order injection_order.tsv --pooled-qc
+  qc_samples.tsv`.
 - **Longitudinal tensor decomposition**. Samples × proteins ×
   timepoints. Relevant for MS PILOT, iNPH repeat measures, any
   consortium with longitudinal arms. Depends on Priority 5 variance
