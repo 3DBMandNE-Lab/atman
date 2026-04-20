@@ -208,9 +208,13 @@ pub fn run(args: Args) -> Result<()> {
             anyhow::bail!("--min-peptides must be >= 2");
         }
         // `ridge_lambda` is validated inside run_msqrob.
-    } else if args.peptide_measurements.is_some() || args.peptide_metadata.is_some() {
+    } else if args.peptide_measurements.is_some() {
+        anyhow::bail!("--peptide-measurements requires --test msqrob");
+    } else if args.peptide_metadata.is_some() && args.test != "limma" {
         anyhow::bail!(
-            "--peptide-measurements and --peptide-metadata require --test msqrob"
+            "--peptide-metadata is accepted for --test msqrob or --test limma (DEqMS shrinkage); \
+             got --test {:?}",
+            args.test
         );
     }
     std::fs::create_dir_all(&args.output_dir)
@@ -1829,15 +1833,35 @@ fn run_limma(
     comparisons: &[(String, String)],
 ) -> Result<(Vec<DeResultRow>, Vec<DeReportRow>)> {
     use atman_core::limma::{limma_fit, LimmaOptions};
+    use crate::io::read_peptides;
 
     let mut all_result_rows: Vec<DeResultRow> = Vec::new();
     let mut all_report_rows: Vec<DeReportRow> = Vec::new();
 
-    let effect_size_method = match (args.trend, args.robust) {
-        (true, true) => "limma-eBayes-robust-trend",
-        (true, false) => "limma-eBayes-trend",
-        (false, true) => "limma-eBayes-robust",
-        (false, false) => "limma-eBayes",
+    // Optional DEqMS input: peptides.tsv provides peptide→parent
+    // assay_id mapping. Count peptides per assay_id once; per-comparison
+    // lookups then pull the relevant counts.
+    let peptides_per_assay: Option<BTreeMap<String, u32>> =
+        if let Some(pep_path) = args.peptide_metadata.as_ref() {
+            let peptides = read_peptides(pep_path)
+                .with_context(|| format!("reading peptide metadata from {:?}", pep_path))?;
+            let mut map: BTreeMap<String, u32> = BTreeMap::new();
+            for p in &peptides {
+                *map.entry(p.assay_id.0.clone()).or_insert(0) += 1;
+            }
+            Some(map)
+        } else {
+            None
+        };
+    let deqms_active = peptides_per_assay.is_some();
+
+    let effect_size_method = match (args.trend, args.robust, deqms_active) {
+        (_, true, true) => "limma-DEqMS-robust-trend",
+        (_, false, true) => "limma-DEqMS-trend",
+        (true, true, false) => "limma-eBayes-robust-trend",
+        (true, false, false) => "limma-eBayes-trend",
+        (false, true, false) => "limma-eBayes-robust",
+        (false, false, false) => "limma-eBayes",
     };
 
     // Lookup: (panel, gene_symbol) → (first_assay_id, uniprot) for reporting.
@@ -1966,11 +1990,28 @@ fn run_limma(
         // flip doesn't affect p-values or f-statistics.
         let contrast_matrix: Vec<Vec<f64>> = vec![vec![0.0], vec![-1.0]];
 
-        // (iv) Limma fit.
+        // (iv) Limma fit. When --peptide-metadata is supplied on the
+        // limma path, count peptides per feature and switch the trend
+        // covariate from mean-log2-abundance to `log(peptide_count +
+        // 1)` (DEqMS, Zhu et al. 2020). The peptide→parent mapping
+        // comes from the ingested `peptides.tsv`; features without
+        // peptide records get count 0.
+        let peptide_counts: Option<Vec<u32>> = if let Some(counts_map) = peptides_per_assay.as_ref() {
+            let mut per_feature = Vec::with_capacity(features.len());
+            for (_, _, assay_id, _) in &features {
+                let c = counts_map.get(assay_id).copied().unwrap_or(0);
+                per_feature.push(c);
+            }
+            Some(per_feature)
+        } else {
+            None
+        };
+        let deqms_enabled = peptide_counts.is_some();
         let options = LimmaOptions {
-            trend: args.trend,
+            trend: args.trend || deqms_enabled,
             robust: args.robust,
             lfc_threshold: args.lfc_threshold,
+            peptide_counts,
         };
         let output = match limma_fit(&design, &y, &contrast_matrix, options) {
             Some(o) => o,
@@ -2015,7 +2056,9 @@ fn run_limma(
                         f_p_value: None,
                         f_bh_q: None,
                         lfc_threshold: Some(args.lfc_threshold),
-                        n_peptides_observed: None,
+                        n_peptides_observed: peptides_per_assay
+                            .as_ref()
+                            .and_then(|m| m.get(assay_id).copied().map(|c| c as usize)),
                         peptide_variance_ratio: None,
                         ridge_lambda: None,
                     });
@@ -2229,7 +2272,9 @@ fn run_limma(
                 f_p_value: row.f_p_value,
                 f_bh_q: None,
                 lfc_threshold: Some(args.lfc_threshold),
-                n_peptides_observed: None,
+                n_peptides_observed: peptides_per_assay
+                    .as_ref()
+                    .and_then(|m| m.get(assay_id).copied().map(|c| c as usize)),
                 peptide_variance_ratio: None,
                 ridge_lambda: None,
             });

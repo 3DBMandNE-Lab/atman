@@ -8,6 +8,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **DEqMS peptide-count-weighted variance on `--test limma`
+  (`atman de --test limma --peptide-metadata peptides.tsv`).**
+  Swaps limma's parametric mean-variance trend covariate for
+  `log(peptide_count + 1)` smoothed by a tricube kernel
+  (`atman_core::deqms::tricube_moving_average`, span 0.5), matching
+  `DEqMS::spectraCounteBayes` (Zhu et al. 2020, MCP). Peptide counts
+  come from the ingested `peptides.tsv`; proteins absent from the
+  catalog receive count 0. `effect_size_method` in `de_results.tsv`
+  becomes `limma-DEqMS-trend` (or `limma-DEqMS-robust-trend` under
+  `--robust`) and `n_peptides_observed` is populated per row. Same
+  run-sidecar surface — the `peptide-metadata` path is recorded in
+  the JSON. Validated against Bioconductor DEqMS v1.26 on the CPTAC
+  Study 6 UPS1 spike-in fixture
+  (`crates/atman/tests/fixtures/deqms_cptac_reference.R`):
+  **median per-protein |atman − DEqMS| = 0.000 log₂** across 29
+  jointly-fitted proteins (three-decimal bit-for-bit match on every
+  displayed protein).
+- **Per-feature complete-case filtering inside `limma_fit`.**
+  Features with `NaN` samples used to be rejected wholesale by the
+  per-feature OLS call; now each feature drops its own `NaN`
+  samples and fits OLS on the remainder (matching limma's
+  `lm.series(ndups=1)` behavior). The residual-df used for the
+  eBayes prior uses the maximum fitted df across features. Unlocks
+  the DEqMS validation on the sparse MaxQuant fixture and
+  generally improves coverage on datasets with per-protein
+  missingness.
 - **Peptide-level ridge mixed model (`atman de --test msqrob`).**
   Per-protein linear mixed model over peptide-level measurements with a
   random intercept per peptide, REML 1D profile over the variance

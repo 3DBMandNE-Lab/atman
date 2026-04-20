@@ -146,6 +146,18 @@ atman de \
     --trend true --robust true \
     --min-pairs 5
 
+# DEqMS peptide-count-weighted eBayes. Swaps the mean-variance trend
+# covariate for log(peptide_count + 1) via a tricube kernel smoother
+# (Zhu et al. 2020). Requires peptides.tsv for the peptide→protein
+# mapping; any protein missing from peptides.tsv gets count 0.
+atman de \
+    --input-dir out --output-dir out_deqms \
+    --test limma \
+    --peptide-metadata out/peptides.tsv \
+    --groups "Case-Control" \
+    --trend true \
+    --min-pairs 5
+
 # TREAT (minimum-effect test) at log2-FC threshold 0.5.
 atman de \
     --input-dir out --output-dir out_limma_treat \

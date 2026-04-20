@@ -592,7 +592,7 @@ pub fn treat_p_value(t: f64, se: f64, df_total: f64, lfc_threshold: f64) -> f64 
 }
 
 /// Per-comparison options for [`limma_fit`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct LimmaOptions {
     /// Fit the parametric mean-variance trend before `squeeze_var`.
     pub trend: bool,
@@ -601,6 +601,13 @@ pub struct LimmaOptions {
     /// TREAT minimum-effect threshold (on the log-fold-change scale).
     /// `0.0` produces the standard moderated-t p-value.
     pub lfc_threshold: f64,
+    /// DEqMS peptide-count-weighted trend. When `Some`, the trend
+    /// covariate becomes `log(count + 1)` smoothed by a tricube
+    /// kernel (`atman_core::deqms::tricube_moving_average` with
+    /// span 0.5), replacing the parametric mean-variance trend.
+    /// Length must equal the number of features (rows of `y`).
+    /// `trend` must also be `true`.
+    pub peptide_counts: Option<Vec<u32>>,
 }
 
 /// Per-feature row of [`limma_fit`] output.
@@ -688,21 +695,42 @@ pub fn limma_fit(
     }
     let xtx_l = cholesky_lower(&xtx)?;
 
-    // Per-feature OLS.
+    // Per-feature OLS with per-feature complete-case filtering. limma
+    // in R runs `lm.series(..., ndups = 1)` that drops NA samples
+    // per feature rather than rejecting the whole feature. Mirror
+    // that: for each feature, keep only samples whose `y` is finite,
+    // then fit OLS on the reduced (design, y) pair. Features below
+    // the minimum sample count emit a skip.
     let mut s2_sample = Vec::with_capacity(y.len());
     let mut means = Vec::with_capacity(y.len());
     let mut betas = Vec::with_capacity(y.len());
     let mut skipped = Vec::with_capacity(y.len());
-    let mut df_res = 0.0_f64;
+    let mut df_res_max = 0.0_f64;
     for feat_y in y {
-        match ols(design, feat_y, 2) {
+        let mut cc_design: Vec<Vec<f64>> = Vec::with_capacity(n);
+        let mut cc_y: Vec<f64> = Vec::with_capacity(n);
+        for (row, &yi) in design.iter().zip(feat_y.iter()) {
+            if yi.is_finite() {
+                cc_design.push(row.clone());
+                cc_y.push(yi);
+            }
+        }
+        match ols(&cc_design, &cc_y, 2) {
             OlsOutcome::Computed(fit) => {
                 betas.push(fit.beta.clone());
                 s2_sample.push(fit.sigma2);
-                let mean: f64 = feat_y.iter().sum::<f64>() / n as f64;
+                let mean: f64 = cc_y.iter().sum::<f64>() / cc_y.len() as f64;
                 means.push(mean);
                 skipped.push(false);
-                df_res = fit.df;
+                // Track the maximum fitted df; features with more
+                // non-NA samples have more residual df than others.
+                // `df_res` for the shared F-dist prior uses the max
+                // so the squeeze is applied against the dataset's
+                // most-informed residual df, matching limma's
+                // `df.residual` behaviour when ndups=1 is used.
+                if fit.df > df_res_max {
+                    df_res_max = fit.df;
+                }
             }
             OlsOutcome::Skipped { .. } => {
                 betas.push(vec![f64::NAN; p]);
@@ -712,6 +740,7 @@ pub fn limma_fit(
             }
         }
     }
+    let df_res = df_res_max;
     if skipped.iter().all(|b| *b) {
         return None;
     }
@@ -719,14 +748,41 @@ pub fn limma_fit(
         return None;
     }
 
-    // Trend.
+    // Trend. When DEqMS peptide counts are supplied, use
+    // tricube-smoothed `log(count + 1)` as the covariate (Zhu et al.
+    // 2020) instead of the parametric mean-variance trend.
     let mut trend_fallback_used = false;
     let s2_trend: Option<Vec<f64>> = if options.trend {
-        match fit_parametric_trend(&means, &s2_sample) {
-            Some(v) => Some(v),
-            None => {
+        if let Some(counts) = options.peptide_counts.as_ref() {
+            if counts.len() != y.len() {
+                return None;
+            }
+            let deqms = crate::deqms::deqms_shrink(
+                &s2_sample,
+                counts,
+                df_res,
+                0.5,
+            );
+            if deqms.trend_fallback_used {
                 trend_fallback_used = true;
+            }
+            // Treat the smoothed trend variance as `s2_trend`; the
+            // ratios/F-dist/squeeze_var pipeline below operates
+            // identically whether the trend came from the parametric
+            // mean-variance fit or from DEqMS.
+            let has_any = deqms.s2_trend.iter().any(|v| v.is_finite() && *v > 0.0);
+            if has_any {
+                Some(deqms.s2_trend)
+            } else {
                 None
+            }
+        } else {
+            match fit_parametric_trend(&means, &s2_sample) {
+                Some(v) => Some(v),
+                None => {
+                    trend_fallback_used = true;
+                    None
+                }
             }
         }
     } else {
@@ -1128,6 +1184,7 @@ mod tests {
                 trend: true,
                 robust: true,
                 lfc_threshold: 0.0,
+                peptide_counts: None,
             },
         )
         .expect("ok");

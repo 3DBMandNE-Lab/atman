@@ -253,7 +253,7 @@ fn msqrob_rejects_peptide_flags_for_other_tests() {
     assert!(!out.status.success(), "expected rejection");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("require --test msqrob"),
+        stderr.contains("requires --test msqrob"),
         "unexpected stderr: {stderr}"
     );
 }

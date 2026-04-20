@@ -6,6 +6,7 @@
 
 pub mod align;
 pub mod de;
+pub mod deqms;
 pub mod errors;
 pub mod fold_change;
 pub mod ica;
@@ -19,6 +20,7 @@ pub mod stats;
 pub mod types;
 
 pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};
+pub use deqms::{deqms_shrink, tricube_moving_average, DeqmsShrinkage};
 pub use msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
 pub use errors::IngestError;
 pub use fold_change::{
