@@ -2763,6 +2763,7 @@ fn run_msqrob(
                 ridge_lambda,
                 args.min_peptides,
                 args.min_pairs,
+                args.robust,
             );
 
             match outcome {

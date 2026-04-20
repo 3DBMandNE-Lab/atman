@@ -141,6 +141,14 @@ pub fn squeeze_variance(fits: &mut [MsqrobFit]) -> Option<(f64, f64)> {
 ///   LMM. Negative values are refused.
 /// `min_peptides`: refuse to fit if fewer distinct peptides are observed.
 /// `min_samples`: refuse to fit if fewer total observations are present.
+/// `robust`: when `true`, run Huber IRWLS on the GLS-whitened residuals
+///   after the initial Gaussian fit. Matches `msqrob2::msqrob(robust =
+///   TRUE)` which uses `MASS::rlm(psi = psi.huber)` with threshold
+///   `k = 1.345` on the whitened residuals and reports the MAD-based
+///   robust scale as the residual variance. The random-intercept
+///   variance ratio τ is held at the REML-profile optimum from the
+///   Gaussian fit — msqrob2's `lme4` + `rlm` pipeline freezes it the
+///   same way.
 pub fn fit_msqrob(
     design: &[Vec<f64>],
     y: &[f64],
@@ -148,6 +156,7 @@ pub fn fit_msqrob(
     ridge_lambda: f64,
     min_peptides: usize,
     min_samples: usize,
+    robust: bool,
 ) -> MsqrobOutcome {
     let n = design.len();
     if n != y.len() || n != peptide_indices.len() || n == 0 {
@@ -228,7 +237,8 @@ pub fn fit_msqrob(
     }
     let tau = ((left + right) / 2.0).exp();
 
-    let Some(fit) = penalized_gls_fit(tau, design, y, &peptide_index, ridge_lambda) else {
+    let Some(mut fit) = penalized_gls_fit(tau, design, y, &peptide_index, ridge_lambda)
+    else {
         return MsqrobOutcome::Skipped {
             reason: SkipReason::ZeroVariance,
             n,
@@ -241,12 +251,91 @@ pub fn fit_msqrob(
             n,
         };
     }
-    let sigma2 = fit.rss_weighted / df;
+    let mut sigma2 = fit.rss_weighted / df;
     if !(sigma2.is_finite() && sigma2 >= 0.0) {
         return MsqrobOutcome::Skipped {
             reason: SkipReason::NonFiniteInput,
             n,
         };
+    }
+    // Huber IRWLS on the GLS-whitened residuals when robust = true.
+    // Iterates β via weighted normal equations with Huber ψ threshold
+    // k = 1.345 and MAD-based scale σ̂ = MAD × 1.4826. The random-
+    // intercept variance ratio τ is frozen at the Gaussian REML
+    // optimum — msqrob2 does the same via `lme4` upstream of `rlm`.
+    if robust {
+        let mut beta = fit.beta.clone();
+        let mut wx = vec![vec![0.0_f64; p]; n];
+        let mut wy = vec![0.0_f64; n];
+        apply_compound_symmetry_inverse(tau, design, y, &peptide_index, &mut wx, &mut wy);
+        const K: f64 = 1.345;
+        const MAX_ITER: usize = 50;
+        const TOL: f64 = 1e-6;
+        let mut robust_sigma = f64::NAN;
+        for _ in 0..MAX_ITER {
+            let residuals: Vec<f64> = wy
+                .iter()
+                .zip(wx.iter())
+                .map(|(yi, xr)| yi - xr.iter().zip(beta.iter()).map(|(a, b)| a * b).sum::<f64>())
+                .collect();
+            let mut abs_r: Vec<f64> = residuals.iter().map(|r| r.abs()).collect();
+            abs_r.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let mad = if abs_r.is_empty() {
+                0.0
+            } else if abs_r.len() % 2 == 0 {
+                0.5 * (abs_r[abs_r.len() / 2 - 1] + abs_r[abs_r.len() / 2])
+            } else {
+                abs_r[abs_r.len() / 2]
+            };
+            let sigma = mad * 1.4826;
+            if !(sigma > 0.0 && sigma.is_finite()) {
+                break;
+            }
+            robust_sigma = sigma;
+            let weights: Vec<f64> = residuals
+                .iter()
+                .map(|r| {
+                    let u = r.abs() / sigma;
+                    if u > K {
+                        K / u
+                    } else {
+                        1.0
+                    }
+                })
+                .collect();
+            let mut xtwx = vec![vec![0.0_f64; p]; p];
+            let mut xtwy = vec![0.0_f64; p];
+            for i in 0..n {
+                let wi = weights[i];
+                for j in 0..p {
+                    xtwy[j] += wi * wx[i][j] * wy[i];
+                    for kk in 0..p {
+                        xtwx[j][kk] += wi * wx[i][j] * wx[i][kk];
+                    }
+                }
+            }
+            for j in 1..p {
+                xtwx[j][j] += ridge_lambda;
+            }
+            let Some(l) = cholesky_lower(&xtwx) else {
+                break;
+            };
+            let beta_new = solve_cholesky(&l, &xtwy);
+            let delta = beta
+                .iter()
+                .zip(beta_new.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f64, f64::max);
+            beta = beta_new;
+            fit.inv_diag_penalized = inverse_diag_from_cholesky(&l);
+            if delta < TOL {
+                break;
+            }
+        }
+        fit.beta = beta;
+        if robust_sigma.is_finite() && robust_sigma > 0.0 {
+            sigma2 = robust_sigma * robust_sigma;
+        }
     }
     let se: Vec<f64> = fit
         .inv_diag_penalized
@@ -519,7 +608,7 @@ mod tests {
                 peptide.push(pep);
             }
         }
-        let out = fit_msqrob(&design, &y, &peptide, 0.0, 2, 4);
+        let out = fit_msqrob(&design, &y, &peptide, 0.0, 2, 4, false);
         match out {
             MsqrobOutcome::Computed(fit) => {
                 assert_eq!(fit.n, 24);
@@ -552,7 +641,7 @@ mod tests {
                 peptide.push(pep);
             }
         }
-        let out = fit_msqrob(&design, &y, &peptide, 0.0, 2, 4);
+        let out = fit_msqrob(&design, &y, &peptide, 0.0, 2, 4, false);
         match out {
             MsqrobOutcome::Computed(fit) => {
                 assert!(
@@ -586,8 +675,8 @@ mod tests {
                 peptide.push(pep);
             }
         }
-        let out0 = fit_msqrob(&design, &y, &peptide, 0.0, 2, 4);
-        let out_lambda = fit_msqrob(&design, &y, &peptide, 5.0, 2, 4);
+        let out0 = fit_msqrob(&design, &y, &peptide, 0.0, 2, 4, false);
+        let out_lambda = fit_msqrob(&design, &y, &peptide, 5.0, 2, 4, false);
         match (out0, out_lambda) {
             (MsqrobOutcome::Computed(f0), MsqrobOutcome::Computed(fl)) => {
                 assert!(
@@ -617,11 +706,11 @@ mod tests {
                 peptide.push(pep);
             }
         }
-        let f0 = match fit_msqrob(&design, &y, &peptide, 0.0, 2, 4) {
+        let f0 = match fit_msqrob(&design, &y, &peptide, 0.0, 2, 4, false) {
             MsqrobOutcome::Computed(f) => f,
             _ => panic!(),
         };
-        let fl = match fit_msqrob(&design, &y, &peptide, 10.0, 2, 4) {
+        let fl = match fit_msqrob(&design, &y, &peptide, 10.0, 2, 4, false) {
             MsqrobOutcome::Computed(f) => f,
             _ => panic!(),
         };
@@ -642,7 +731,7 @@ mod tests {
         let design = vec![vec![1.0, 0.0], vec![1.0, 1.0], vec![1.0, 0.0], vec![1.0, 1.0]];
         let y = vec![1.0, 2.0, 1.1, 2.1];
         let peptide = vec![0, 0, 0, 0];
-        let out = fit_msqrob(&design, &y, &peptide, 0.0, 2, 4);
+        let out = fit_msqrob(&design, &y, &peptide, 0.0, 2, 4, false);
         assert!(matches!(
             out,
             MsqrobOutcome::Skipped {
@@ -659,7 +748,7 @@ mod tests {
         let mut y = vec![1.0; 8];
         y[3] = f64::NAN;
         let peptide = vec![0, 0, 1, 1, 2, 2, 3, 3];
-        let out = fit_msqrob(&design, &y, &peptide, 0.0, 2, 4);
+        let out = fit_msqrob(&design, &y, &peptide, 0.0, 2, 4, false);
         assert!(matches!(
             out,
             MsqrobOutcome::Skipped {
@@ -687,9 +776,59 @@ mod tests {
                 peptide.push(pep);
             }
         }
-        let a = fit_msqrob(&design, &y, &peptide, 0.5, 2, 4);
-        let b = fit_msqrob(&design, &y, &peptide, 0.5, 2, 4);
+        let a = fit_msqrob(&design, &y, &peptide, 0.5, 2, 4, false);
+        let b = fit_msqrob(&design, &y, &peptide, 0.5, 2, 4, false);
         assert_eq!(a, b);
+    }
+
+    /// Huber IRWLS (`robust = true`) downweights outliers: inject a
+    /// single peptide-level outlier into a clean fixture and verify
+    /// the condition coefficient moves toward the no-outlier fit.
+    #[test]
+    fn robust_huber_downweights_outlier_peptide() {
+        let peptide_offsets = [0.0_f64, 0.0, 0.0, 0.0];
+        let true_effect = 2.0_f64;
+        let mut design = Vec::new();
+        let mut y_clean = Vec::new();
+        let mut peptide = Vec::new();
+        for (pep, off) in peptide_offsets.iter().enumerate() {
+            for sample in 0..8usize {
+                let cond = if sample < 4 { 0.0 } else { 1.0 };
+                design.push(vec![1.0, cond]);
+                y_clean.push(10.0 + off + true_effect * cond + ((sample + pep) as f64 * 0.13).sin() * 0.05);
+                peptide.push(pep);
+            }
+        }
+        let mut y_outlier = y_clean.clone();
+        // Single heavy outlier on one peptide in group A.
+        y_outlier[0] += 12.0;
+        let clean_robust = match fit_msqrob(&design, &y_clean, &peptide, 0.0, 2, 4, true) {
+            MsqrobOutcome::Computed(f) => f,
+            _ => panic!("clean-data fit failed"),
+        };
+        let outlier_gauss = match fit_msqrob(&design, &y_outlier, &peptide, 0.0, 2, 4, false) {
+            MsqrobOutcome::Computed(f) => f,
+            _ => panic!("gaussian-outlier fit failed"),
+        };
+        let outlier_robust = match fit_msqrob(&design, &y_outlier, &peptide, 0.0, 2, 4, true) {
+            MsqrobOutcome::Computed(f) => f,
+            _ => panic!("robust-outlier fit failed"),
+        };
+        // Robust fit should pull the condition coefficient back
+        // toward the clean truth compared to the Gaussian fit on
+        // the same outlier-contaminated data.
+        let gauss_err = (outlier_gauss.beta[1] - clean_robust.beta[1]).abs();
+        let robust_err = (outlier_robust.beta[1] - clean_robust.beta[1]).abs();
+        assert!(
+            robust_err < gauss_err,
+            "robust beta[1]={} should be closer to clean beta[1]={} than gaussian beta[1]={} \
+             (robust_err={}, gauss_err={})",
+            outlier_robust.beta[1],
+            clean_robust.beta[1],
+            outlier_gauss.beta[1],
+            robust_err,
+            gauss_err
+        );
     }
 
     /// Negative ridge λ is refused.
@@ -698,7 +837,7 @@ mod tests {
         let design = vec![vec![1.0, 0.0]; 8];
         let y = vec![1.0; 8];
         let peptide = vec![0, 0, 1, 1, 2, 2, 3, 3];
-        let out = fit_msqrob(&design, &y, &peptide, -1.0, 2, 4);
+        let out = fit_msqrob(&design, &y, &peptide, -1.0, 2, 4, false);
         assert!(matches!(
             out,
             MsqrobOutcome::Skipped {
