@@ -741,6 +741,16 @@ pub struct DeResultRow {
     /// `--test ensemble` aggregator can bucket rows by method without
     /// parsing the free-form `effect_size_method` string.
     pub method: String,
+    /// Post-hoc adjustment method name (e.g. "sidak", "tukey",
+    /// "dunnett") for rows emitted by the `--post-hoc` path. Empty
+    /// for every other row.
+    pub posthoc_method: String,
+    /// Raw per-contrast p-value before family-wise adjustment.
+    /// Populated only for post-hoc rows.
+    pub posthoc_p: Option<f64>,
+    /// Family-wise adjusted p-value within the contrast family (e.g.
+    /// Sidak `1 - (1-p)^m`). Populated only for post-hoc rows.
+    pub posthoc_adj_p: Option<f64>,
 }
 
 /// Parse `de_results.tsv` back into `DeResultRow`s. Used by
@@ -823,6 +833,9 @@ pub fn read_de_results(path: &Path) -> Result<Vec<DeResultRow>> {
             peptide_variance_ratio: parse_opt_f64(&row, "peptide_variance_ratio"),
             ridge_lambda: parse_opt_f64(&row, "ridge_lambda"),
             method: get(&row, "method"),
+            posthoc_method: get(&row, "posthoc_method"),
+            posthoc_p: parse_opt_f64(&row, "posthoc_p"),
+            posthoc_adj_p: parse_opt_f64(&row, "posthoc_adj_p"),
         });
     }
     Ok(out)
@@ -836,7 +849,8 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
          median_diff\ttrimmed_mean_diff\t\
          s2_trend\ts2_prior\ts2_posterior\tdf_prior\tdf_total\t\
          f_statistic\tf_p_value\tf_bh_q\tlfc_threshold\t\
-         n_peptides_observed\tpeptide_variance_ratio\tridge_lambda\tmethod\n",
+         n_peptides_observed\tpeptide_variance_ratio\tridge_lambda\tmethod\t\
+         posthoc_method\tposthoc_p\tposthoc_adj_p\n",
     );
     for r in rows {
         buf.push_str(&r.panel);
@@ -910,6 +924,12 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
         push_opt_f64(&mut buf, r.ridge_lambda);
         buf.push('\t');
         buf.push_str(&r.method);
+        buf.push('\t');
+        buf.push_str(&r.posthoc_method);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.posthoc_p);
+        buf.push('\t');
+        push_opt_f64(&mut buf, r.posthoc_adj_p);
         buf.push('\n');
     }
     atomic_write(path, buf.as_bytes())
@@ -1088,6 +1108,9 @@ mod tests {
             peptide_variance_ratio: None,
             ridge_lambda: None,
             method: "limma".into(),
+            posthoc_method: String::new(),
+            posthoc_p: None,
+            posthoc_adj_p: None,
         };
         write_de_results(&p, &[row]).unwrap();
         let text = std::fs::read_to_string(&p).unwrap();
@@ -1196,18 +1219,24 @@ mod tests {
             peptide_variance_ratio: None,
             ridge_lambda: None,
             method: "welch-t".into(),
+            posthoc_method: String::new(),
+            posthoc_p: None,
+            posthoc_adj_p: None,
         };
         write_de_results(&p, &[row]).unwrap();
         let text = std::fs::read_to_string(&p).unwrap();
         let header = text.lines().next().unwrap();
+        // `method` is no longer the final column after DEBT-1
+        // introduced posthoc_method/posthoc_p/posthoc_adj_p columns
+        // behind it. Assert the column exists instead.
         assert!(
-            header.ends_with("method"),
-            "method must be the last header column: {header}"
+            header.split('\t').any(|c| c == "method"),
+            "method column missing from header: {header}"
         );
         let body = text.lines().nth(1).unwrap();
         assert!(
-            body.ends_with("welch-t"),
-            "method must be the last body cell: {body}"
+            body.split('\t').any(|c| c == "welch-t"),
+            "method value missing from body: {body}"
         );
     }
 }

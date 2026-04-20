@@ -165,6 +165,29 @@ pub struct Args {
     /// includes the factor. At least 3 levels required.
     #[arg(long)]
     omnibus_factor: Option<String>,
+
+    /// Post-hoc contrast adjustment method. `""` (default) disables
+    /// post-hoc; `sidak` uses `p_adj = 1 − (1 − p)^m` across the
+    /// `--contrast-list`. `tukey` and `dunnett` are rejected until
+    /// DEBT-5 and DEBT-6 ship.
+    #[arg(long, default_value = "")]
+    post_hoc: String,
+
+    /// Comma-separated `level_a-level_b` contrast list applied to
+    /// `--post-hoc-factor` (or `--omnibus-factor` as fallback).
+    /// Example: `"MCI-CN,AD-CN,AD-MCI"` for `stage` ∈ {CN, MCI, AD}.
+    #[arg(long)]
+    contrast_list: Option<String>,
+
+    /// Factor whose levels `--contrast-list` references. Falls back
+    /// to `--omnibus-factor` when unset.
+    #[arg(long)]
+    post_hoc_factor: Option<String>,
+
+    /// Family-wise significance threshold for the post-hoc
+    /// `decision` column in `de_results.tsv`.
+    #[arg(long, default_value_t = 0.05)]
+    alpha: f64,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -270,6 +293,59 @@ pub fn run(args: Args) -> Result<()> {
             );
         }
     }
+    match args.post_hoc.as_str() {
+        "" => {}
+        "sidak" => {
+            if args.test != "ols" {
+                anyhow::bail!(
+                    "--post-hoc sidak currently requires --test ols; got --test {:?}",
+                    args.test
+                );
+            }
+            if args.design.is_none() {
+                anyhow::bail!("--post-hoc sidak requires --design");
+            }
+            if args.contrast_list.as_deref().unwrap_or("").is_empty() {
+                anyhow::bail!("--post-hoc sidak requires --contrast-list");
+            }
+            if args
+                .post_hoc_factor
+                .as_deref()
+                .or(args.omnibus_factor.as_deref())
+                .unwrap_or("")
+                .is_empty()
+            {
+                anyhow::bail!(
+                    "--post-hoc sidak requires --post-hoc-factor or --omnibus-factor"
+                );
+            }
+            if !(0.0..=1.0).contains(&args.alpha) {
+                anyhow::bail!("--alpha must be in [0, 1]");
+            }
+            if args.groups.is_some() {
+                anyhow::bail!(
+                    "--post-hoc sidak drives comparisons from --contrast-list; \
+                     --groups is not allowed in this mode"
+                );
+            }
+        }
+        "tukey" => {
+            anyhow::bail!(
+                "--post-hoc tukey is pending DEBT-5 (requires studentized range \
+                 distribution); use --post-hoc sidak with a complete pairwise \
+                 --contrast-list as a conservative fallback"
+            );
+        }
+        "dunnett" => {
+            anyhow::bail!(
+                "--post-hoc dunnett is pending DEBT-6 (requires multivariate-t \
+                 via Genz-Bretz); use --post-hoc sidak as a conservative fallback"
+            );
+        }
+        other => anyhow::bail!(
+            "unknown --post-hoc {other:?}; supported: sidak (tukey / dunnett pending)"
+        ),
+    }
     if args.test == "ensemble" {
         for frac in [
             args.ensemble_validated_fraction,
@@ -295,6 +371,14 @@ pub fn run(args: Args) -> Result<()> {
     // output directory receives the final files.
     if args.test == "ensemble" {
         return run_ensemble(args, started_at);
+    }
+
+    // Post-hoc Sidak: owns its own pipeline (OLS once per protein,
+    // then N contrasts via contrast_inference, Sidak-adjusted within
+    // the contrast list per protein). Bypasses the classical
+    // --groups loop entirely.
+    if args.post_hoc == "sidak" {
+        return run_posthoc_sidak(args, started_at);
     }
 
     // Parse comparisons after samples are available below; formula OLS can
@@ -646,6 +730,9 @@ pub fn run(args: Args) -> Result<()> {
                     peptide_variance_ratio: None,
                     ridge_lambda: None,
                     method: args.test.clone(),
+                    posthoc_method: String::new(),
+                    posthoc_p: None,
+                    posthoc_adj_p: None,
                 },
                 PairedTResult::Skipped { reason, n_pairs } => DeResultRow {
                     panel: panel.clone(),
@@ -687,6 +774,9 @@ pub fn run(args: Args) -> Result<()> {
                     peptide_variance_ratio: None,
                     ridge_lambda: None,
                     method: args.test.clone(),
+                    posthoc_method: String::new(),
+                    posthoc_p: None,
+                    posthoc_adj_p: None,
                 },
             };
             family_p.push(row.p_value);
@@ -2270,6 +2360,9 @@ fn run_limma(
                         peptide_variance_ratio: None,
                         ridge_lambda: None,
                         method: "limma".into(),
+                        posthoc_method: String::new(),
+                        posthoc_p: None,
+                        posthoc_adj_p: None,
                     });
                 }
                 for (panel, n) in per_panel {
@@ -2487,6 +2580,9 @@ fn run_limma(
                 peptide_variance_ratio: None,
                 ridge_lambda: None,
                 method: "limma".into(),
+                posthoc_method: String::new(),
+                posthoc_p: None,
+                posthoc_adj_p: None,
             });
         }
 
@@ -2736,6 +2832,9 @@ fn run_msqrob(
                                 peptide_variance_ratio: None,
                                 ridge_lambda: Some(ridge_lambda),
                                 method: "msqrob".into(),
+                                posthoc_method: String::new(),
+                                posthoc_p: None,
+                                posthoc_adj_p: None,
                             },
                         },
                     ));
@@ -2804,6 +2903,9 @@ fn run_msqrob(
                         peptide_variance_ratio: Some(fit.peptide_variance_ratio),
                         ridge_lambda: Some(ridge_lambda),
                         method: "msqrob".into(),
+                        posthoc_method: String::new(),
+                        posthoc_p: None,
+                        posthoc_adj_p: None,
                     },
                 },
             ));
@@ -3162,6 +3264,539 @@ fn grade_rank(grade: &str) -> u8 {
         "PROVISIONAL" => 1,
         _ => 2,
     }
+}
+
+/// Parse a `--contrast-list` like `"MCI-CN,AD-CN,AD-MCI"` into
+/// owned `(level_a, level_b)` pairs. Rejects empty tokens and
+/// malformed entries.
+fn parse_contrast_list(list: &str) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    for raw in list.split(',') {
+        let token = raw.trim();
+        if token.is_empty() {
+            anyhow::bail!("invalid empty contrast in --contrast-list {:?}", list);
+        }
+        let mut parts = token.split('-').map(str::trim);
+        let a = parts.next().unwrap_or_default();
+        let b = parts.next().unwrap_or_default();
+        if a.is_empty() || b.is_empty() || parts.next().is_some() || a == b {
+            anyhow::bail!(
+                "invalid contrast {:?}; expected `<level_a>-<level_b>` with \
+                 two distinct non-empty levels",
+                token
+            );
+        }
+        out.push((a.to_string(), b.to_string()));
+    }
+    if out.is_empty() {
+        anyhow::bail!("--contrast-list is empty");
+    }
+    Ok(out)
+}
+
+/// Dispatch for `--post-hoc sidak`: one OLS fit per protein, then
+/// one contrast per entry in `--contrast-list`, Sidak-adjusted
+/// within the list. Emits one `DeResultRow` per (protein, contrast).
+///
+/// Samples are the full set of non-control samples with finite
+/// values for every fixed covariate in `--design`; no `--groups`
+/// subsetting. The factor for contrast evaluation comes from
+/// `--post-hoc-factor` or `--omnibus-factor` (whichever is set),
+/// must be categorical, and must have all levels referenced by
+/// the contrast list in its observed levels.
+fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()> {
+    use atman_core::de::{contrast_inference, ols, OlsOutcome};
+    std::fs::create_dir_all(&args.output_dir)
+        .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
+
+    let contrast_list = parse_contrast_list(
+        args.contrast_list
+            .as_deref()
+            .expect("validated non-empty above"),
+    )?;
+    let factor_name = args
+        .post_hoc_factor
+        .clone()
+        .or_else(|| args.omnibus_factor.clone())
+        .expect("validated non-empty above");
+
+    // Read inputs.
+    let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
+    let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
+    let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
+
+    // Build the covariate setup from --design. The standard
+    // `build_ols_setup` requires `condition` in the formula (to
+    // anchor the binary contrast); post-hoc doesn't use that
+    // machinery, so we parse the formula directly and skip the
+    // condition check.
+    let formula = args.design.as_deref().expect("validated above");
+    let terms = parse_design_terms(formula)?;
+    if terms.iter().any(|t| matches!(t, DesignTerm::Condition)) {
+        anyhow::bail!(
+            "--post-hoc sidak does not support `condition` in --design; \
+             include the factor {:?} directly (e.g. \"~ {} + age + sex\")",
+            factor_name,
+            factor_name
+        );
+    }
+    let cov_names = covariate_names_from_terms(&terms);
+    let cov_raw = if cov_names.is_empty() {
+        HashMap::new()
+    } else {
+        read_covariate_columns(&args.input_dir.join("samples.tsv"), &cov_names)?
+    };
+    let setup = OlsSetup {
+        terms,
+        cov_names,
+        cov_raw,
+        contrast: None,
+        label: formula.to_string(),
+    };
+    if !setup
+        .cov_names
+        .iter()
+        .any(|n| n == &factor_name)
+    {
+        anyhow::bail!(
+            "--post-hoc-factor {:?} is not in --design covariates {:?}",
+            factor_name,
+            setup.cov_names
+        );
+    }
+
+    // Build the full design: every non-control sample with finite
+    // values for every covariate in `setup`.
+    let (design_rows, design_labels, cov_kinds) =
+        build_posthoc_full_design(&samples, &setup, &factor_name)?;
+    if design_rows.is_empty() {
+        anyhow::bail!(
+            "no samples retained after complete-case filter on --design covariates"
+        );
+    }
+
+    // Resolve factor-column-span + ref level for contrast-vector
+    // construction.
+    let factor_cov_idx = setup
+        .cov_names
+        .iter()
+        .position(|n| n == &factor_name)
+        .expect("validated present");
+    let factor_levels: Vec<String> = match &cov_kinds[factor_cov_idx] {
+        CovKind::Categorical { levels } => levels.clone(),
+        _ => anyhow::bail!(
+            "--post-hoc-factor {:?} must be categorical; looks numeric in the data",
+            factor_name
+        ),
+    };
+    if factor_levels.len() < 2 {
+        anyhow::bail!(
+            "factor {:?} has only {} observed level(s); need at least 2",
+            factor_name,
+            factor_levels.len()
+        );
+    }
+    for (a, b) in &contrast_list {
+        if !factor_levels.contains(a) {
+            anyhow::bail!(
+                "contrast level {:?} not among observed factor levels {:?}",
+                a,
+                factor_levels
+            );
+        }
+        if !factor_levels.contains(b) {
+            anyhow::bail!(
+                "contrast level {:?} not among observed factor levels {:?}",
+                b,
+                factor_levels
+            );
+        }
+    }
+    // Reference level = alphabetically-first (matches CovKind::col_labels).
+    let ref_level = factor_levels[0].clone();
+    // Map each non-reference level to its column index in the design.
+    let factor_col_by_level: HashMap<String, usize> = factor_levels
+        .iter()
+        .skip(1)
+        .map(|lvl| {
+            let label = format!("{factor_name}{lvl}");
+            let idx = design_labels
+                .iter()
+                .position(|l| l == &label)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "factor column {:?} missing from design labels {:?}",
+                        label,
+                        design_labels
+                    )
+                })?;
+            Ok::<_, anyhow::Error>((lvl.clone(), idx))
+        })
+        .collect::<Result<_>>()?;
+
+    // Build a sample→abundance lookup per (panel, gene).
+    let sample_by_id: HashMap<&str, &Sample> =
+        samples.iter().map(|s| (s.sample_id.as_str(), s)).collect();
+    let mut gene_meta: BTreeMap<(String, String), (String, Vec<String>)> = BTreeMap::new();
+    for p in &proteins {
+        if let (Some(gene), Some(panel)) = (p.gene_symbol.as_ref(), p.panel.as_ref()) {
+            gene_meta
+                .entry((panel.clone(), gene.clone()))
+                .or_insert_with(|| (p.assay_id.0.clone(), p.uniprot.clone()));
+        }
+    }
+    let mut cells_by_sample: HashMap<(String, String, String), f64> = HashMap::new();
+    let mut measured_features: BTreeSet<(String, String)> = BTreeSet::new();
+    for m in &measurements {
+        let abundance = match m.effective_abundance() {
+            Some(a) => a,
+            None => continue,
+        };
+        let s = match sample_by_id.get(m.sample_id.as_str()) {
+            Some(s) => *s,
+            None => continue,
+        };
+        if s.is_control {
+            continue;
+        }
+        let panel = match &m.panel {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+        let gene = match &m.gene_symbol {
+            Some(g) => g.clone(),
+            None => continue,
+        };
+        measured_features.insert((panel.clone(), gene.clone()));
+        cells_by_sample.insert((panel, gene, m.sample_id.clone()), abundance);
+    }
+
+    let m_contrasts = contrast_list.len();
+    let mut all_rows: Vec<DeResultRow> = Vec::new();
+    for (panel, gene) in &measured_features {
+        let (assay_id, uniprot) = gene_meta
+            .get(&(panel.clone(), gene.clone()))
+            .cloned()
+            .unwrap_or_else(|| (String::new(), vec![]));
+
+        // Complete-case per protein: subset design + y to samples
+        // with finite abundance for this (panel, gene).
+        let mut design_cc: Vec<Vec<f64>> = Vec::new();
+        let mut y_cc: Vec<f64> = Vec::new();
+        for (sid, row) in &design_rows {
+            if let Some(&abund) =
+                cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone()))
+            {
+                if abund.is_finite() {
+                    design_cc.push(row.clone());
+                    y_cc.push(abund);
+                }
+            }
+        }
+        let n = y_cc.len();
+        let contrast_label_for = |(a, b): &(String, String)| format!("{a}-{b}");
+        match ols(&design_cc, &y_cc, args.min_pairs) {
+            OlsOutcome::Computed(fit) => {
+                let mut raw_ps: Vec<f64> = Vec::with_capacity(m_contrasts);
+                let mut ests: Vec<f64> = Vec::with_capacity(m_contrasts);
+                let mut ses: Vec<f64> = Vec::with_capacity(m_contrasts);
+                let mut ts: Vec<f64> = Vec::with_capacity(m_contrasts);
+                for (a, b) in &contrast_list {
+                    let c = build_posthoc_contrast_vector(
+                        a,
+                        b,
+                        &ref_level,
+                        &factor_col_by_level,
+                        design_labels.len(),
+                    );
+                    match contrast_inference(&design_cc, &fit.beta, &c, fit.sigma2, fit.df) {
+                        Some(r) => {
+                            raw_ps.push(r.p_value);
+                            ests.push(r.estimate);
+                            ses.push(r.se);
+                            ts.push(r.t);
+                        }
+                        None => {
+                            raw_ps.push(f64::NAN);
+                            ests.push(f64::NAN);
+                            ses.push(f64::NAN);
+                            ts.push(f64::NAN);
+                        }
+                    }
+                }
+                let m_f = m_contrasts as f64;
+                for (i, contrast_pair) in contrast_list.iter().enumerate() {
+                    let p = raw_ps[i];
+                    let adj = if p.is_finite() {
+                        1.0 - (1.0 - p.clamp(0.0, 1.0)).powf(m_f)
+                    } else {
+                        f64::NAN
+                    };
+                    all_rows.push(DeResultRow {
+                        panel: panel.clone(),
+                        assay_id: assay_id.clone(),
+                        gene_symbol: gene.clone(),
+                        uniprot: uniprot.join(","),
+                        comparison: contrast_label_for(contrast_pair),
+                        n_pairs: n,
+                        mean_a: None,
+                        mean_b: None,
+                        mean_diff: if ests[i].is_finite() { Some(ests[i]) } else { None },
+                        t: if ts[i].is_finite() { Some(ts[i]) } else { None },
+                        df: if fit.df.is_finite() { Some(fit.df) } else { None },
+                        p_value: if raw_ps[i].is_finite() { Some(raw_ps[i]) } else { None },
+                        bh_q: None,
+                        effect_size: if ests[i].is_finite() { Some(ests[i]) } else { None },
+                        effect_size_method: "ols-posthoc-sidak".into(),
+                        ci_low: if ests[i].is_finite() && ses[i].is_finite() {
+                            Some(ests[i] - 1.96 * ses[i])
+                        } else {
+                            None
+                        },
+                        ci_high: if ests[i].is_finite() && ses[i].is_finite() {
+                            Some(ests[i] + 1.96 * ses[i])
+                        } else {
+                            None
+                        },
+                        wilcoxon_p: None,
+                        wilcoxon_method: String::new(),
+                        median_diff: None,
+                        trimmed_mean_diff: None,
+                        skip_reason: String::new(),
+                        s2_trend: None,
+                        s2_prior: None,
+                        s2_posterior: None,
+                        df_prior: None,
+                        df_total: None,
+                        f_statistic: None,
+                        f_p_value: None,
+                        f_bh_q: None,
+                        lfc_threshold: None,
+                        n_peptides_observed: None,
+                        peptide_variance_ratio: None,
+                        ridge_lambda: None,
+                        method: "ols".into(),
+                        posthoc_method: "sidak".into(),
+                        posthoc_p: if raw_ps[i].is_finite() { Some(raw_ps[i]) } else { None },
+                        posthoc_adj_p: if adj.is_finite() { Some(adj) } else { None },
+                    });
+                }
+            }
+            OlsOutcome::Skipped { reason, n } => {
+                let reason_str = match reason {
+                    SkipReason::InsufficientPairs => "insufficient_samples",
+                    SkipReason::ZeroVariance => "zero_variance",
+                    SkipReason::NonFiniteInput => "non_finite_input",
+                };
+                for contrast_pair in &contrast_list {
+                    all_rows.push(DeResultRow {
+                        panel: panel.clone(),
+                        assay_id: assay_id.clone(),
+                        gene_symbol: gene.clone(),
+                        uniprot: uniprot.join(","),
+                        comparison: contrast_label_for(contrast_pair),
+                        n_pairs: n,
+                        mean_a: None,
+                        mean_b: None,
+                        mean_diff: None,
+                        t: None,
+                        df: None,
+                        p_value: None,
+                        bh_q: None,
+                        effect_size: None,
+                        effect_size_method: "ols-posthoc-sidak".into(),
+                        ci_low: None,
+                        ci_high: None,
+                        wilcoxon_p: None,
+                        wilcoxon_method: String::new(),
+                        median_diff: None,
+                        trimmed_mean_diff: None,
+                        skip_reason: reason_str.into(),
+                        s2_trend: None,
+                        s2_prior: None,
+                        s2_posterior: None,
+                        df_prior: None,
+                        df_total: None,
+                        f_statistic: None,
+                        f_p_value: None,
+                        f_bh_q: None,
+                        lfc_threshold: None,
+                        n_peptides_observed: None,
+                        peptide_variance_ratio: None,
+                        ridge_lambda: None,
+                        method: "ols".into(),
+                        posthoc_method: "sidak".into(),
+                        posthoc_p: None,
+                        posthoc_adj_p: None,
+                    });
+                }
+            }
+        }
+    }
+
+    // BH-q per (comparison, panel) across proteins in a contrast family.
+    let mut by_family: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+    for (i, r) in all_rows.iter().enumerate() {
+        by_family
+            .entry((r.comparison.clone(), r.panel.clone()))
+            .or_default()
+            .push(i);
+    }
+    for indices in by_family.values() {
+        let ps: Vec<Option<f64>> = indices.iter().map(|&i| all_rows[i].p_value).collect();
+        let qs = atman_core::bh_fdr(&ps);
+        for (j, &i) in indices.iter().enumerate() {
+            all_rows[i].bh_q = qs[j];
+        }
+    }
+
+    // Sort for deterministic output.
+    all_rows.sort_by(|a, b| {
+        a.comparison
+            .cmp(&b.comparison)
+            .then_with(|| a.panel.cmp(&b.panel))
+            .then_with(|| match (a.posthoc_adj_p, b.posthoc_adj_p) {
+                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| a.gene_symbol.cmp(&b.gene_symbol))
+    });
+
+    let results_path = args.output_dir.join("de_results.tsv");
+    write_de_results(&results_path, &all_rows)?;
+    let outputs = vec![results_path.clone()];
+
+    eprintln!(
+        "de posthoc sidak: factor={:?} contrasts={} proteins={} rows={}",
+        factor_name,
+        m_contrasts,
+        measured_features.len(),
+        all_rows.len()
+    );
+
+    let finished_at = SystemTime::now();
+    let input_dir_sha256 = hash_canonical_inputs(
+        &args.input_dir,
+        &[
+            "qc_measurements.tsv",
+            "measurements.tsv",
+            "samples.tsv",
+            "proteins.tsv",
+        ],
+    )?;
+    let sidecar = sidecar_path_for(&results_path);
+    write_run_sidecar(
+        &sidecar,
+        "de",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "output-dir": args.output_dir.display().to_string(),
+            "test": "ols",
+            "design": args.design,
+            "groups": args.groups,
+            "min-pairs": args.min_pairs,
+            "post-hoc": args.post_hoc,
+            "post-hoc-factor": factor_name,
+            "contrast-list": args.contrast_list,
+            "alpha": args.alpha,
+            "omnibus-factor": args.omnibus_factor,
+        }),
+        &input_dir_sha256,
+        &outputs,
+        started_at,
+        finished_at,
+    )?;
+    eprintln!("de posthoc sidak: sidecar={}", sidecar.display());
+    Ok(())
+}
+
+fn build_posthoc_full_design(
+    samples: &[Sample],
+    setup: &OlsSetup,
+    _factor_name: &str,
+) -> Result<(Vec<(String, Vec<f64>)>, Vec<String>, Vec<CovKind>)> {
+    // `cov_raw` is keyed by `sample_id`; the per-key value is a
+    // `Vec<Option<String>>` aligned with `setup.cov_names` order.
+    let mut kept: Vec<(&Sample, usize, Vec<String>)> = Vec::new();
+    for (idx, s) in samples.iter().enumerate() {
+        if s.is_control {
+            continue;
+        }
+        let per_cov = match setup.cov_raw.get(&s.sample_id) {
+            Some(v) => v,
+            None => continue,
+        };
+        let mut vals: Vec<String> = Vec::with_capacity(setup.cov_names.len());
+        let mut complete = true;
+        for (ci, _name) in setup.cov_names.iter().enumerate() {
+            match per_cov.get(ci).cloned().unwrap_or(None) {
+                Some(v) if !v.is_empty() => vals.push(v),
+                _ => {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        if complete {
+            kept.push((s, idx, vals));
+        }
+    }
+    if kept.is_empty() {
+        anyhow::bail!(
+            "no samples with complete values for every --design covariate"
+        );
+    }
+
+    let raw_vals_opt: Vec<Vec<Option<String>>> = kept
+        .iter()
+        .map(|(_, _, v)| v.iter().map(|s| Some(s.clone())).collect())
+        .collect();
+    let cov_kinds = classify_covariates(&setup.cov_names, &raw_vals_opt);
+
+    let mut design_labels = vec!["(Intercept)".to_string()];
+    for (idx, name) in setup.cov_names.iter().enumerate() {
+        design_labels.extend(cov_kinds[idx].col_labels(name));
+    }
+
+    let mut rows: Vec<(String, Vec<f64>)> = Vec::with_capacity(kept.len());
+    for (s, _idx, vals) in kept {
+        let mut row: Vec<f64> = Vec::with_capacity(design_labels.len());
+        row.push(1.0);
+        for (i, name) in setup.cov_names.iter().enumerate() {
+            let val_opt = Some(vals[i].clone());
+            push_encoded_covariate(&mut row, name, &cov_kinds[i], &val_opt)?;
+        }
+        rows.push((s.sample_id.clone(), row));
+    }
+    Ok((rows, design_labels, cov_kinds))
+}
+
+/// Build the contrast weight vector `c` (length `p`) for the
+/// contrast `level_a − level_b` under ref-level encoding.
+fn build_posthoc_contrast_vector(
+    level_a: &str,
+    level_b: &str,
+    ref_level: &str,
+    factor_col_by_level: &HashMap<String, usize>,
+    p: usize,
+) -> Vec<f64> {
+    let mut c = vec![0.0; p];
+    if level_a == ref_level && level_b != ref_level {
+        // estimate = mean(ref) − mean(b) = 0 − β_b
+        c[factor_col_by_level[level_b]] = -1.0;
+    } else if level_b == ref_level && level_a != ref_level {
+        // estimate = mean(a) − mean(ref) = β_a − 0
+        c[factor_col_by_level[level_a]] = 1.0;
+    } else if level_a != ref_level && level_b != ref_level {
+        c[factor_col_by_level[level_a]] = 1.0;
+        c[factor_col_by_level[level_b]] = -1.0;
+    }
+    // level_a == level_b == ref_level is impossible — parse_contrast_list
+    // rejects equal levels — but if reached, all-zero c returns
+    // estimate=0 gracefully.
+    c
 }
 
 fn write_design_rows(path: &Path, rows: &[DesignReportRow]) -> Result<()> {
