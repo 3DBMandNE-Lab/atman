@@ -14,6 +14,7 @@ pub mod errors;
 pub mod fold_change;
 pub mod ica;
 pub mod ica_null;
+pub mod network;
 pub mod ingest;
 pub mod limma;
 pub mod matrix;
@@ -36,6 +37,10 @@ pub use ensemble::{
     EnsembleRow, GradeThresholds,
 };
 pub use msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
+pub use network::{
+    adjacency, betweenness_centrality, eigenvector_centrality, influence_scores,
+    pairwise_similarity, AdjacencyPolicy, InfluenceRow, SimilarityMatrix, SimilarityMetric,
+};
 pub use variance_decomposition::{
     decompose_archetype_variance, FactorRow, FixedFactor, VarianceRow,
 };
