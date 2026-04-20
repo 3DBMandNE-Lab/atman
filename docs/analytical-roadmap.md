@@ -767,6 +767,65 @@ v1 scope trim:
   statrs). User-supplied `--contrast-list` with Sidak adjustment
   is the next increment on the post-hoc track.
 
+### 22. Feature-covariance network influence (`atman network influence`) (implemented)
+
+New top-level command family (`atman network …`) for
+feature-graph analysis. `influence` builds the subject-level
+covariance graph over proteins (or assays via `--feature-col
+assay_id`) under pearson / spearman / covariance similarity,
+applies a hard-threshold or WGCNA-style soft-power adjacency
+policy, and scores every feature by the Burberry-Pillai
+construction `influence = eigenvector × betweenness`.
+
+Command:
+
+```bash
+atman network influence \
+  --input out/qc_measurements.tsv \
+  --samples out/samples.tsv \
+  --method spearman \
+  --threshold 0.3 \
+  --stratify condition \
+  --output out/network_influence.tsv
+```
+
+Pure math (`atman-core::network`):
+
+- Similarity matrices from the shared `stats` primitives.
+- `HardThreshold { threshold }` or `SoftPower { power }` adjacency
+  construction.
+- Eigenvector centrality via shifted power iteration
+  (`A + αI`, α = max row sum) so bipartite graphs don't oscillate.
+- Brandes' weighted betweenness with Dijkstra SSSP on reciprocal
+  similarities (high-similarity = short path).
+- `influence_score = eigenvector × betweenness`.
+
+Outputs:
+
+- `network_influence.tsv`: `feature_id, stratum,
+  eigenvector_centrality, betweenness_centrality, influence_score,
+  degree, n_subjects_used`.
+- `network_edges.tsv` (when `--emit-edges`): every retained edge.
+- Run sidecar captures method, adjacency policy, stratify column,
+  eigen iteration params.
+
+Acceptance:
+
+- 8 unit tests cover star-topology hub recovery for both
+  eigenvector and betweenness, clique symmetry, hard-threshold
+  drop, soft-power scaling, zero-adjacency produces zero
+  centralities, and determinism.
+- 5 integration tests cover output schema, empty-graph refusal,
+  stratify disjointness, repeated-run byte equality, and
+  conflicting-adjacency-flag refusal.
+- Smoke-tested on Dube (2938 features, ~600 degree per hub).
+
+Why it matters: complements `align programs` by answering the
+orthogonal question of which individual features scaffold the
+covariance structure archetypes are built on. No standalone
+proteomics tool currently ships feature-hub scoring as a
+first-class CLI with provenance.
+
 ## Implemented Build Order
 
 1. `atman validate`
@@ -790,6 +849,7 @@ v1 scope trim:
 19. Bootstrap alignment uncertainty
 20. Archetype variance decomposition
 21. Multi-level omnibus F-test
+22. Feature-covariance network influence
 
 ## Release Readiness Status
 

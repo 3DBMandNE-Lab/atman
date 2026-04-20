@@ -8,6 +8,23 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Feature-covariance network influence (`atman network influence`).**
+  Builds a feature × feature similarity graph over subjects
+  (`--method {pearson,spearman,covariance}`), applies a hard
+  threshold or WGCNA-style soft-power adjacency
+  (`--threshold <f>` or `--soft-power <β>`), and scores each
+  feature by its role as a hub via eigenvector centrality ×
+  betweenness centrality (Burberry-Pillai 2026 construction).
+  Optional `--stratify <column>` builds one graph per stratum.
+  Output `network_influence.tsv` carries `feature_id, stratum,
+  eigenvector_centrality, betweenness_centrality, influence_score,
+  degree, n_subjects_used`. Pure math in
+  `atman-core::network` (8 unit tests covering star-topology hub
+  recovery for both centralities, clique symmetry, adjacency
+  policies, and determinism). Eigenvector iteration uses an
+  `A + αI` shift (α = max row sum) so bipartite graphs don't
+  oscillate. Smoke-tested on Dube (2938 features, ~600 degree per
+  hub).
 - **Multi-level OLS omnibus F-test (`atman de --test ols
   --omnibus-factor <name>`).** For categorical factors with ≥ 3
   levels (e.g. `stage` ∈ {CN, MCI, AD} or `diagnosis` across six

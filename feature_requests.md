@@ -195,7 +195,19 @@ fraction-of-the-runtime, with determinism reference tools can't match."
 
 ---
 
-## Priority 7: Network influence (`atman network influence`)
+## ~~Priority 7: Network influence (`atman network influence`)~~ *(shipped 2026-04-20)*
+
+Feature-covariance hub scoring via eigenvector × betweenness
+centrality. New top-level command family (`atman network …`);
+subject-level similarity with pearson/spearman/covariance,
+hard-threshold or WGCNA-style soft-power adjacency, optional
+stratification. See `docs/analytical-roadmap.md` §8 for details.
+
+Spec below preserved for reference:
+
+---
+
+## Priority 7 (archived spec): Network influence (`atman network influence`)
 
 Score each feature by its role as a hub in the subject-level covariance
 graph. `atman align programs` tells you which archetypes recur across

@@ -79,6 +79,7 @@ atman score modules      score modules per sample from canonical measurements
 atman enrich ora         over-representation analysis from DE hits
 atman enrich gprofiler   live g:Profiler REST wrapper with cached responses
 atman meta               combine DE results across cohorts
+atman network influence  feature-covariance hub scoring (eigenvector × betweenness)
 atman run                execute a plan YAML/JSON and emit a hash manifest
 ```
 
