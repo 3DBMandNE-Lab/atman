@@ -61,6 +61,7 @@ atman align bootstrap    subject-level bootstrap of cross-cohort archetype align
 atman decompose ica      multi-seed FastICA with seed-stability reporting
                          (supports --transform clr/alr/ilr/ratio-anchor)
 atman decompose null     permutation-null calibration of archetype stability
+atman decompose variance mixed-model variance partition per archetype
 atman validate           check canonical TSV schema, keys, and sample support
 atman qc                 apply QC masking rules
 atman report qc          summarize QC, missingness, and condition support

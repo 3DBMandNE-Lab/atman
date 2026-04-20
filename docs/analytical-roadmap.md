@@ -670,6 +670,52 @@ Why it matters: moves alignment from "point estimate at some
 cross-cohort universal." Directly answers the reviewer question
 "would this survive a different random split of your data?"
 
+### 20. Archetype variance decomposition (`atman decompose variance`) (implemented, v1)
+
+Mixed-model variance partition per archetype. Takes a
+`decompose ica` activations TSV plus a samples metadata file, fits
+`y_archetype ~ fixed_terms + (1|group)` per archetype via the
+existing REML engine, and reports per-fixed-factor projection
+variance, random-intercept variance, residual variance, and the
+intraclass correlation for the random factor.
+
+Command:
+
+```bash
+atman decompose variance \
+  --activations out/activations.tsv \
+  --samples out/samples.tsv \
+  --factors "cohort + condition + (1|subject_id)" \
+  --output out/archetype_variance.tsv
+```
+
+v1 scope:
+
+- Type-I projection variance (`var_f = Var(X_f · β_f)` across
+  samples). Correlation-adjusted Type II / III partitions deferred.
+- Per-coefficient Wald summaries (`max_abs_t_<factor>`,
+  `min_p_<factor>`) rather than factor-level omnibus F-tests.
+- At most one random-intercept term `(1|col)` per run.
+
+Acceptance:
+
+- Pure partition math lives in
+  `atman-core::variance_decomposition`; 6 unit tests cover sample
+  variance math, factor projection math, recovery of fixed-only
+  structure, recovery of random-intercept variance on grouped data,
+  skip-on-singular-design propagation, and determinism.
+- Integration tests exercise the full CLI path on a synthetic
+  2-cohort × 2-condition fixture: `cohort_confounded` archetype
+  gets `var_cohort > var_condition > var_residual`;
+  `condition_specific` gets the reverse; `cohort_shared` noise gets
+  `var_residual` dominant. Random-intercept grouping on `cohort`
+  gives `cohort_confounded` ICC > 0.3.
+- Single-level-factor refusal with a clear error.
+
+Why it matters: gives a quantitative answer to "what fraction of
+this archetype is shared biology vs. between-cohort batch?" — the
+hardest-to-defend question in any cross-cohort factor paper.
+
 ## Implemented Build Order
 
 1. `atman validate`
@@ -691,6 +737,7 @@ cross-cohort universal." Directly answers the reviewer question
 17. Archetype null calibration
 18. Compositional transforms in decompose ica
 19. Bootstrap alignment uncertainty
+20. Archetype variance decomposition
 
 ## Release Readiness Status
 

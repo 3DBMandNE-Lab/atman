@@ -8,6 +8,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Archetype variance decomposition (`atman decompose variance`).**
+  Partitions each archetype's subject-level activation variance into
+  per-fixed-factor contributions, a random-intercept component, and
+  residual variance via a linear mixed model. Reuses
+  `atman de --test mixed`'s REML engine; adds only the partitioning
+  math on top. Formula syntax mirrors R:
+  `--factors "cohort + condition + (1|subject_id)"`. Output
+  `archetype_variance.tsv` has one row per archetype with
+  `total_var`, `var_residual`, `var_random_<group>`,
+  `icc_random_<group>`, and per-factor `var_<factor>`,
+  `max_abs_t_<factor>`, `min_p_<factor>`. v1 partition is the
+  Type-I projection variance (`var_f = Var(X_f · β_f)`);
+  correlation-adjusted Type II/III partitions are a documented
+  follow-on. Per-factor omnibus F-tests are deferred — v1 reports
+  per-coefficient Wald summaries. Closes P5 of the decomposition
+  methods track.
 - **Subject-level bootstrap of cross-cohort archetype alignment
   (`atman align bootstrap`).** Takes `--cohorts dir_a,dir_b[,...]`
   (canonical Atman directories), runs a point-estimate FastICA per
