@@ -1069,7 +1069,18 @@ fn run_ica(args: IcaArgs) -> Result<()> {
         &outputs,
         started_at,
         finished_at,
-        None,
+        {
+            // Resolved-value fields: record the integer `k` actually used
+            // so a reviewer reading the sidecar doesn't have to count
+            // columns in loadings.tsv to find out which `k` the
+            // `--k-selection` rule picked. `k_resolution_source` names
+            // the path: `cli` when --k was passed, `<rule>` otherwise.
+            let mut extras = serde_json::Map::new();
+            extras.insert("k_resolved".into(), serde_json::json!(k));
+            let source = if args.k.is_some() { "cli".to_string() } else { args.k_selection.clone() };
+            extras.insert("k_resolution_source".into(), serde_json::json!(source));
+            Some(extras)
+        },
 )?;
     eprintln!("decompose ica: sidecar={}", sidecar.display());
     Ok(())
@@ -1949,7 +1960,24 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
         &outputs,
         started_at,
         finished_at,
-        None,
+        {
+            // Resolved-value fields: when `--k auto` swept for the
+            // elbow, `k_resolved` carries the integer actually used
+            // and `k_resolution_source` names the rule. Otherwise
+            // `k_resolution_source` is `cli`.
+            let mut extras = serde_json::Map::new();
+            extras.insert("k_resolved".into(), serde_json::json!(effective_k));
+            let source = if args.k == "auto" {
+                format!(
+                    "auto:elbow(k_min={},k_max={},threshold={})",
+                    args.k_min, args.k_max, args.k_elbow_threshold
+                )
+            } else {
+                "cli".to_string()
+            };
+            extras.insert("k_resolution_source".into(), serde_json::json!(source));
+            Some(extras)
+        },
 )?;
     eprintln!("decompose unmix: sidecar={}", sidecar.display());
     Ok(())

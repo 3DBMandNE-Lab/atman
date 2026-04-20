@@ -3,17 +3,14 @@
 //! output.
 //!
 //! Sets:
-//! - `ATMAN_GIT_SHA`         — `git rev-parse HEAD`, or `"unknown"` when
-//!                             built outside a git checkout.
-//! - `ATMAN_TARGET`          — Cargo `TARGET` triple (e.g.
-//!                             `aarch64-apple-darwin`).
-//! - `ATMAN_RUSTC_VERSION`   — `rustc --version` verbatim, or `"unknown"`.
+//! - `ATMAN_GIT_SHA` — `git rev-parse HEAD`, or `"unknown"` when built
+//!   outside a git checkout.
+//! - `ATMAN_TARGET` — Cargo `TARGET` triple (e.g. `aarch64-apple-darwin`).
+//! - `ATMAN_RUSTC_VERSION` — `rustc --version` verbatim, or `"unknown"`.
 //! - `ATMAN_CARGO_LOCK_SHA256` — SHA-256 of the workspace `Cargo.lock`,
-//!                               or `"unknown"` when the lock file is
-//!                               absent (shouldn't happen in a normal
-//!                               build, but e.g. `cargo install` from a
-//!                               git dep can).
-//! - `ATMAN_PROFILE`         — `debug` / `release`, from Cargo.
+//!   or `"unknown"` when the lock file is absent (shouldn't happen in a
+//!   normal build, but `cargo install` from a git dep can).
+//! - `ATMAN_PROFILE` — `debug` / `release`, from Cargo.
 
 use std::{path::Path, process::Command};
 

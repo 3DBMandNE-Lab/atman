@@ -230,8 +230,6 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
             "peptide-measurements": args.peptide_measurements.as_ref().map(|p| p.display().to_string()),
             "peptide-metadata": args.peptide_metadata.as_ref().map(|p| p.display().to_string()),
             "ensemble-methods": args.ensemble_methods,
-            "ensemble-applied-methods": applied.join(","),
-            "ensemble-skipped-methods": skipped.join("|"),
             "ensemble-q-threshold": args.ensemble_q_threshold,
             "ensemble-validated-fraction": args.ensemble_validated_fraction,
             "ensemble-provisional-fraction": args.ensemble_provisional_fraction,
@@ -241,7 +239,22 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
         &outputs,
         started_at,
         finished_at,
-        None,
+        {
+            // Resolved-value fields: which methods ran vs were
+            // auto-skipped (e.g. msqrob without --peptide-measurements).
+            // Kept outside `args` so user-intent vs runtime-outcome
+            // don't conflate in the sidecar.
+            let mut extras = serde_json::Map::new();
+            extras.insert(
+                "ensemble_methods_applied".into(),
+                serde_json::json!(applied),
+            );
+            extras.insert(
+                "ensemble_methods_skipped".into(),
+                serde_json::json!(skipped),
+            );
+            Some(extras)
+        },
 )?;
     eprintln!(
         "de ensemble: {} rows, {} applied: [{}], {} skipped: [{}]",

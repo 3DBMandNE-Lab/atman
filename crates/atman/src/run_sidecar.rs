@@ -91,6 +91,7 @@ pub fn hash_labeled_inputs(entries: &[(&str, &Path)]) -> Result<InputHashes> {
 /// fields; `schema_version`, `atman_version`, `build_env`,
 /// `output_files`, etc. are enforced reserved and will be shadowed by
 /// the canonical fields.
+#[allow(clippy::too_many_arguments)]
 pub fn write_run_sidecar(
     sidecar_path: &Path,
     command: &str,

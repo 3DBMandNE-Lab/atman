@@ -169,7 +169,15 @@ fn ensemble_validates_known_effects_and_insufficients_null() {
         serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap()).unwrap();
     assert_eq!(j["args"]["test"], "ensemble");
     assert_eq!(j["args"]["ensemble-methods"], "welch-t,limma");
-    assert_eq!(j["args"]["ensemble-applied-methods"], "welch-t,limma");
+    // Resolved-value fields moved out of `args` into top-level extras
+    // in schema v1 so user-intent vs runtime-outcome don't conflate.
+    let applied: Vec<&str> = j["ensemble_methods_applied"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(applied, vec!["welch-t", "limma"]);
     // `output_files` maps each written file's absolute path to its
     // sha256; both de_results.tsv and de_ensemble.tsv must appear.
     let outputs = j["output_files"]
@@ -221,14 +229,22 @@ fn ensemble_skips_msqrob_without_peptide_inputs_without_aborting() {
     let sidecar = output.join("de_results.tsv.run.json");
     let j: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap()).unwrap();
-    let applied = j["args"]["ensemble-applied-methods"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let skipped = j["args"]["ensemble-skipped-methods"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    assert_eq!(applied, "welch-t", "only welch-t should apply");
-    assert!(skipped.starts_with("msqrob:"), "msqrob should be skipped: {skipped}");
+    // Resolved-value fields under top-level extras (v1 schema).
+    let applied: Vec<&str> = j["ensemble_methods_applied"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    let skipped: Vec<&str> = j["ensemble_methods_skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(applied, vec!["welch-t"], "only welch-t should apply");
+    assert!(
+        skipped.iter().any(|s| s.starts_with("msqrob:")),
+        "msqrob should be in skipped: {skipped:?}"
+    );
 }
