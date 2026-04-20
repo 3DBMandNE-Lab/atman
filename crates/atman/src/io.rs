@@ -743,6 +743,91 @@ pub struct DeResultRow {
     pub method: String,
 }
 
+/// Parse `de_results.tsv` back into `DeResultRow`s. Used by
+/// `atman de --test ensemble` to pull each sub-method's output out of
+/// its tempdir for aggregation. Header-indexed so adding new columns
+/// doesn't break older files.
+pub fn read_de_results(path: &Path) -> Result<Vec<DeResultRow>> {
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(path)
+        .with_context(|| format!("opening {:?}", path))?;
+    let headers = reader
+        .headers()
+        .with_context(|| format!("reading headers from {:?}", path))?
+        .clone();
+    let col: HashMap<String, usize> = headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.to_string(), i))
+        .collect();
+    let get = |row: &csv::StringRecord, name: &str| -> String {
+        col.get(name)
+            .and_then(|&i| row.get(i))
+            .unwrap_or("")
+            .to_string()
+    };
+    let parse_opt_f64 = |row: &csv::StringRecord, name: &str| -> Option<f64> {
+        let s = get(row, name);
+        if s.is_empty() {
+            None
+        } else {
+            s.parse().ok()
+        }
+    };
+    let parse_opt_usize = |row: &csv::StringRecord, name: &str| -> Option<usize> {
+        let s = get(row, name);
+        if s.is_empty() {
+            None
+        } else {
+            s.parse().ok()
+        }
+    };
+    let mut out = Vec::new();
+    for result in reader.records() {
+        let row = result.with_context(|| format!("reading de_results row from {:?}", path))?;
+        out.push(DeResultRow {
+            panel: get(&row, "panel"),
+            assay_id: get(&row, "assay_id"),
+            gene_symbol: get(&row, "gene_symbol"),
+            uniprot: get(&row, "uniprot"),
+            comparison: get(&row, "comparison"),
+            n_pairs: get(&row, "n_pairs").parse().unwrap_or(0),
+            mean_a: parse_opt_f64(&row, "mean_a"),
+            mean_b: parse_opt_f64(&row, "mean_b"),
+            mean_diff: parse_opt_f64(&row, "mean_diff"),
+            t: parse_opt_f64(&row, "t"),
+            df: parse_opt_f64(&row, "df"),
+            p_value: parse_opt_f64(&row, "p_value"),
+            bh_q: parse_opt_f64(&row, "bh_q"),
+            effect_size: parse_opt_f64(&row, "effect_size"),
+            effect_size_method: get(&row, "effect_size_method"),
+            ci_low: parse_opt_f64(&row, "ci_low"),
+            ci_high: parse_opt_f64(&row, "ci_high"),
+            wilcoxon_p: parse_opt_f64(&row, "wilcoxon_p"),
+            wilcoxon_method: get(&row, "wilcoxon_method"),
+            median_diff: parse_opt_f64(&row, "median_diff"),
+            trimmed_mean_diff: parse_opt_f64(&row, "trimmed_mean_diff"),
+            skip_reason: get(&row, "skip_reason"),
+            s2_trend: parse_opt_f64(&row, "s2_trend"),
+            s2_prior: parse_opt_f64(&row, "s2_prior"),
+            s2_posterior: parse_opt_f64(&row, "s2_posterior"),
+            df_prior: parse_opt_f64(&row, "df_prior"),
+            df_total: parse_opt_f64(&row, "df_total"),
+            f_statistic: parse_opt_f64(&row, "f_statistic"),
+            f_p_value: parse_opt_f64(&row, "f_p_value"),
+            f_bh_q: parse_opt_f64(&row, "f_bh_q"),
+            lfc_threshold: parse_opt_f64(&row, "lfc_threshold"),
+            n_peptides_observed: parse_opt_usize(&row, "n_peptides_observed"),
+            peptide_variance_ratio: parse_opt_f64(&row, "peptide_variance_ratio"),
+            ridge_lambda: parse_opt_f64(&row, "ridge_lambda"),
+            method: get(&row, "method"),
+        });
+    }
+    Ok(out)
+}
+
 pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
     let mut buf = String::from(
         "panel\tassay_id\tgene_symbol\tuniprot\tcomparison\tn_pairs\t\

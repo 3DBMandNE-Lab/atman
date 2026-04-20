@@ -23,8 +23,8 @@ pub mod types;
 pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};
 pub use deqms::{deqms_shrink, tricube_moving_average, DeqmsShrinkage};
 pub use ensemble::{
-    aggregate_per_protein, combine_stouffer, EnsembleGrade, EnsembleInput, EnsembleRow,
-    GradeThresholds,
+    aggregate_per_protein, assign_grade, combine_stouffer, EnsembleGrade, EnsembleInput,
+    EnsembleRow, GradeThresholds,
 };
 pub use msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
 pub use errors::IngestError;

@@ -40,21 +40,31 @@ impl EnsembleGrade {
     }
 }
 
+/// Thresholds for [`assign_grade`] and [`aggregate_per_protein`].
+///
+/// `q_threshold` is used two ways: once inside
+/// [`aggregate_per_protein`] to count per-method significant
+/// findings (informational — `n_significant`), and once inside
+/// [`assign_grade`] as the `ensemble_q` bar for VALIDATED /
+/// PROVISIONAL assignment.
 #[derive(Debug, Clone, Copy)]
 pub struct GradeThresholds {
+    /// Per-method BH-q threshold (counts `n_significant`) AND the
+    /// ensemble-BH q-threshold for VALIDATED / PROVISIONAL.
     pub q_threshold: f64,
-    pub validated_fraction: f64,
-    pub provisional_fraction: f64,
-    pub sign_fraction: f64,
+    /// Sign-consistency fraction required for VALIDATED.
+    pub validated_sign_fraction: f64,
+    /// Sign-consistency fraction required for PROVISIONAL. Below
+    /// this, INSUFFICIENT.
+    pub provisional_sign_fraction: f64,
 }
 
 impl Default for GradeThresholds {
     fn default() -> Self {
         Self {
             q_threshold: 0.05,
-            validated_fraction: 0.80,
-            provisional_fraction: 0.50,
-            sign_fraction: 1.00,
+            validated_sign_fraction: 1.00,
+            provisional_sign_fraction: 0.50,
         }
     }
 }
@@ -67,8 +77,47 @@ pub struct EnsembleRow {
     /// +1.0, -1.0, or 0.0 when no applicable rows.
     pub majority_sign: f64,
     pub ensemble_p: Option<f64>,
-    pub grade: EnsembleGrade,
     pub methods_applied: Vec<String>,
+}
+
+/// Assign a VALIDATED / PROVISIONAL / INSUFFICIENT grade to one
+/// protein given its ensemble BH-q (computed across proteins within
+/// a comparison) and its sign-consistency fraction.
+///
+/// Grade criteria:
+/// - **INSUFFICIENT** when no method fit the protein
+///   (`n_applied == 0`) or when `ensemble_q` is missing or
+///   `>= thresholds.q_threshold`.
+/// - **VALIDATED** when `ensemble_q < q_threshold` AND the
+///   sign-consistency fraction reaches
+///   `validated_sign_fraction` (default 1.00).
+/// - **PROVISIONAL** when `ensemble_q < q_threshold` AND the
+///   sign-consistency fraction reaches
+///   `provisional_sign_fraction` (default 0.50).
+/// - Otherwise INSUFFICIENT.
+pub fn assign_grade(
+    ensemble_q: Option<f64>,
+    n_applied: usize,
+    n_sign_consistent: usize,
+    thresholds: GradeThresholds,
+) -> EnsembleGrade {
+    if n_applied == 0 {
+        return EnsembleGrade::Insufficient;
+    }
+    let Some(q) = ensemble_q else {
+        return EnsembleGrade::Insufficient;
+    };
+    if !q.is_finite() || q >= thresholds.q_threshold {
+        return EnsembleGrade::Insufficient;
+    }
+    let sign_frac = n_sign_consistent as f64 / n_applied as f64;
+    if sign_frac >= thresholds.validated_sign_fraction {
+        EnsembleGrade::Validated
+    } else if sign_frac >= thresholds.provisional_sign_fraction {
+        EnsembleGrade::Provisional
+    } else {
+        EnsembleGrade::Insufficient
+    }
 }
 
 /// Stouffer's Z-score combination. Returns `None` when no finite
@@ -93,8 +142,14 @@ pub fn combine_stouffer(p_values: &[f64]) -> Option<f64> {
     Some(1.0 - normal.cdf(z_combined))
 }
 
-/// Aggregate per-method rows for one (comparison, protein) into a
-/// single [`EnsembleRow`].
+/// Aggregate per-method rows for one (comparison, protein) into an
+/// [`EnsembleRow`]. Does NOT assign a grade — the caller applies
+/// [`assign_grade`] after BH-FDR on the ensemble p-values within the
+/// comparison has produced an `ensemble_q`.
+///
+/// `n_significant` is the count of methods whose per-method BH-q was
+/// below `thresholds.q_threshold`. It is informational only, not a
+/// grade determinant in the current design.
 pub fn aggregate_per_protein(
     inputs: &[EnsembleInput],
     thresholds: GradeThresholds,
@@ -127,7 +182,6 @@ pub fn aggregate_per_protein(
             n_sign_consistent: 0,
             majority_sign: 0.0,
             ensemble_p: None,
-            grade: EnsembleGrade::Insufficient,
             methods_applied: Vec::new(),
         };
     }
@@ -139,26 +193,12 @@ pub fn aggregate_per_protein(
         (-1.0, neg)
     };
     let ensemble_p = combine_stouffer(&applied_p);
-    let sig_frac = n_significant as f64 / n_applied as f64;
-    let sign_frac = n_sign_consistent as f64 / n_applied as f64;
-    let grade = if sig_frac >= thresholds.validated_fraction
-        && sign_frac >= thresholds.sign_fraction
-    {
-        EnsembleGrade::Validated
-    } else if sig_frac >= thresholds.provisional_fraction
-        && sign_frac >= thresholds.sign_fraction
-    {
-        EnsembleGrade::Provisional
-    } else {
-        EnsembleGrade::Insufficient
-    };
     EnsembleRow {
         n_applied,
         n_significant,
         n_sign_consistent,
         majority_sign,
         ensemble_p,
-        grade,
         methods_applied: applied_methods,
     }
 }
@@ -196,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn validated_when_all_methods_agree_sign_and_most_significant() {
+    fn aggregate_collects_counts_and_majority_sign() {
         let rows = vec![
             mk("welch-t", 1.5, 1e-5, 1e-4),
             mk("ols", 1.4, 5e-6, 8e-5),
@@ -204,37 +244,25 @@ mod tests {
             mk("msqrob", 1.3, 2e-5, 5e-4),
         ];
         let out = aggregate_per_protein(&rows, GradeThresholds::default());
-        assert_eq!(out.grade, EnsembleGrade::Validated);
         assert_eq!(out.n_applied, 4);
         assert_eq!(out.n_significant, 4);
         assert_eq!(out.n_sign_consistent, 4);
         assert!(out.majority_sign > 0.0);
+        // Grade is not computed by aggregate_per_protein anymore; caller
+        // combines this with ensemble_q via `assign_grade`.
     }
 
     #[test]
-    fn insufficient_when_signs_disagree() {
+    fn aggregate_handles_mixed_signs() {
         let rows = vec![
             mk("welch-t", 1.5, 1e-5, 1e-4),
             mk("limma", -1.4, 1e-5, 1e-4),
             mk("msqrob", 1.2, 1e-5, 1e-4),
         ];
         let out = aggregate_per_protein(&rows, GradeThresholds::default());
-        assert_eq!(out.grade, EnsembleGrade::Insufficient);
         // Majority is positive (2 vs 1), sign_consistent count = 2.
         assert_eq!(out.n_sign_consistent, 2);
-    }
-
-    #[test]
-    fn provisional_when_majority_significant_all_same_sign() {
-        let rows = vec![
-            mk("welch-t", 0.8, 0.01, 0.02),
-            mk("ols", 0.7, 0.02, 0.04),
-            mk("limma", 0.5, 0.20, 0.30),
-            mk("msqrob", 0.6, 0.15, 0.25),
-        ];
-        let out = aggregate_per_protein(&rows, GradeThresholds::default());
-        assert_eq!(out.grade, EnsembleGrade::Provisional);
-        assert_eq!(out.n_significant, 2);
+        assert_eq!(out.majority_sign, 1.0);
     }
 
     #[test]
@@ -254,11 +282,60 @@ mod tests {
     }
 
     #[test]
-    fn empty_input_yields_insufficient_and_zero_counts() {
+    fn empty_input_yields_zero_counts_and_none_ensemble_p() {
         let out = aggregate_per_protein(&[], GradeThresholds::default());
-        assert_eq!(out.grade, EnsembleGrade::Insufficient);
         assert_eq!(out.n_applied, 0);
         assert_eq!(out.majority_sign, 0.0);
         assert!(out.ensemble_p.is_none());
+    }
+
+    #[test]
+    fn assign_grade_validated_requires_significant_ensemble_q_and_full_sign() {
+        let t = GradeThresholds::default();
+        assert_eq!(
+            assign_grade(Some(1e-4), 4, 4, t),
+            EnsembleGrade::Validated
+        );
+    }
+
+    #[test]
+    fn assign_grade_provisional_when_sign_partial() {
+        let t = GradeThresholds::default();
+        // 2/3 sign-consistent → below validated (1.0) threshold but
+        // at/above provisional (0.5). ensemble_q significant.
+        assert_eq!(
+            assign_grade(Some(1e-4), 3, 2, t),
+            EnsembleGrade::Provisional
+        );
+    }
+
+    #[test]
+    fn assign_grade_insufficient_when_ensemble_q_fails() {
+        let t = GradeThresholds::default();
+        // ensemble_q above threshold regardless of sign consistency.
+        assert_eq!(
+            assign_grade(Some(0.5), 4, 4, t),
+            EnsembleGrade::Insufficient
+        );
+        // Missing ensemble_q.
+        assert_eq!(
+            assign_grade(None, 4, 4, t),
+            EnsembleGrade::Insufficient
+        );
+        // No applicable methods.
+        assert_eq!(
+            assign_grade(Some(1e-4), 0, 0, t),
+            EnsembleGrade::Insufficient
+        );
+    }
+
+    #[test]
+    fn assign_grade_insufficient_when_majority_sign_fails_provisional_threshold() {
+        let t = GradeThresholds::default();
+        // 2/5 sign-consistent → below provisional (0.5).
+        assert_eq!(
+            assign_grade(Some(1e-4), 5, 2, t),
+            EnsembleGrade::Insufficient
+        );
     }
 }
