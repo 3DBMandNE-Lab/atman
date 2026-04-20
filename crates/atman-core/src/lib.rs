@@ -22,6 +22,7 @@ pub mod qc;
 pub mod sample_id;
 pub mod stats;
 pub mod types;
+pub mod variance_decomposition;
 
 pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};
 pub use align_bootstrap::{align_bootstrap, resample_rows, BootstrapParams, BootstrapRow, CohortMatrix};
@@ -35,6 +36,9 @@ pub use ensemble::{
     EnsembleRow, GradeThresholds,
 };
 pub use msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
+pub use variance_decomposition::{
+    decompose_archetype_variance, FactorRow, FixedFactor, VarianceRow,
+};
 pub use errors::IngestError;
 pub use fold_change::{
     compute_log2_fc, Comparison, FoldChangeInput, FoldChangeOutput, FoldChangePanel,
