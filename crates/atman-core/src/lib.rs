@@ -11,6 +11,7 @@ pub mod ensemble;
 pub mod errors;
 pub mod fold_change;
 pub mod ica;
+pub mod ica_null;
 pub mod ingest;
 pub mod limma;
 pub mod matrix;
@@ -22,6 +23,9 @@ pub mod types;
 
 pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};
 pub use deqms::{deqms_shrink, tricube_moving_average, DeqmsShrinkage};
+pub use ica_null::{
+    archetype_null, generate_null_matrix, ArchetypeNullRow, NullMode, NullParams,
+};
 pub use ensemble::{
     aggregate_per_protein, assign_grade, combine_stouffer, EnsembleGrade, EnsembleInput,
     EnsembleRow, GradeThresholds,

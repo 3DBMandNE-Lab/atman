@@ -472,6 +472,99 @@ fn max_identity_deviation(w_new: &[Vec<f64>], w_old: &[Vec<f64>]) -> f64 {
     max_dev
 }
 
+/// Canonicalized ICA result: sign-flipped so each program's
+/// max-|loading| entry is positive, and programs sorted by descending
+/// max |loading|. Makes multi-seed stability comparisons meaningful
+/// under ICA's inherent sign and permutation ambiguity.
+pub struct CanonicalIca {
+    /// `k` rows, each of length `p` (protein loadings per program).
+    pub loadings: Vec<Vec<f64>>,
+    /// `k` rows, each of length `n` (per-sample activations).
+    pub activations: Vec<Vec<f64>>,
+}
+
+/// Canonicalize an [`IcaResult`]: sign-flip each program so its
+/// max |loading| entry is positive, then sort programs by descending
+/// max |loading|. The result is stable across runs that produce the
+/// same components modulo ICA's sign / permutation gauge.
+pub fn canonicalize_ica(result: &IcaResult) -> CanonicalIca {
+    let k = result.mixing[0].len();
+    let p = result.mixing.len();
+    let n = result.sources.len();
+
+    let mut signs = vec![1.0_f64; k];
+    let mut loadings: Vec<Vec<f64>> = vec![vec![0.0; p]; k];
+    for c in 0..k {
+        let mut max_abs = 0.0_f64;
+        let mut argmax = 0usize;
+        for (j, row) in result.mixing.iter().enumerate() {
+            if row[c].abs() > max_abs {
+                max_abs = row[c].abs();
+                argmax = j;
+            }
+        }
+        if result.mixing[argmax][c] < 0.0 {
+            signs[c] = -1.0;
+        }
+        for j in 0..p {
+            loadings[c][j] = signs[c] * result.mixing[j][c];
+        }
+    }
+    let mut activations: Vec<Vec<f64>> = vec![vec![0.0; n]; k];
+    for c in 0..k {
+        for i in 0..n {
+            activations[c][i] = signs[c] * result.sources[i][c];
+        }
+    }
+    let mut order: Vec<usize> = (0..k).collect();
+    order.sort_by(|&a, &b| {
+        let ma = loadings[a]
+            .iter()
+            .fold(0.0_f64, |acc, v| acc.max(v.abs()));
+        let mb = loadings[b]
+            .iter()
+            .fold(0.0_f64, |acc, v| acc.max(v.abs()));
+        mb.partial_cmp(&ma).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let ordered_loadings: Vec<Vec<f64>> = order.iter().map(|&i| loadings[i].clone()).collect();
+    let ordered_activations: Vec<Vec<f64>> =
+        order.iter().map(|&i| activations[i].clone()).collect();
+    CanonicalIca {
+        loadings: ordered_loadings,
+        activations: ordered_activations,
+    }
+}
+
+/// Per-reference-program mean of the best Jaccard top-N overlap
+/// achieved by any alternative-seed program. Mirrors the stability
+/// metric written to `stability.tsv` by `atman decompose ica` and
+/// used as the "observed stability" in `atman decompose null`.
+pub fn compute_stability_scores(
+    reference: &CanonicalIca,
+    alternatives: &[CanonicalIca],
+    top_n: usize,
+) -> Vec<f64> {
+    if alternatives.is_empty() {
+        return vec![f64::NAN; reference.loadings.len()];
+    }
+    reference
+        .loadings
+        .iter()
+        .map(|ref_row| {
+            let sum_best: f64 = alternatives
+                .iter()
+                .map(|alt| {
+                    alt.loadings
+                        .iter()
+                        .map(|alt_row| jaccard_top_n(ref_row, alt_row, top_n))
+                        .fold(0.0_f64, f64::max)
+                })
+                .sum();
+            sum_best / alternatives.len() as f64
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
