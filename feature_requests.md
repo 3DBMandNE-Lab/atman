@@ -33,66 +33,25 @@ scale after QC. See `docs/analytical-roadmap.md` §8 for details.
 
 ---
 
-## Priority 3: Bootstrap alignment uncertainty (`atman align bootstrap`)
+## ~~Priority 3: Bootstrap alignment uncertainty (`atman align bootstrap`)~~ *(v1 shipped 2026-04-20)*
 
-`atman align programs` currently returns a point estimate at
-`--cosine-tau 0.30` (or whatever the user picks). This is fragile: reviewers
-will ask how confident we are that a given archetype is cross-cohort
-universal. Add a subject-level bootstrap that resamples within cohort,
-re-runs `decompose ica` + `align programs`, and reports a per-archetype
-posterior probability of universality.
+Subject-level bootstrap that resamples subjects within every cohort
+with replacement, re-runs FastICA per cohort, re-aligns with cosine
+similarity, and emits per-PE-archetype `bootstrap_prob_universal`,
+`bootstrap_prob_multi`, and a percentile CI band. Deterministic
+SplitMix64`(seed, iter)` sub-seeds. See
+`docs/analytical-roadmap.md` §8 for details.
 
-Command:
+**Deferred to a follow-on request:**
 
-```bash
-atman align bootstrap \
-  --cohorts out_cohort1,out_cohort2,out_cohort3 \
-  --k 20 \
-  --cosine-tau 0.30 \
-  --n-boot 200 \
-  --seed 20260418 \
-  --output-dir out_align_boot
-```
-
-For each bootstrap iteration:
-
-1. Resample subjects within each cohort with replacement.
-2. Re-run `decompose ica` per cohort.
-3. Re-run `align programs` at the chosen `--cosine-tau`.
-4. Record per-archetype membership (which cohorts recovered it).
-
-Aggregate outputs (`align_bootstrap_summary.tsv`):
-
-- `archetype_id` (consensus ID from the point-estimate run)
-- `observed_n_cohorts`: cohort count at the point estimate
-- `bootstrap_mean_n_cohorts`: mean over `--n-boot` iterations
-- `bootstrap_prob_universal`: fraction of bootstraps where the
-  archetype was recovered in all cohorts
-- `bootstrap_prob_multi`: fraction recovered in ≥2 cohorts
-- `ci_lower_n_cohorts`, `ci_upper_n_cohorts`: BCa or percentile interval
-- `alignment_entropy`: Shannon entropy over recovered cohort-membership
-  patterns (captures "this archetype sometimes aligns to X, sometimes
-  to Y")
-
-Acceptance:
-
-- Deterministic under `--seed`; each bootstrap iteration draws its own
-  deterministic sub-seed from a fixed derivation rule (e.g.
-  `hash(seed, iter)` via blake3 or similar pure-Rust primitive).
-- On a synthetic fixture with one "truly universal" archetype and one
-  "cohort-specific" archetype, the universal one must have
-  `bootstrap_prob_universal > 0.9`, the cohort-specific one `< 0.2`.
-- Integration test under `crates/atman/tests/align_bootstrap.rs`
-  covering the universal/cohort-specific recovery fixture, determinism
-  under repeated seed, and refusal when cohorts have fewer than a
-  minimum subject count (configurable, default 20).
-- Run sidecar captures `n_boot`, `cosine_tau`, and per-iteration seed
-  derivation rule for full reproducibility.
-
-Why it matters for the methods paper: moves atman from "point-estimate
-alignment" to "calibrated posterior probability." Directly addresses the
-single most common cross-cohort concern: "you found this at τ=0.30, would
-it survive a different random split of the same data?"
+- Jaccard and Spearman metrics (v1 is cosine-only).
+- BCa CI (v1 is percentile).
+- `alignment_entropy` metric over recovered cohort-membership
+  patterns.
+- Stress-test against the planted-universal + planted-specific
+  fixture at larger scale — v1 tests verify schema, refusal, and
+  determinism; the bundled synthetic fixture is tiny for test
+  speed and doesn't assert specific probability magnitudes.
 
 ---
 

@@ -8,6 +8,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Subject-level bootstrap of cross-cohort archetype alignment
+  (`atman align bootstrap`).** Takes `--cohorts dir_a,dir_b[,...]`
+  (canonical Atman directories), runs a point-estimate FastICA per
+  cohort + cosine-metric alignment to identify archetypes, then for
+  each of `--n-boot` iterations resamples subjects within every
+  cohort with replacement, re-runs ICA per cohort, re-aligns, and
+  matches every point-estimate archetype to its best-cosine
+  bootstrap counterpart. Emits
+  `align_bootstrap_summary.tsv` with `archetype_id,
+  observed_n_cohorts, observed_cohorts, bootstrap_mean_n_cohorts,
+  bootstrap_prob_universal, bootstrap_prob_multi,
+  ci_lower_n_cohorts, ci_upper_n_cohorts, bootstrap_match_rate`.
+  Deterministic under `--seed` via SplitMix64`(seed, iter)` sub-seed
+  derivation. v1 is cosine-only, percentile-CI (no BCa), and no
+  `alignment_entropy` metric — noted as follow-ons. Partially
+  closes P3 of the decomposition methods track.
 - **Compositional transforms in `atman decompose ica`
   (`--transform {none,clr,alr,ilr,ratio-anchor}`).** Bulk proteomics
   is closed-sum (total intensity is a plate/panel artifact), so

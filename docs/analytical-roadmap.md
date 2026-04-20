@@ -621,6 +621,55 @@ compositional transform, and the decomposition result depends on
 which transform you chose. No standalone proteomics ICA tool
 currently exposes this as a first-class CLI option with provenance.
 
+### 19. Bootstrap alignment uncertainty (`atman align bootstrap`) (implemented, v1)
+
+Subject-level bootstrap of cross-cohort archetype alignment.
+Every iteration resamples subjects within each cohort with
+replacement, re-runs FastICA per cohort, re-aligns with cosine
+similarity, and matches every point-estimate archetype to its
+best-cosine bootstrap counterpart. Output summarises per-archetype
+`bootstrap_prob_universal` / `bootstrap_prob_multi` plus a
+percentile-CI band on the cohort-count distribution.
+
+Command:
+
+```bash
+atman align bootstrap \
+  --cohorts out_cohort_a,out_cohort_b,out_cohort_c \
+  --labels A,B,C \
+  --k 20 --n-boot 200 --seed 20260418 \
+  --cosine-tau 0.30 --match-tau 0.50 \
+  --min-subjects 20 \
+  --max-missing-fraction 0.5 --impute mean \
+  --output out/align_bootstrap_summary.tsv
+```
+
+v1 scope (tracked as follow-ons in feature_requests.md Priority 3):
+
+- Cosine similarity only; other metrics deferred.
+- Percentile CI only; no BCa.
+- No `alignment_entropy` metric.
+- Archetype matching is by representative-program best-cosine with
+  a user-tunable `--match-tau` floor (default 0.50).
+
+Acceptance:
+
+- Pure bootstrap lives in `atman-core::align_bootstrap`; 6 unit
+  tests cover row resampling, single-cohort refusal, min-subjects
+  refusal, mismatched-universe refusal, runs on toy data, and
+  determinism.
+- Integration tests cover CLI schema, single-cohort refusal,
+  min-subjects refusal, and determinism across repeated runs.
+- Each cohort's canonical directory is intersected to a shared
+  protein universe before alignment; `--impute mean` fills residual
+  missingness within the `--max-missing-fraction` envelope.
+- Run sidecar captures every knob plus per-cohort input hashes.
+
+Why it matters: moves alignment from "point estimate at some
+`--cosine-tau`" to "posterior probability the archetype is
+cross-cohort universal." Directly answers the reviewer question
+"would this survive a different random split of your data?"
+
 ## Implemented Build Order
 
 1. `atman validate`
@@ -641,6 +690,7 @@ currently exposes this as a first-class CLI option with provenance.
 16. Cross-method ensemble DE dispatcher
 17. Archetype null calibration
 18. Compositional transforms in decompose ica
+19. Bootstrap alignment uncertainty
 
 ## Release Readiness Status
 

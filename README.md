@@ -57,6 +57,7 @@ needed, and emit Atman's TSV schema.
 atman ingest             raw Olink Explore long CSV -> canonical TSVs
 atman ingest-matrix      wide protein matrix + metadata -> canonical TSVs
 atman align programs     cross-cohort program alignment + sensitivity sweep
+atman align bootstrap    subject-level bootstrap of cross-cohort archetype alignment
 atman decompose ica      multi-seed FastICA with seed-stability reporting
                          (supports --transform clr/alr/ilr/ratio-anchor)
 atman decompose null     permutation-null calibration of archetype stability
