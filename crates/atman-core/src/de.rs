@@ -289,8 +289,13 @@ pub struct OlsFit {
     pub p_value: Vec<f64>,
     /// Residual degrees of freedom, `n − p`.
     pub df: f64,
-    /// Residual variance estimate, `RSS / df`.
+    /// Residual variance estimate, `RSS / df` (σ²_res).
     pub sigma2: f64,
+    /// For mixed-effects fits only: ratio of random-intercept variance
+    /// to residual variance (`σ²_u / σ²_res`). `None` for plain OLS.
+    /// Consumers that need the absolute random-intercept variance
+    /// compute `variance_ratio * sigma2`.
+    pub variance_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -518,6 +523,7 @@ pub fn ols(design: &[Vec<f64>], y: &[f64], min_samples: usize) -> OlsOutcome {
         p_value,
         df,
         sigma2,
+        variance_ratio: None,
     })
 }
 
@@ -668,6 +674,7 @@ pub fn mixed_random_intercept(
         p_value,
         df,
         sigma2,
+        variance_ratio: Some(lambda),
     })
 }
 
