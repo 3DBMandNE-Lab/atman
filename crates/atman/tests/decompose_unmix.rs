@@ -227,9 +227,11 @@ fn unmix_recovers_planted_endmembers_and_satisfies_simplex_constraints() {
         );
     }
 
-    // Abundance TSV: 60 rows, each sums to ~1, non-negative entries.
+    // Abundance TSV: sample_id + E{i}/ci_lower/ci_upper per endmember.
+    // 60 rows, each sums to ~1 across point-estimate columns, non-
+    // negative entries.
     let (header_ab, rows_ab) = parse_tsv(&output.join("abundances.tsv"));
-    assert_eq!(header_ab.len(), 4);
+    assert_eq!(header_ab.len(), 1 + 3 * 3);
     assert_eq!(rows_ab.len(), 60);
     for r in &rows_ab {
         let mut s = 0.0_f64;
@@ -365,6 +367,50 @@ fn unmix_k_auto_selects_planted_k_on_planted_3_fixture() {
     let distinct: std::collections::HashSet<String> =
         em_rows.iter().map(|r| r["endmember_id"].clone()).collect();
     assert_eq!(distinct.len(), chosen_k);
+}
+
+#[test]
+fn unmix_n_boot_emits_ci_columns_with_finite_ordered_bounds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("cohort");
+    let output = tmp.path().join("ci_out");
+    let mut planted = vec![vec![0.0_f64; 30]; 3];
+    write_planted_cohort(&input, 20260420, &mut planted);
+
+    let status = run_atman(&[
+        "decompose", "unmix",
+        "--input-dir", input.to_str().unwrap(),
+        "--k", "3",
+        "--n-boot", "20",
+        "--seed", "42",
+        "--output-dir", output.to_str().unwrap(),
+    ]);
+    assert!(
+        status.status.success(),
+        "decompose unmix --n-boot 20 failed:\nstderr:\n{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let (header_em, rows_em) = parse_tsv(&output.join("endmembers.tsv"));
+    for col in ["loading_ci_lower", "loading_ci_upper"] {
+        assert!(header_em.iter().any(|h| h == col), "missing {col} on endmembers.tsv");
+    }
+    for r in &rows_em {
+        let lo: f64 = r["loading_ci_lower"].parse().unwrap();
+        let hi: f64 = r["loading_ci_upper"].parse().unwrap();
+        assert!(lo.is_finite() && hi.is_finite());
+        assert!(lo <= hi + 1e-9);
+    }
+    let (header_ab, rows_ab) = parse_tsv(&output.join("abundances.tsv"));
+    for col in ["E001_ci_lower", "E001_ci_upper"] {
+        assert!(header_ab.iter().any(|h| h == col), "missing {col} on abundances.tsv");
+    }
+    for r in &rows_ab {
+        let lo: f64 = r["E001_ci_lower"].parse().unwrap();
+        let hi: f64 = r["E001_ci_upper"].parse().unwrap();
+        assert!(lo.is_finite() && hi.is_finite());
+        assert!(lo <= hi + 1e-9);
+    }
 }
 
 #[test]

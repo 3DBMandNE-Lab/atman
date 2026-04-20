@@ -2,7 +2,8 @@ use anyhow::{bail, Context, Result};
 use atman_core::bh_fdr;
 use atman_core::compositional::{apply_transform, Transform};
 use atman_core::decompose_unmix::{
-    select_k_auto, unmix, AbundanceMethod, EndmemberMethod, KSweepRow, UnmixResult,
+    bootstrap_ci, select_k_auto, unmix, AbundanceCi, AbundanceMethod, EndmemberMethod,
+    KSweepRow, LoadingCi, UnmixResult,
 };
 use atman_core::ica::{fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult};
 use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
@@ -1630,6 +1631,12 @@ pub struct UnmixArgs {
     #[arg(long, default_value_t = 1e-9)]
     fcls_tol: f64,
 
+    /// Subject-level bootstrap iterations for loading + abundance CI.
+    /// 0 (default) disables bootstrap — endmembers.tsv and
+    /// abundances.tsv carry `NA` in the CI columns.
+    #[arg(long, default_value_t = 0)]
+    n_boot: usize,
+
     /// Drop proteins with more than this fraction of missing samples.
     #[arg(long, default_value_t = 0.0)]
     max_missing_fraction: f64,
@@ -1798,13 +1805,30 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
         args.fcls_tol,
     )
     .map_err(|e| anyhow::anyhow!(e))?;
+    let (loading_ci, abundance_ci) = bootstrap_ci(
+        &result,
+        &transformed,
+        args.seed,
+        endmember_method,
+        abundance_method,
+        args.fcls_max_iter,
+        args.fcls_tol,
+        args.n_boot,
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
 
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating {:?}", args.output_dir))?;
     let endmembers_path = args.output_dir.join("endmembers.tsv");
-    write_unmix_endmembers(&endmembers_path, &result, &protein_labels, &subject_ids)?;
+    write_unmix_endmembers(
+        &endmembers_path,
+        &result,
+        &protein_labels,
+        &subject_ids,
+        loading_ci.as_ref(),
+    )?;
     let abundances_path = args.output_dir.join("abundances.tsv");
-    write_unmix_abundances(&abundances_path, &result, &subject_ids)?;
+    write_unmix_abundances(&abundances_path, &result, &subject_ids, abundance_ci.as_ref())?;
     let diag_path = args.output_dir.join("unmix_diagnostics.tsv");
     write_unmix_diagnostics(&diag_path, &result, &subject_ids)?;
     let mut outputs = vec![endmembers_path.clone(), abundances_path.clone(), diag_path.clone()];
@@ -1855,6 +1879,7 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
             "seed": args.seed,
             "fcls-max-iter": args.fcls_max_iter,
             "fcls-tol": args.fcls_tol,
+            "n-boot": args.n_boot,
             "max-missing-fraction": args.max_missing_fraction,
             "impute": args.impute,
         }),
@@ -1979,9 +2004,11 @@ fn write_unmix_endmembers(
     result: &UnmixResult,
     protein_labels: &[String],
     subject_ids: &[String],
+    loading_ci: Option<&LoadingCi>,
 ) -> Result<()> {
     let mut buf = String::from(
-        "endmember_id\tsource_sample_id\tprotein\tloading\trank_in_endmember\n",
+        "endmember_id\tsource_sample_id\tprotein\tloading\trank_in_endmember\t\
+         loading_ci_lower\tloading_ci_upper\n",
     );
     for (ai, loading) in result.endmember_loadings.iter().enumerate() {
         let src_idx = result.endmember_sample_indices[ai];
@@ -1989,7 +2016,6 @@ fn write_unmix_endmembers(
             .get(src_idx)
             .cloned()
             .unwrap_or_else(|| format!("sample{src_idx}"));
-        // Rank proteins by |loading| within the endmember.
         let mut ranking: Vec<(usize, f64)> = loading
             .iter()
             .enumerate()
@@ -2001,13 +2027,19 @@ fn write_unmix_endmembers(
             rank_for[*i] = r + 1;
         }
         for (pi, &v) in loading.iter().enumerate() {
+            let (lo, hi) = loading_ci
+                .map(|ci| (ci.lower[ai][pi], ci.upper[ai][pi]))
+                .map(|(a, b)| (format!("{a:.6}"), format!("{b:.6}")))
+                .unwrap_or_else(|| ("NA".into(), "NA".into()));
             buf.push_str(&format!(
-                "E{:03}\t{}\t{}\t{:.6}\t{}\n",
+                "E{:03}\t{}\t{}\t{:.6}\t{}\t{}\t{}\n",
                 ai + 1,
                 source_sid,
                 protein_labels[pi],
                 v,
                 rank_for[pi],
+                lo,
+                hi,
             ));
         }
     }
@@ -2018,18 +2050,35 @@ fn write_unmix_abundances(
     path: &Path,
     result: &UnmixResult,
     subject_ids: &[String],
+    abundance_ci: Option<&AbundanceCi>,
 ) -> Result<()> {
+    // Emit per-endmember `E001, E001_ci_lower, E001_ci_upper, E002, ...`
+    // so downstream code can extract either the point estimate or the
+    // interval by column name.
     let mut buf = String::from("sample_id");
     for ai in 0..result.endmember_loadings.len() {
+        let lbl = format!("E{:03}", ai + 1);
         buf.push('\t');
-        buf.push_str(&format!("E{:03}", ai + 1));
+        buf.push_str(&lbl);
+        buf.push('\t');
+        buf.push_str(&format!("{lbl}_ci_lower"));
+        buf.push('\t');
+        buf.push_str(&format!("{lbl}_ci_upper"));
     }
     buf.push('\n');
     for (si, sid) in subject_ids.iter().enumerate() {
         buf.push_str(sid);
-        for &v in &result.abundances[si] {
+        for (ai, &v) in result.abundances[si].iter().enumerate() {
             buf.push('\t');
             buf.push_str(&format!("{v:.6}"));
+            let (lo, hi) = abundance_ci
+                .map(|ci| (ci.lower[si][ai], ci.upper[si][ai]))
+                .map(|(a, b)| (format!("{a:.6}"), format!("{b:.6}")))
+                .unwrap_or_else(|| ("NA".into(), "NA".into()));
+            buf.push('\t');
+            buf.push_str(&lo);
+            buf.push('\t');
+            buf.push_str(&hi);
         }
         buf.push('\n');
     }

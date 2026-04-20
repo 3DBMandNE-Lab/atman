@@ -493,6 +493,22 @@ pub fn nfindr(
 }
 
 #[derive(Debug, Clone)]
+pub struct LoadingCi {
+    /// `[endmember][feature]` — lower bound.
+    pub lower: Vec<Vec<f64>>,
+    /// `[endmember][feature]` — upper bound.
+    pub upper: Vec<Vec<f64>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AbundanceCi {
+    /// `[subject][endmember]` — lower bound.
+    pub lower: Vec<Vec<f64>>,
+    /// `[subject][endmember]` — upper bound.
+    pub upper: Vec<Vec<f64>>,
+}
+
+#[derive(Debug, Clone)]
 pub struct UnmixResult {
     pub endmember_sample_indices: Vec<usize>,
     /// `[endmember][feature]`.
@@ -634,6 +650,209 @@ pub fn unmix(
         abundances,
         residual_norms: residuals,
     })
+}
+
+/// Sub-seed derivation matching align_bootstrap's scheme: SplitMix64
+/// over `(seed, iter + 1)`. Fixed convention across atman bootstrap
+/// modules so the same top-level `--seed` produces the same iteration
+/// stream everywhere.
+fn bootstrap_sub_seed(seed: u64, iter: usize) -> u64 {
+    let mut z = seed.wrapping_add(0x9E3779B97F4A7C15_u64.wrapping_mul(iter as u64 + 1));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^ (z >> 31)
+}
+
+fn sample_indices_with_replacement(rng: &mut Xoshiro256pp, n: usize) -> Vec<usize> {
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let bound = n as u64;
+        loop {
+            let v = rng.next_normal().to_bits();
+            let limit = u64::MAX - u64::MAX % bound;
+            if v < limit {
+                out.push((v % bound) as usize);
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Subject-level bootstrap CI for both endmember loadings and
+/// per-subject abundances. For each of `n_boot` iterations:
+///
+/// 1. Resample subjects with replacement (deterministic under
+///    `seed`).
+/// 2. Run VCA+FCLS on the resampled matrix to get a bootstrap
+///    endmember matrix `E^(b)`.
+/// 3. Match each PE endmember to its best `|cosine|` counterpart in
+///    `E^(b)`, sign-correcting so the matched loading has positive
+///    inner product with the PE reference.
+/// 4. Re-solve abundances on the **original** subject vectors using
+///    the matched+signed `E^(b)` (so every iteration's abundance
+///    table is indexed by the original subject ordering).
+///
+/// After all iterations, take 2.5% and 97.5% percentiles per element
+/// of the loading/abundance replicates → `LoadingCi` / `AbundanceCi`.
+///
+/// Returns `None` on both when `n_boot == 0`.
+pub fn bootstrap_ci(
+    pe: &UnmixResult,
+    data: &[Vec<f64>],
+    seed: u64,
+    endmember_method: EndmemberMethod,
+    abundance_method: AbundanceMethod,
+    fcls_max_iter: usize,
+    fcls_tol: f64,
+    n_boot: usize,
+) -> Result<(Option<LoadingCi>, Option<AbundanceCi>), String> {
+    if n_boot == 0 {
+        return Ok((None, None));
+    }
+    let k = pe.endmember_loadings.len();
+    let p = if k > 0 { pe.endmember_loadings[0].len() } else { 0 };
+    let n = data.len();
+    if n == 0 || k == 0 || p == 0 {
+        return Ok((None, None));
+    }
+    // Replicate containers: [iter][endmember][feature] and
+    // [iter][subject][endmember].
+    let mut loading_reps: Vec<Vec<Vec<f64>>> = Vec::with_capacity(n_boot);
+    let mut abundance_reps: Vec<Vec<Vec<f64>>> = Vec::with_capacity(n_boot);
+
+    for b in 0..n_boot {
+        let sub_seed = bootstrap_sub_seed(seed, b);
+        let mut rng = Xoshiro256pp::new(sub_seed);
+        let idx = sample_indices_with_replacement(&mut rng, n);
+        let resampled: Vec<Vec<f64>> = idx.iter().map(|&i| data[i].clone()).collect();
+        let boot = match unmix(
+            &resampled,
+            k,
+            sub_seed,
+            endmember_method,
+            abundance_method,
+            fcls_max_iter,
+            fcls_tol,
+        ) {
+            Ok(r) => r,
+            Err(_) => {
+                // A collapsed resample is rare but possible — skip.
+                continue;
+            }
+        };
+        // Match each PE endmember i to the boot endmember j maximizing
+        // |cos(E_pe[i], E_boot[j])|. Allow one-to-one: if two PE
+        // endmembers pick the same boot j, keep the pairing with
+        // higher |cos| and leave the other unmatched.
+        let mut match_for_pe: Vec<Option<usize>> = vec![None; k];
+        let mut match_cos: Vec<f64> = vec![0.0; k];
+        let mut boot_used = vec![false; k];
+        for _ in 0..k {
+            let mut best_i = 0usize;
+            let mut best_j = 0usize;
+            let mut best_abs = -1.0_f64;
+            for i in 0..k {
+                if match_for_pe[i].is_some() {
+                    continue;
+                }
+                for j in 0..k {
+                    if boot_used[j] {
+                        continue;
+                    }
+                    let c = cosine(&pe.endmember_loadings[i], &boot.endmember_loadings[j])
+                        .abs();
+                    if c > best_abs {
+                        best_abs = c;
+                        best_i = i;
+                        best_j = j;
+                    }
+                }
+            }
+            if best_abs >= 0.0 {
+                match_for_pe[best_i] = Some(best_j);
+                match_cos[best_i] = best_abs;
+                boot_used[best_j] = true;
+            }
+        }
+        // Build matched+signed boot endmember matrix [k × p].
+        let mut matched: Vec<Vec<f64>> = vec![Vec::new(); k];
+        for i in 0..k {
+            if let Some(j) = match_for_pe[i] {
+                let mut loading = boot.endmember_loadings[j].clone();
+                // Sign-correct against PE reference.
+                let s = pe.endmember_loadings[i]
+                    .iter()
+                    .zip(loading.iter())
+                    .map(|(a, c)| a * c)
+                    .sum::<f64>();
+                if s < 0.0 {
+                    for v in &mut loading {
+                        *v = -*v;
+                    }
+                }
+                matched[i] = loading;
+            } else {
+                // No match → repeat PE loading so downstream abundance
+                // solve is still well-defined.
+                matched[i] = pe.endmember_loadings[i].clone();
+            }
+        }
+        loading_reps.push(matched.clone());
+        // Abundances on ORIGINAL subjects under matched boot E.
+        let mut boot_abundances: Vec<Vec<f64>> = Vec::with_capacity(n);
+        for x in data {
+            let alpha = match abundance_method {
+                AbundanceMethod::Fcls => fcls(&matched, x, fcls_max_iter, fcls_tol)?,
+                AbundanceMethod::Ucls => ucls(&matched, x)?,
+            };
+            boot_abundances.push(alpha);
+        }
+        abundance_reps.push(boot_abundances);
+    }
+
+    if loading_reps.is_empty() {
+        return Ok((None, None));
+    }
+    // Element-wise 2.5% / 97.5% percentiles over iterations.
+    let pct = |values: &mut Vec<f64>, q: f64| {
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let idx = ((q * (values.len() - 1) as f64).round() as usize).min(values.len() - 1);
+        values[idx]
+    };
+    let mut loading_lo = vec![vec![0.0_f64; p]; k];
+    let mut loading_hi = vec![vec![0.0_f64; p]; k];
+    for ei in 0..k {
+        for fi in 0..p {
+            let mut vals: Vec<f64> = loading_reps.iter().map(|rep| rep[ei][fi]).collect();
+            loading_lo[ei][fi] = pct(&mut vals.clone(), 0.025);
+            loading_hi[ei][fi] = pct(&mut vals, 0.975);
+        }
+    }
+    let mut abundance_lo = vec![vec![0.0_f64; k]; n];
+    let mut abundance_hi = vec![vec![0.0_f64; k]; n];
+    for si in 0..n {
+        for ei in 0..k {
+            let mut vals: Vec<f64> = abundance_reps.iter().map(|rep| rep[si][ei]).collect();
+            abundance_lo[si][ei] = pct(&mut vals.clone(), 0.025);
+            abundance_hi[si][ei] = pct(&mut vals, 0.975);
+        }
+    }
+    Ok((
+        Some(LoadingCi { lower: loading_lo, upper: loading_hi }),
+        Some(AbundanceCi { lower: abundance_lo, upper: abundance_hi }),
+    ))
+}
+
+fn cosine(a: &[f64], b: &[f64]) -> f64 {
+    let dot: f64 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let na: f64 = a.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let nb: f64 = b.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if na > 0.0 && nb > 0.0 {
+        dot / (na * nb)
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]
@@ -788,6 +1007,78 @@ mod tests {
         let alpha = ucls(&e, &x).unwrap();
         assert!((alpha[0] - 0.7).abs() < 1e-6, "got α[0] = {}", alpha[0]);
         assert!((alpha[1] - 0.3).abs() < 1e-6, "got α[1] = {}", alpha[1]);
+    }
+
+    #[test]
+    fn bootstrap_ci_produces_finite_bounds_and_envelops_point_estimate() {
+        let (data, _, _) = planted_unmix_fixture(60, 30, 3, 61);
+        let pe = unmix(
+            &data,
+            3,
+            42,
+            EndmemberMethod::Vca,
+            AbundanceMethod::Fcls,
+            500,
+            1e-8,
+        )
+        .unwrap();
+        let (loading_ci, abundance_ci) = bootstrap_ci(
+            &pe,
+            &data,
+            42,
+            EndmemberMethod::Vca,
+            AbundanceMethod::Fcls,
+            500,
+            1e-8,
+            30,
+        )
+        .unwrap();
+        let lci = loading_ci.unwrap();
+        let aci = abundance_ci.unwrap();
+        assert_eq!(lci.lower.len(), pe.endmember_loadings.len());
+        assert_eq!(aci.lower.len(), pe.abundances.len());
+        // Bounds must be finite and ordered.
+        for ei in 0..pe.endmember_loadings.len() {
+            for fi in 0..pe.endmember_loadings[ei].len() {
+                assert!(lci.lower[ei][fi].is_finite());
+                assert!(lci.upper[ei][fi].is_finite());
+                assert!(lci.lower[ei][fi] <= lci.upper[ei][fi] + 1e-12);
+            }
+        }
+        for si in 0..pe.abundances.len() {
+            for ei in 0..pe.abundances[si].len() {
+                assert!(aci.lower[si][ei].is_finite());
+                assert!(aci.upper[si][ei].is_finite());
+                assert!(aci.lower[si][ei] <= aci.upper[si][ei] + 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn bootstrap_ci_with_n_boot_zero_returns_none() {
+        let (data, _, _) = planted_unmix_fixture(40, 20, 3, 71);
+        let pe = unmix(
+            &data,
+            3,
+            42,
+            EndmemberMethod::Vca,
+            AbundanceMethod::Fcls,
+            300,
+            1e-8,
+        )
+        .unwrap();
+        let (lci, aci) = bootstrap_ci(
+            &pe,
+            &data,
+            42,
+            EndmemberMethod::Vca,
+            AbundanceMethod::Fcls,
+            300,
+            1e-8,
+            0,
+        )
+        .unwrap();
+        assert!(lci.is_none() && aci.is_none());
     }
 
     #[test]
