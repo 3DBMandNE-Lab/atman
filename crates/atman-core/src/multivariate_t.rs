@@ -122,7 +122,7 @@ fn inner_h_m_two_sided(
         let a = (qs - sqrt_rho * w) / sqrt_one_minus_rho;
         let b = (-qs - sqrt_rho * w) / sqrt_one_minus_rho;
         let inner = normal.cdf(a) - normal.cdf(b);
-        let inner = inner.max(0.0).min(1.0);
+        let inner = inner.clamp(0.0, 1.0);
         acc += inner.powf(mf) * wt * 0.5;
     }
     acc
@@ -160,7 +160,7 @@ pub fn pdunnett(q: f64, m: usize, df: f64, rho: f64) -> f64 {
     let mut acc = 0.0;
     for (&t, &wt) in outer_nodes.iter().zip(outer_weights.iter()) {
         let s = half_len * (t + 1.0);
-        if !(s > 0.0) {
+        if !(s.is_finite() && s > 0.0) {
             continue;
         }
         let density = sqrt_chi_density(s, df);
@@ -427,11 +427,11 @@ mod tests {
     fn dunnett_hsu_correlation_matrix_reduces_to_half_in_balanced_case() {
         // Balanced n_i = n_control = 10 → ρ_{ij} = √(100 / (400)) = 0.5.
         let r = dunnett_hsu_correlation_matrix(10, &[10, 10, 10]);
-        for i in 0..3 {
-            assert!((r[i][i] - 1.0).abs() < 1e-12);
-            for j in 0..3 {
+        for (i, row) in r.iter().enumerate() {
+            assert!((row[i] - 1.0).abs() < 1e-12);
+            for (j, &rij) in row.iter().enumerate() {
                 if i != j {
-                    assert!((r[i][j] - 0.5).abs() < 1e-12);
+                    assert!((rij - 0.5).abs() < 1e-12);
                 }
             }
         }

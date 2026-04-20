@@ -67,16 +67,16 @@ fn write_fixture(dir: &Path) {
         // A1
         {
             let mut v = vec![0.0_f64; p];
-            for i in 0..10 {
-                v[i] = 1.0 - (i as f64) * 0.03;
+            for (i, slot) in v.iter_mut().enumerate().take(10) {
+                *slot = 1.0 - (i as f64) * 0.03;
             }
             v
         },
         // A2
         {
             let mut v = vec![0.0_f64; p];
-            for i in 10..20 {
-                v[i] = 1.0 - ((i - 10) as f64) * 0.03;
+            for (offset, slot) in v.iter_mut().skip(10).take(10).enumerate() {
+                *slot = 1.0 - (offset as f64) * 0.03;
             }
             v
         },

@@ -118,7 +118,7 @@ fn write_cptac_canonical(dir: &Path) {
         logs.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let med = if logs.is_empty() {
             0.0
-        } else if logs.len() % 2 == 0 {
+        } else if logs.len().is_multiple_of(2) {
             0.5 * (logs[logs.len() / 2 - 1] + logs[logs.len() / 2])
         } else {
             logs[logs.len() / 2]
@@ -455,8 +455,7 @@ fn msqrob_recovers_ups1_spike_in_on_cptac_study_6() {
         );
     } else {
         eprintln!(
-            "note: msqrob2 reference TSV not present; run Rscript {} to regenerate",
-            "tests/fixtures/msqrob2_cptac_reference.R"
+            "note: msqrob2 reference TSV not present; run Rscript tests/fixtures/msqrob2_cptac_reference.R to regenerate"
         );
     }
 }
@@ -468,7 +467,7 @@ fn median_abs(values: &[f64]) -> f64 {
     let mut abs: Vec<f64> = values.iter().map(|v| v.abs()).collect();
     abs.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mid = abs.len() / 2;
-    if abs.len() % 2 == 0 {
+    if abs.len().is_multiple_of(2) {
         0.5 * (abs[mid - 1] + abs[mid])
     } else {
         abs[mid]

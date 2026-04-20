@@ -75,12 +75,11 @@ pub fn jacobi_eigen(matrix: &[Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
 
     let max_sweeps = 200;
     for _sweep in 0..max_sweeps {
-        let mut off = 0.0_f64;
-        for p in 0..n {
-            for q in (p + 1)..n {
-                off += a[p][q].abs();
-            }
-        }
+        let off: f64 = a
+            .iter()
+            .enumerate()
+            .flat_map(|(p, row)| row.iter().skip(p + 1).map(|v| v.abs()))
+            .sum();
         if off <= 1e-14 * (n as f64) {
             break;
         }
@@ -202,10 +201,7 @@ pub fn pca_whiten(x: &[Vec<f64>], k: usize) -> Whitening {
         let mut gram = vec![vec![0.0_f64; n]; n];
         for i in 0..n {
             for j in i..n {
-                let mut acc = 0.0_f64;
-                for t in 0..p {
-                    acc += xc[i][t] * xc[j][t];
-                }
+                let acc: f64 = xc[i].iter().zip(xc[j].iter()).map(|(a, b)| a * b).sum();
                 gram[i][j] = acc;
                 gram[j][i] = acc;
             }
@@ -353,27 +349,37 @@ pub fn fast_ica(x: &[Vec<f64>], k: usize, seed: u64, max_iter: usize, tol: f64) 
     }
     // unmixing (k x p) = W * whitening
     let p = w.whitening[0].len();
-    let mut unmixing = vec![vec![0.0_f64; p]; k];
-    for c in 0..k {
-        for j in 0..p {
-            let mut acc = 0.0_f64;
-            for t in 0..k {
-                acc += weights[c][t] * w.whitening[t][j];
-            }
-            unmixing[c][j] = acc;
-        }
-    }
+    let unmixing: Vec<Vec<f64>> = weights
+        .iter()
+        .map(|w_row| {
+            (0..p)
+                .map(|j| {
+                    w_row
+                        .iter()
+                        .zip(w.whitening.iter())
+                        .map(|(&wt, white_row)| wt * white_row[j])
+                        .sum()
+                })
+                .collect()
+        })
+        .collect();
     // mixing (p x k) = unwhitening * W^T  (since unwhitening = V * D^{1/2} and W is orthonormal)
-    let mut mixing = vec![vec![0.0_f64; k]; p];
-    for j in 0..p {
-        for c in 0..k {
-            let mut acc = 0.0_f64;
-            for t in 0..k {
-                acc += w.unwhitening[j][t] * weights[c][t];
-            }
-            mixing[j][c] = acc;
-        }
-    }
+    let mixing: Vec<Vec<f64>> = w
+        .unwhitening
+        .iter()
+        .map(|uw_row| {
+            weights
+                .iter()
+                .map(|w_row| {
+                    uw_row
+                        .iter()
+                        .zip(w_row.iter())
+                        .map(|(&u, &v)| u * v)
+                        .sum()
+                })
+                .collect()
+        })
+        .collect();
 
     IcaResult {
         unmixing,
@@ -418,50 +424,55 @@ fn symmetric_decorrelate(w: &mut Vec<Vec<f64>>) {
     let mut wwt = vec![vec![0.0_f64; k]; k];
     for i in 0..k {
         for j in i..k {
-            let mut acc = 0.0_f64;
-            for t in 0..w[0].len() {
-                acc += w[i][t] * w[j][t];
-            }
+            let acc = row_dot(&w[i], &w[j]);
             wwt[i][j] = acc;
             wwt[j][i] = acc;
         }
     }
     let (vals, vecs) = jacobi_eigen(&wwt);
     // (WW^T)^{-1/2} = V diag(1/sqrt(lambda)) V^T
-    let mut inv_sqrt = vec![vec![0.0_f64; k]; k];
-    for i in 0..k {
-        for j in 0..k {
-            let mut acc = 0.0_f64;
-            for t in 0..k {
-                let lam = vals[t].max(1e-18);
-                acc += vecs[i][t] * (1.0 / lam.sqrt()) * vecs[j][t];
-            }
-            inv_sqrt[i][j] = acc;
-        }
-    }
+    let inv_sqrt: Vec<Vec<f64>> = vecs
+        .iter()
+        .map(|vi_row| {
+            vecs.iter()
+                .map(|vj_row| {
+                    vi_row
+                        .iter()
+                        .zip(vj_row.iter())
+                        .zip(vals.iter())
+                        .map(|((vi, vj), &lam)| vi * vj / lam.max(1e-18).sqrt())
+                        .sum()
+                })
+                .collect()
+        })
+        .collect();
     let p = w[0].len();
-    let mut next = vec![vec![0.0_f64; p]; k];
-    for i in 0..k {
-        for j in 0..p {
-            let mut acc = 0.0_f64;
-            for t in 0..k {
-                acc += inv_sqrt[i][t] * w[t][j];
-            }
-            next[i][j] = acc;
-        }
-    }
+    let next: Vec<Vec<f64>> = inv_sqrt
+        .iter()
+        .map(|inv_row| {
+            (0..p)
+                .map(|j| {
+                    inv_row
+                        .iter()
+                        .zip(w.iter())
+                        .map(|(&inv, w_row)| inv * w_row[j])
+                        .sum()
+                })
+                .collect()
+        })
+        .collect();
     *w = next;
 }
 
+fn row_dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
 fn max_identity_deviation(w_new: &[Vec<f64>], w_old: &[Vec<f64>]) -> f64 {
-    let k = w_new.len();
     let mut max_dev = 0.0_f64;
-    for i in 0..k {
-        for j in 0..k {
-            let mut acc = 0.0_f64;
-            for t in 0..w_new[0].len() {
-                acc += w_new[i][t] * w_old[j][t];
-            }
+    for (i, new_row) in w_new.iter().enumerate() {
+        for (j, old_row) in w_old.iter().enumerate() {
+            let acc = row_dot(new_row, old_row);
             let expected = if i == j { 1.0 } else { 0.0 };
             let dev = (acc.abs() - expected).abs();
             if dev > max_dev {
@@ -490,11 +501,10 @@ pub struct CanonicalIca {
 pub fn canonicalize_ica(result: &IcaResult) -> CanonicalIca {
     let k = result.mixing[0].len();
     let p = result.mixing.len();
-    let n = result.sources.len();
 
     let mut signs = vec![1.0_f64; k];
     let mut loadings: Vec<Vec<f64>> = vec![vec![0.0; p]; k];
-    for c in 0..k {
+    for (c, sign) in signs.iter_mut().enumerate() {
         let mut max_abs = 0.0_f64;
         let mut argmax = 0usize;
         for (j, row) in result.mixing.iter().enumerate() {
@@ -504,18 +514,23 @@ pub fn canonicalize_ica(result: &IcaResult) -> CanonicalIca {
             }
         }
         if result.mixing[argmax][c] < 0.0 {
-            signs[c] = -1.0;
+            *sign = -1.0;
         }
-        for j in 0..p {
-            loadings[c][j] = signs[c] * result.mixing[j][c];
-        }
-    }
-    let mut activations: Vec<Vec<f64>> = vec![vec![0.0; n]; k];
-    for c in 0..k {
-        for i in 0..n {
-            activations[c][i] = signs[c] * result.sources[i][c];
+        for (j, slot) in loadings[c].iter_mut().enumerate() {
+            *slot = *sign * result.mixing[j][c];
         }
     }
+    let activations: Vec<Vec<f64>> = signs
+        .iter()
+        .enumerate()
+        .map(|(c, &sign)| {
+            result
+                .sources
+                .iter()
+                .map(|src_row| sign * src_row[c])
+                .collect()
+        })
+        .collect();
     let mut order: Vec<usize> = (0..k).collect();
     order.sort_by(|&a, &b| {
         let ma = loadings[a]

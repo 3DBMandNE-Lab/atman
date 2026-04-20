@@ -98,10 +98,10 @@ fn write_cohort(dir: &Path, drop_last_protein: bool) {
 
     let mut proteins =
         String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
-    for j in 0..n_proteins {
+    for (j, gene) in genes.iter().enumerate().take(n_proteins) {
         proteins.push_str(&format!(
             "olink_explore_ngs\tA{:03}\tQ{:05}\t{}\tP1\t\n",
-            j + 1, j + 1, genes[j]
+            j + 1, j + 1, gene,
         ));
     }
     std::fs::write(dir.join("proteins.tsv"), proteins).unwrap();

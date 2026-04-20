@@ -131,7 +131,7 @@ pub fn combine_stouffer(p_values: &[f64]) -> Option<f64> {
         if !p.is_finite() {
             continue;
         }
-        let p_clamped = p.max(1e-300).min(1.0 - 1e-16);
+        let p_clamped = p.clamp(1e-300, 1.0 - 1e-16);
         z_sum += normal.inverse_cdf(1.0 - p_clamped);
         k += 1;
     }

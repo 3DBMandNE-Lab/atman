@@ -173,7 +173,7 @@ pub fn ptukey(q: f64, n: usize, df: f64) -> f64 {
     let mut acc = 0.0;
     for (&t, &wt) in outer_nodes.iter().zip(outer_weights.iter()) {
         let s = half_len * (t + 1.0);
-        if !(s > 0.0) {
+        if !(s.is_finite() && s > 0.0) {
             continue;
         }
         let density = sqrt_chi_density(s, df);

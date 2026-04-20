@@ -3,7 +3,7 @@ use atman_core::bh_fdr;
 use atman_core::compositional::{apply_transform, Transform};
 use atman_core::decompose_unmix::{
     bootstrap_ci, ora_enrichment, select_k_auto, unmix, AbundanceCi, AbundanceMethod,
-    AnnotationRow, EndmemberMethod, KSweepRow, LoadingCi, UnmixResult,
+    AnnotationRow, EndmemberMethod, KSweepRow, LoadingCi, UnmixConfig, UnmixResult,
 };
 use atman_core::ica::{fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult};
 use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
@@ -217,8 +217,11 @@ fn run_variance(args: VarianceArgs) -> Result<()> {
 
     // Activations: one row per (sample_id, program). Re-shape to
     // per-program per-sample.
-    let (program_by_sample, programs_order, samples_order) =
-        read_activations(&args.activations)?;
+    let ActivationsTable {
+        by_key: program_by_sample,
+        programs_order,
+        samples_order,
+    } = read_activations(&args.activations)?;
     if programs_order.is_empty() {
         bail!("no programs found in {:?}", args.activations);
     }
@@ -229,14 +232,18 @@ fn run_variance(args: VarianceArgs) -> Result<()> {
     // Build the design matrix and fixed-factor column ranges. Only
     // samples that appear in both `activations` and `samples.tsv`
     // are kept, and only samples with finite covariates.
-    let (design, fixed_factors, kept_sample_ids, group_labels) =
-        build_variance_design(
-            &samples,
-            &extras,
-            &fixed_terms,
-            random_group.as_deref(),
-            &samples_order,
-        )?;
+    let VarianceDesign {
+        design,
+        fixed_factors,
+        kept_sample_ids,
+        group_labels,
+    } = build_variance_design(
+        &samples,
+        &extras,
+        &fixed_terms,
+        random_group.as_deref(),
+        &samples_order,
+    )?;
     if design.is_empty() {
         bail!("no samples remain after fixed-covariate complete-case filtering");
     }
@@ -293,7 +300,7 @@ fn run_variance(args: VarianceArgs) -> Result<()> {
             "output": args.output.display().to_string(),
         }),
         &input_dir_sha256,
-        &[args.output.clone()],
+        std::slice::from_ref(&args.output),
         started_at,
         finished_at,
     )?;
@@ -304,7 +311,7 @@ fn run_variance(args: VarianceArgs) -> Result<()> {
 fn parse_variance_formula(formula: &str) -> Result<(Vec<String>, Option<String>)> {
     let mut fixed = Vec::new();
     let mut random: Option<String> = None;
-    for raw in formula.split(|c: char| c == '+' || c == ',') {
+    for raw in formula.split(['+', ',']) {
         let term = raw.trim();
         if term.is_empty() {
             continue;
@@ -381,9 +388,16 @@ fn read_samples_extras(path: &Path) -> Result<BTreeMap<String, BTreeMap<String, 
     Ok(out)
 }
 
-fn read_activations(
-    path: &Path,
-) -> Result<(BTreeMap<(String, String), f64>, Vec<String>, Vec<String>)> {
+struct ActivationsTable {
+    /// `(program, sample) → activation value`.
+    by_key: BTreeMap<(String, String), f64>,
+    /// Stable alphabetical program ordering.
+    programs_order: Vec<String>,
+    /// Sample insertion order as first seen in the TSV.
+    samples_order: Vec<String>,
+}
+
+fn read_activations(path: &Path) -> Result<ActivationsTable> {
     let mut reader = ReaderBuilder::new()
         .delimiter(b'\t')
         .has_headers(true)
@@ -427,19 +441,31 @@ fn read_activations(
         by_key.insert((program, sample), value);
     }
     let programs_order: Vec<String> = programs.into_iter().collect();
-    Ok((by_key, programs_order, samples_order))
+    Ok(ActivationsTable { by_key, programs_order, samples_order })
 }
 
 /// Build the design matrix + per-factor column ranges + per-sample
 /// random-group labels in the order of `samples_order`. Drops samples
 /// whose fixed covariates can't be resolved.
+struct VarianceDesign {
+    /// `[sample][column]` design matrix over retained samples.
+    design: Vec<Vec<f64>>,
+    /// Per-fixed-factor column ranges.
+    fixed_factors: Vec<FixedFactor>,
+    /// Retained sample IDs in row order.
+    kept_sample_ids: Vec<String>,
+    /// Per-retained-sample random-group label; `None` when
+    /// `random_group` is unset.
+    group_labels: Option<Vec<String>>,
+}
+
 fn build_variance_design(
     samples: &[atman_core::Sample],
     extras: &BTreeMap<String, BTreeMap<String, String>>,
     fixed_terms: &[String],
     random_group: Option<&str>,
     samples_order: &[String],
-) -> Result<(Vec<Vec<f64>>, Vec<FixedFactor>, Vec<String>, Option<Vec<String>>)> {
+) -> Result<VarianceDesign> {
     let sample_by_id: BTreeMap<&str, &atman_core::Sample> =
         samples.iter().map(|s| (s.sample_id.as_str(), s)).collect();
 
@@ -581,7 +607,12 @@ fn build_variance_design(
         kept.push(sid.clone());
     }
     let group_labels = if random_group.is_some() { Some(groups) } else { None };
-    Ok((design, fixed_factors, kept, group_labels))
+    Ok(VarianceDesign {
+        design,
+        fixed_factors,
+        kept_sample_ids: kept,
+        group_labels,
+    })
 }
 
 /// 12-decimal float formatter for variance-decomposition outputs so
@@ -891,7 +922,7 @@ fn run_null(args: NullArgs) -> Result<()> {
             "q-threshold": args.q_threshold,
         }),
         &input_dir_sha256,
-        &[args.output.clone()],
+        std::slice::from_ref(&args.output),
         started_at,
         finished_at,
     )?;
@@ -1389,11 +1420,10 @@ fn write_transform_applied(path: &Path, meta: &TransformMeta) -> Result<()> {
 fn canonicalize(result: &IcaResult) -> CanonicalIca {
     let k = result.mixing[0].len();
     let p = result.mixing.len();
-    let n = result.sources.len();
 
     let mut signs = vec![1.0_f64; k];
     let mut loadings: Vec<Vec<f64>> = vec![vec![0.0; p]; k];
-    for c in 0..k {
+    for (c, sign) in signs.iter_mut().enumerate() {
         let mut max_abs = 0.0_f64;
         let mut argmax = 0usize;
         for (j, row) in result.mixing.iter().enumerate() {
@@ -1403,18 +1433,23 @@ fn canonicalize(result: &IcaResult) -> CanonicalIca {
             }
         }
         if result.mixing[argmax][c] < 0.0 {
-            signs[c] = -1.0;
+            *sign = -1.0;
         }
-        for j in 0..p {
-            loadings[c][j] = signs[c] * result.mixing[j][c];
-        }
-    }
-    let mut activations: Vec<Vec<f64>> = vec![vec![0.0; n]; k];
-    for c in 0..k {
-        for i in 0..n {
-            activations[c][i] = signs[c] * result.sources[i][c];
+        for (j, slot) in loadings[c].iter_mut().enumerate() {
+            *slot = *sign * result.mixing[j][c];
         }
     }
+    let activations: Vec<Vec<f64>> = signs
+        .iter()
+        .enumerate()
+        .map(|(c, &sign)| {
+            result
+                .sources
+                .iter()
+                .map(|src_row| sign * src_row[c])
+                .collect()
+        })
+        .collect();
     let mut order: Vec<usize> = (0..k).collect();
     order.sort_by(|&a, &b| {
         let ma = loadings[a]
@@ -1716,7 +1751,11 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
         "raw" => "measurements.tsv",
         other => bail!("--source {other:?}; expected qc or raw"),
     };
-    let (subject_ids, protein_labels, data) = load_subject_protein_matrix(
+    let SubjectProteinMatrix {
+        sample_ids: subject_ids,
+        protein_labels,
+        data,
+    } = load_subject_protein_matrix(
         &args.input_dir.join(source_file),
         args.max_missing_fraction,
         impute_mean,
@@ -1746,14 +1785,19 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
         // early.
         // (The transform below is still the canonical one — we
         // just need it before the sweep runs.)
-        select_k_auto(
-            // placeholder: applied below after transform
-            &data, args.k_min, args.k_max, args.seed,
-            EndmemberMethod::Vca,  // sweep uses VCA; caller can
-                                   // re-run with nfindr post-hoc
+        // Sweep uses VCA; caller can re-run with nfindr post-hoc.
+        let sweep_cfg = UnmixConfig {
+            seed: args.seed,
+            endmember_method: EndmemberMethod::Vca,
             abundance_method,
-            args.fcls_max_iter,
-            args.fcls_tol,
+            fcls_max_iter: args.fcls_max_iter,
+            fcls_tol: args.fcls_tol,
+        };
+        select_k_auto(
+            &data,
+            args.k_min,
+            args.k_max,
+            sweep_cfg,
             args.k_elbow_threshold,
         )
         .map_err(|e| anyhow::anyhow!(e))?
@@ -1807,27 +1851,16 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
     let transformed = apply_transform(&data, transform)
         .map_err(|e| anyhow::anyhow!("transform failed: {e}"))?;
 
-    let result = unmix(
-        &transformed,
-        effective_k,
-        args.seed,
+    let cfg = UnmixConfig {
+        seed: args.seed,
         endmember_method,
         abundance_method,
-        args.fcls_max_iter,
-        args.fcls_tol,
-    )
-    .map_err(|e| anyhow::anyhow!(e))?;
-    let (loading_ci, abundance_ci) = bootstrap_ci(
-        &result,
-        &transformed,
-        args.seed,
-        endmember_method,
-        abundance_method,
-        args.fcls_max_iter,
-        args.fcls_tol,
-        args.n_boot,
-    )
-    .map_err(|e| anyhow::anyhow!(e))?;
+        fcls_max_iter: args.fcls_max_iter,
+        fcls_tol: args.fcls_tol,
+    };
+    let result = unmix(&transformed, effective_k, cfg).map_err(|e| anyhow::anyhow!(e))?;
+    let (loading_ci, abundance_ci) =
+        bootstrap_ci(&result, &transformed, cfg, args.n_boot).map_err(|e| anyhow::anyhow!(e))?;
 
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating {:?}", args.output_dir))?;
@@ -1984,11 +2017,20 @@ fn write_k_selection(path: &Path, rows: &[KSweepRow], chosen_k: usize) -> Result
     atomic_write(path, buf.as_bytes())
 }
 
+struct SubjectProteinMatrix {
+    /// Sample IDs in row order.
+    sample_ids: Vec<String>,
+    /// Retained protein labels in column order.
+    protein_labels: Vec<String>,
+    /// `[sample][protein]` abundance after missingness filter / imputation.
+    data: Vec<Vec<f64>>,
+}
+
 fn load_subject_protein_matrix(
     path: &Path,
     max_missing_fraction: f64,
     impute_mean: bool,
-) -> Result<(Vec<String>, Vec<String>, Vec<Vec<f64>>)> {
+) -> Result<SubjectProteinMatrix> {
     let records = read_measurements_long(path)?;
     let mut samples: BTreeSet<String> = BTreeSet::new();
     let mut genes: BTreeSet<String> = BTreeSet::new();
@@ -2048,21 +2090,18 @@ fn load_subject_protein_matrix(
     let mut data = vec![vec![0.0_f64; kept_genes.len()]; sample_list.len()];
     for (new_gi, gi) in (0..gene_list.len()).filter(|i| keep[*i]).enumerate() {
         // Compute column mean for imputation.
-        let mut sum = 0.0;
-        let mut count = 0usize;
-        for si in 0..sample_list.len() {
-            if raw[si][gi].is_finite() {
-                sum += raw[si][gi];
-                count += 1;
-            }
-        }
+        let column: Vec<f64> = raw.iter().map(|row| row[gi]).collect();
+        let (sum, count) = column
+            .iter()
+            .filter(|v| v.is_finite())
+            .fold((0.0_f64, 0_usize), |(s, n), v| (s + v, n + 1));
         let mean = if count > 0 { sum / count as f64 } else { 0.0 };
-        for si in 0..sample_list.len() {
-            let v = raw[si][gi];
+        for (si, data_row) in data.iter_mut().enumerate() {
+            let v = column[si];
             if v.is_finite() {
-                data[si][new_gi] = v;
+                data_row[new_gi] = v;
             } else if impute_mean {
-                data[si][new_gi] = mean;
+                data_row[new_gi] = mean;
             } else {
                 bail!(
                     "missing value at sample {} protein {}; rerun with --impute mean",
@@ -2072,7 +2111,11 @@ fn load_subject_protein_matrix(
             }
         }
     }
-    Ok((sample_list, kept_genes, data))
+    Ok(SubjectProteinMatrix {
+        sample_ids: sample_list,
+        protein_labels: kept_genes,
+        data,
+    })
 }
 
 fn write_unmix_endmembers(

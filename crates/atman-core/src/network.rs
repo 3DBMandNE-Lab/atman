@@ -86,8 +86,8 @@ pub fn pairwise_similarity(
     }
     let n_features = data.len();
     let mut values = vec![vec![0.0_f64; n_features]; n_features];
-    for i in 0..n_features {
-        values[i][i] = 1.0;
+    for (i, row) in values.iter_mut().enumerate() {
+        row[i] = 1.0;
     }
     for i in 0..n_features {
         for j in (i + 1)..n_features {
@@ -137,12 +137,11 @@ fn pairwise(x: &[f64], y: &[f64], metric: SimilarityMetric) -> f64 {
 pub fn adjacency(similarity: &SimilarityMatrix, policy: AdjacencyPolicy) -> Vec<Vec<f64>> {
     let n = similarity.values.len();
     let mut a = vec![vec![0.0_f64; n]; n];
-    for i in 0..n {
-        for j in 0..n {
+    for (i, sim_row) in similarity.values.iter().enumerate() {
+        for (j, &s) in sim_row.iter().enumerate() {
             if i == j {
                 continue;
             }
-            let s = similarity.values[i][j];
             let w = match policy {
                 AdjacencyPolicy::HardThreshold { threshold } => {
                     if s.abs() >= threshold {
@@ -268,7 +267,7 @@ pub fn betweenness_centrality(adjacency: &[Vec<f64>]) -> Vec<f64> {
                     continue;
                 }
                 let edge = adjacency[v][w];
-                if !(edge > 0.0) {
+                if !(edge.is_finite() && edge > 0.0) {
                     continue;
                 }
                 let alt = d + 1.0 / edge;
@@ -420,21 +419,33 @@ mod tests {
         assert!((adj[0][1] - 0.015625).abs() < 1e-12);
     }
 
+    /// Build a star adjacency matrix: hub at node 0, leaves at 1..n.
+    fn star_adjacency(n: usize) -> Vec<Vec<f64>> {
+        (0..n)
+            .map(|i| {
+                let mut row = vec![0.0_f64; n];
+                if i == 0 {
+                    for v in row.iter_mut().skip(1) {
+                        *v = 1.0;
+                    }
+                } else {
+                    row[0] = 1.0;
+                }
+                row
+            })
+            .collect()
+    }
+
     /// Star topology: hub connected to every leaf, leaves not
     /// connected to each other. Hub's eigenvector centrality must
     /// dominate all leaves.
     #[test]
     fn eigenvector_centrality_finds_star_hub() {
         let n = 5;
-        let mut adj = vec![vec![0.0; n]; n];
-        // Hub is node 0.
-        for i in 1..n {
-            adj[0][i] = 1.0;
-            adj[i][0] = 1.0;
-        }
+        let adj = star_adjacency(n);
         let v = eigenvector_centrality(&adj, 500, 1e-10);
-        for i in 1..n {
-            assert!(v[0] > v[i], "hub {} should exceed leaf {}: {}", v[0], i, v[i]);
+        for (i, &vi) in v.iter().enumerate().skip(1) {
+            assert!(v[0] > vi, "hub {} should exceed leaf {}: {}", v[0], i, vi);
         }
     }
 
@@ -444,19 +455,15 @@ mod tests {
     #[test]
     fn betweenness_centrality_finds_star_hub() {
         let n = 5;
-        let mut adj = vec![vec![0.0; n]; n];
-        for i in 1..n {
-            adj[0][i] = 1.0;
-            adj[i][0] = 1.0;
-        }
+        let adj = star_adjacency(n);
         let bc = betweenness_centrality(&adj);
-        for i in 1..n {
+        for (i, &leaf_bc) in bc.iter().enumerate().skip(1) {
             assert!(
-                bc[0] > bc[i],
+                bc[0] > leaf_bc,
                 "hub bc {} must exceed leaf {} bc {}",
                 bc[0],
                 i,
-                bc[i]
+                leaf_bc,
             );
         }
         // 4 leaves → C(4, 2) = 6 leaf-leaf pairs all routed through
@@ -488,8 +495,8 @@ mod tests {
         let n = 4;
         // Clique (complete graph): symmetric, all identical.
         let mut adj = vec![vec![1.0; n]; n];
-        for i in 0..n {
-            adj[i][i] = 0.0;
+        for (i, row) in adj.iter_mut().enumerate() {
+            row[i] = 0.0;
         }
         let features = (0..n).map(|i| format!("f{i}")).collect::<Vec<_>>();
         let rows = influence_scores(&features, &adj, 500, 1e-10);
@@ -506,11 +513,7 @@ mod tests {
     #[test]
     fn influence_is_deterministic() {
         let n = 5;
-        let mut adj = vec![vec![0.0; n]; n];
-        for i in 1..n {
-            adj[0][i] = 1.0;
-            adj[i][0] = 1.0;
-        }
+        let adj = star_adjacency(n);
         let features = (0..n).map(|i| format!("f{i}")).collect::<Vec<_>>();
         let a = influence_scores(&features, &adj, 500, 1e-10);
         let b = influence_scores(&features, &adj, 500, 1e-10);

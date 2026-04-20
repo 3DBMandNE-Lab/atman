@@ -126,13 +126,13 @@ pub fn compute_tom(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
         out[i][i] = 1.0;
         for j in (i + 1)..p {
             // Σ_{u ≠ i, j} a_iu · a_uj.
-            let mut l_ij = 0.0;
-            for u in 0..p {
-                if u == i || u == j {
-                    continue;
-                }
-                l_ij += a[i][u] * a[u][j];
-            }
+            let l_ij: f64 = a[i]
+                .iter()
+                .zip(a.iter())
+                .enumerate()
+                .filter(|&(u, _)| u != i && u != j)
+                .map(|(_, (&aiu, row_u))| aiu * row_u[j])
+                .sum();
             let num = l_ij + a[i][j];
             let den = k[i].min(k[j]) + 1.0 - a[i][j];
             let tom = if den > 0.0 { num / den } else { 0.0 };
@@ -169,10 +169,9 @@ pub fn scale_free_r_squared(a: &[Vec<f64>], n_bins: usize) -> (f64, f64, f64) {
         return (0.0, 0.0, mean_k);
     }
     let mut counts = vec![0usize; n_bins];
-    let mut bin_centers = vec![0.0_f64; n_bins];
-    for b in 0..n_bins {
-        bin_centers[b] = ((log_lo + (b as f64 + 0.5) * width)).exp();
-    }
+    let bin_centers: Vec<f64> = (0..n_bins)
+        .map(|b| (log_lo + (b as f64 + 0.5) * width).exp())
+        .collect();
     for &k in &ks {
         if k <= 0.0 {
             continue;
@@ -262,15 +261,15 @@ pub fn upgma(dissim: &[Vec<f64>]) -> Vec<(usize, usize, f64, usize)> {
     let mut sizes: Vec<usize> = vec![1; p];
     let mut next_id = p;
     // Distance matrix indexed by active position.
-    let mut d: Vec<Vec<f64>> = dissim.iter().map(|row| row.clone()).collect();
+    let mut d: Vec<Vec<f64>> = dissim.to_vec();
     let mut merges = Vec::with_capacity(p.saturating_sub(1));
     while active.len() > 1 {
         // Find the smallest off-diagonal distance.
         let (mut a, mut b, mut best) = (0usize, 1usize, f64::INFINITY);
-        for i in 0..active.len() {
-            for j in (i + 1)..active.len() {
-                if d[i][j] < best {
-                    best = d[i][j];
+        for (i, row) in d.iter().enumerate() {
+            for (j, &dij) in row.iter().enumerate().skip(i + 1) {
+                if dij < best {
+                    best = dij;
                     a = i;
                     b = j;
                 }
@@ -480,24 +479,14 @@ fn eigenprotein_pc1_variance_explained(data: &[Vec<f64>], members: &[usize]) -> 
     // Center columns.
     let mut x = vec![vec![0.0_f64; m]; n];
     for (j, &mi) in members.iter().enumerate() {
-        let mut sum = 0.0;
-        for i in 0..n {
-            sum += data[i][mi];
-        }
+        let sum: f64 = data.iter().map(|row| row[mi]).sum();
         let mean = sum / n as f64;
-        for i in 0..n {
-            x[i][j] = data[i][mi] - mean;
+        for (xi_row, data_row) in x.iter_mut().zip(data.iter()) {
+            xi_row[j] = data_row[mi] - mean;
         }
     }
     // Total variance = trace(XᵀX) / (n − 1).
-    let mut total = 0.0;
-    for j in 0..m {
-        let mut s = 0.0;
-        for i in 0..n {
-            s += x[i][j] * x[i][j];
-        }
-        total += s;
-    }
+    let total: f64 = x.iter().map(|row| row.iter().map(|v| v * v).sum::<f64>()).sum();
     if total <= 0.0 {
         return 0.0;
     }
@@ -505,22 +494,14 @@ fn eigenprotein_pc1_variance_explained(data: &[Vec<f64>], members: &[usize]) -> 
     let mut v = vec![1.0_f64 / (m as f64).sqrt(); m];
     for _ in 0..80 {
         // u = X v
-        let mut u = vec![0.0_f64; n];
-        for i in 0..n {
-            let mut s = 0.0;
-            for j in 0..m {
-                s += x[i][j] * v[j];
-            }
-            u[i] = s;
-        }
+        let u: Vec<f64> = x
+            .iter()
+            .map(|row| row.iter().zip(v.iter()).map(|(a, b)| a * b).sum())
+            .collect();
         // v_new = Xᵀ u
         let mut v_new = vec![0.0_f64; m];
-        for j in 0..m {
-            let mut s = 0.0;
-            for i in 0..n {
-                s += x[i][j] * u[i];
-            }
-            v_new[j] = s;
+        for (j, vj) in v_new.iter_mut().enumerate() {
+            *vj = x.iter().zip(u.iter()).map(|(row, &ui)| row[j] * ui).sum();
         }
         let norm = v_new.iter().map(|v| v * v).sum::<f64>().sqrt();
         if norm == 0.0 {
@@ -540,14 +521,10 @@ fn eigenprotein_pc1_variance_explained(data: &[Vec<f64>], members: &[usize]) -> 
         }
     }
     // Eigenvalue = v' XᵀX v = ||X v||².
-    let mut u = vec![0.0_f64; n];
-    for i in 0..n {
-        let mut s = 0.0;
-        for j in 0..m {
-            s += x[i][j] * v[j];
-        }
-        u[i] = s;
-    }
+    let u: Vec<f64> = x
+        .iter()
+        .map(|row| row.iter().zip(v.iter()).map(|(a, b)| a * b).sum())
+        .collect();
     let pc1_var = u.iter().map(|v| v * v).sum::<f64>();
     if total > 0.0 {
         (pc1_var / total).clamp(0.0, 1.0)
@@ -596,17 +573,17 @@ mod tests {
             (-2.0_f64 * u.ln()).sqrt() * (2.0 * std::f64::consts::PI * v).cos()
         };
         let mut data = vec![vec![0.0_f64; p]; n];
-        for i in 0..n {
+        for row in data.iter_mut() {
             let z1 = next();
             let z2 = next();
-            for j in 0..block {
-                data[i][j] = 2.0 * z1 + 0.3 * next();
+            for slot in row.iter_mut().take(block) {
+                *slot = 2.0 * z1 + 0.3 * next();
             }
-            for j in 0..block {
-                data[i][block + j] = 2.0 * z2 + 0.3 * next();
+            for slot in row.iter_mut().skip(block).take(block) {
+                *slot = 2.0 * z2 + 0.3 * next();
             }
-            for j in 0..noise {
-                data[i][2 * block + j] = next();
+            for slot in row.iter_mut().skip(2 * block).take(noise) {
+                *slot = next();
             }
         }
         let labels: Vec<String> = (0..p).map(|j| format!("F{j:03}")).collect();

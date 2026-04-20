@@ -39,7 +39,7 @@ pub fn find_col(headers: &StringRecord, names: &[&str]) -> Option<usize> {
 }
 
 /// Fetch an optional cell value, treating empty strings as absent.
-pub fn optional_cell<'a>(row: &'a StringRecord, col: Option<usize>) -> Option<&'a str> {
+pub fn optional_cell(row: &StringRecord, col: Option<usize>) -> Option<&str> {
     col.and_then(|idx| row.get(idx))
         .filter(|value| !value.is_empty())
 }

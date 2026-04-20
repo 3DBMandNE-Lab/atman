@@ -179,7 +179,7 @@ fn write_meta_sidecar(
             "report": args.report,
         }),
         &input_dir_sha256,
-        &[args.output.clone()],
+        std::slice::from_ref(&args.output),
         started_at,
         finished_at,
     )?;

@@ -351,7 +351,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
             "output": args.output.display().to_string(),
         }),
         &input_dir_sha256,
-        &[args.output.clone()],
+        std::slice::from_ref(&args.output),
         started_at,
         finished_at,
     )?;
@@ -695,7 +695,7 @@ fn run_programs(args: ProgramsArgs) -> Result<()> {
             "output-matrix": args.output_matrix.as_ref().map(|p| p.display().to_string()),
         }),
         &input_dir_sha256,
-        &[primary_output.clone()],
+        std::slice::from_ref(&primary_output),
         started_at,
         finished_at,
     )?;
@@ -883,7 +883,7 @@ fn parse_sweep_spec(spec: &str) -> Result<Vec<SweepCell>> {
         if block.is_empty() {
             continue;
         }
-        let parts = split_top_level(&block, ':');
+        let parts = split_top_level(block, ':');
         let metric_name = parts.first().cloned().unwrap_or_default();
         let metric = AlignMetric::parse(&metric_name)
             .with_context(|| format!("unknown metric {:?} in --metrics", metric_name))?;
@@ -1079,9 +1079,15 @@ fn parse_atlas_loadings(
     Ok(out)
 }
 
-fn read_atlas_archetypes(
-    path: &Path,
-) -> Result<Vec<(String, String, String, usize, usize)>> {
+struct AtlasArchetypeRow {
+    archetype_id: String,
+    cohort: String,
+    program: String,
+    n_members: usize,
+    n_cohorts: usize,
+}
+
+fn read_atlas_archetypes(path: &Path) -> Result<Vec<AtlasArchetypeRow>> {
     let mut reader = ReaderBuilder::new()
         .delimiter(b'\t')
         .has_headers(true)
@@ -1102,13 +1108,13 @@ fn read_atlas_archetypes(
     let mut out = Vec::new();
     for row in reader.records() {
         let row = row?;
-        out.push((
-            row[id].to_string(),
-            row[cohort].to_string(),
-            row[program].to_string(),
-            row[n_members].parse().unwrap_or(0),
-            row[n_cohorts].parse().unwrap_or(0),
-        ));
+        out.push(AtlasArchetypeRow {
+            archetype_id: row[id].to_string(),
+            cohort: row[cohort].to_string(),
+            program: row[program].to_string(),
+            n_members: row[n_members].parse().unwrap_or(0),
+            n_cohorts: row[n_cohorts].parse().unwrap_or(0),
+        });
     }
     Ok(out)
 }
@@ -1187,17 +1193,17 @@ fn run_project(args: ProjectArgs) -> Result<()> {
         per_cohort_programs.keys().cloned().collect();
     let mut by_archetype: BTreeMap<String, Vec<(String, String, usize, usize)>> =
         BTreeMap::new();
-    for (id, cohort, program, n_members, n_cohorts) in archetype_rows {
-        if !known_cohorts.contains(&cohort) {
+    for row in archetype_rows {
+        if !known_cohorts.contains(&row.cohort) {
             // Silently drop — the archetype may have member programs
             // from cohorts we didn't pass, in which case we'd be
             // averaging an incomplete set.
             continue;
         }
         by_archetype
-            .entry(id)
+            .entry(row.archetype_id)
             .or_default()
-            .push((cohort, program, n_members, n_cohorts));
+            .push((row.cohort, row.program, row.n_members, row.n_cohorts));
     }
     if by_archetype.is_empty() {
         bail!(

@@ -221,7 +221,7 @@ mod tests {
             "decompose ica",
             json!({"k": 2, "seed": 20260418}),
             "deadbeef",
-            &[out.clone()],
+            std::slice::from_ref(&out),
             t0,
             t1,
         )

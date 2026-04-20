@@ -355,12 +355,11 @@ fn multi_group_f_test_populates_f_columns() {
     let mut samples = String::from(
         "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n",
     );
-    for gi in 0..3 {
+    for (gi, group) in groups.iter().enumerate() {
         for si in 0..n_per {
             let i = gi * n_per + si + 1;
             samples.push_str(&format!(
-                "S{i:02}\tS{i:02}\t{}\t0\tplasma\t{i}\n",
-                groups[gi]
+                "S{i:02}\tS{i:02}\t{group}\t0\tplasma\t{i}\n",
             ));
         }
     }

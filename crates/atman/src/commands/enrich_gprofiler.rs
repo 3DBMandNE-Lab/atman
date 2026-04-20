@@ -219,7 +219,7 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
             "output": args.output.display().to_string(),
         }),
         &input_dir_sha256,
-        &[args.output.clone()],
+        std::slice::from_ref(&args.output),
         started_at,
         finished_at,
     )?;

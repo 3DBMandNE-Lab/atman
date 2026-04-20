@@ -282,7 +282,7 @@ pub fn fit_msqrob(
             abs_r.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let mad = if abs_r.is_empty() {
                 0.0
-            } else if abs_r.len() % 2 == 0 {
+            } else if abs_r.len().is_multiple_of(2) {
                 0.5 * (abs_r[abs_r.len() / 2 - 1] + abs_r[abs_r.len() / 2])
             } else {
                 abs_r[abs_r.len() / 2]
@@ -314,8 +314,8 @@ pub fn fit_msqrob(
                     }
                 }
             }
-            for j in 1..p {
-                xtwx[j][j] += ridge_lambda;
+            for (j, row) in xtwx.iter_mut().enumerate().skip(1) {
+                row[j] += ridge_lambda;
             }
             let Some(l) = cholesky_lower(&xtwx) else {
                 break;
@@ -519,8 +519,8 @@ fn penalized_gls_fit(
     }
     // Add ridge to non-intercept diagonal. Convention: column 0 is the
     // intercept and is never penalized.
-    for j in 1..p {
-        xtvix[j][j] += ridge_lambda;
+    for (j, row) in xtvix.iter_mut().enumerate().skip(1) {
+        row[j] += ridge_lambda;
     }
 
     let l = cholesky_lower(&xtvix)?;

@@ -71,8 +71,7 @@ fn write_peptide_fixture(dir: &Path) {
     for sample in 1..=12usize {
         let is_b = sample > 6;
         for (prot_prefix, condition_effect) in [("UP", 1.5), ("DN", -1.5), ("ST", 0.0)] {
-            for k in 0..4usize {
-                let offset = peptide_offsets[k];
+            for (k, &offset) in peptide_offsets.iter().enumerate() {
                 let shift = if is_b { condition_effect } else { 0.0 };
                 let noise = ((sample * 13 + k * 7) as f64).sin() * 0.03;
                 let abund = 10.0 + offset + shift + noise;

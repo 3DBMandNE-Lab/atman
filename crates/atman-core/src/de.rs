@@ -904,7 +904,7 @@ pub fn contrast_inference(
     if design[0].len() != p || contrast_weights.len() != p {
         return None;
     }
-    if !(df.is_finite() && df > 0.0) || !sigma2.is_finite() || sigma2 < 0.0 {
+    if !df.is_finite() || df <= 0.0 || !sigma2.is_finite() || sigma2 < 0.0 {
         return None;
     }
     // Rebuild XᵀX (p × p).
@@ -1019,7 +1019,7 @@ pub fn omnibus_f_test(
     let l = cholesky_lower(&xtx)?;
     // Build (XᵀX)⁻¹ column-by-column from L.
     let mut inv = vec![vec![0.0_f64; p]; p];
-    for target in 0..p {
+    (0..p).for_each(|target| {
         let mut z = vec![0.0_f64; p];
         for i in 0..p {
             let mut sum = if i == target { 1.0 } else { 0.0 };
@@ -1036,10 +1036,10 @@ pub fn omnibus_f_test(
             }
             col[i] = sum / l[i][i];
         }
-        for i in 0..p {
-            inv[i][target] = col[i];
+        for (i, row) in inv.iter_mut().enumerate() {
+            row[target] = col[i];
         }
-    }
+    });
     // Extract principal submatrix at factor_columns.
     let k = factor_columns.len();
     let mut a_ss = vec![vec![0.0_f64; k]; k];

@@ -138,7 +138,7 @@ pub fn run(args: Args) -> Result<()> {
                 "strict": args.strict,
             }),
             &input_dir_sha256,
-            &[path.clone()],
+            std::slice::from_ref(path),
             started_at,
             finished_at,
         )?;

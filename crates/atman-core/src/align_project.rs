@@ -193,10 +193,10 @@ pub fn project(
     }
     // AᵀA: k × k.
     let mut ata = vec![vec![0.0_f64; k]; k];
-    for pi in 0..p_atlas {
-        for i in 0..k {
-            for j in 0..k {
-                ata[i][j] += a_mat[pi][i] * a_mat[pi][j];
+    for row in &a_mat {
+        for (i, &ri) in row.iter().enumerate() {
+            for (j, &rj) in row.iter().enumerate() {
+                ata[i][j] += ri * rj;
             }
         }
     }
@@ -210,8 +210,8 @@ pub fn project(
             l
         }
     };
-    for i in 0..k {
-        ata[i][i] += lambda;
+    for (i, row) in ata.iter_mut().enumerate() {
+        row[i] += lambda;
     }
     let chol = cholesky_lower(&ata).ok_or_else(|| {
         "AᵀA not positive-definite; try --projection ridge with λ > 0".to_string()
@@ -312,8 +312,8 @@ mod tests {
         let coefs = [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]];
         let mut abundance = vec![vec![0.0_f64; atlas.protein_labels.len()]; subject_ids.len()];
         for (si, c) in coefs.iter().enumerate() {
-            for pi in 0..atlas.protein_labels.len() {
-                abundance[si][pi] = c[0] * atlas.loadings[0][pi] + c[1] * atlas.loadings[1][pi];
+            for (pi, slot) in abundance[si].iter_mut().enumerate() {
+                *slot = c[0] * atlas.loadings[0][pi] + c[1] * atlas.loadings[1][pi];
             }
         }
         (atlas, cohort_labels, subject_ids, abundance)

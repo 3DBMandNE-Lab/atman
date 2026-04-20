@@ -37,6 +37,23 @@ fn derive_sub_seed(seed: u64, iter: usize) -> u64 {
     z ^ (z >> 31)
 }
 
+/// In-place modified Gram-Schmidt: subtract from `w` its projection
+/// onto each non-zero basis vector in `basis`. Skips degenerate
+/// (zero-norm) basis vectors so the orthogonalization is robust to
+/// linearly-dependent inputs.
+fn orthogonalize_against(w: &mut [f64], basis: &[Vec<f64>]) {
+    for v in basis {
+        let v_norm_sq = dot_product(v, v);
+        if v_norm_sq <= 0.0 {
+            continue;
+        }
+        let coef = dot_product(w, v) / v_norm_sq;
+        for (wi, vi) in w.iter_mut().zip(v.iter()) {
+            *wi -= coef * vi;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VcaResult {
     /// Sample indices of the selected endmembers in the original
@@ -137,34 +154,15 @@ pub fn vca(data: &[Vec<f64>], k: usize, seed: u64) -> Result<VcaResult, String> 
         let sub_seed = derive_sub_seed(seed, step + 1);
         let mut rng2 = Xoshiro256pp::new(sub_seed);
         let mut w = (0..p).map(|_| rng2.next_normal()).collect::<Vec<f64>>();
-        for v in &a {
-            let dot = dot_product(&w, v);
-            let v_norm_sq = dot_product(v, v);
-            if v_norm_sq <= 0.0 {
-                continue;
-            }
-            let coef = dot / v_norm_sq;
-            for i in 0..p {
-                w[i] -= coef * v[i];
-            }
-        }
+        orthogonalize_against(&mut w, &a);
         let w_norm = dot_product(&w, &w).sqrt();
         if w_norm <= 1e-15 {
             // Degenerate — fall back to a canonical basis direction
             // we haven't fully consumed yet.
-            for f in 0..p {
-                w[f] = ((f + step) as f64).sin();
+            for (f, wf) in w.iter_mut().enumerate() {
+                *wf = ((f + step) as f64).sin();
             }
-            for v in &a {
-                let dot = dot_product(&w, v);
-                let v_norm_sq = dot_product(v, v);
-                if v_norm_sq > 0.0 {
-                    let coef = dot / v_norm_sq;
-                    for i in 0..p {
-                        w[i] -= coef * v[i];
-                    }
-                }
-            }
+            orthogonalize_against(&mut w, &a);
             let nn = dot_product(&w, &w).sqrt();
             if nn > 1e-15 {
                 for v in &mut w {
@@ -246,22 +244,14 @@ pub fn ucls(e: &[Vec<f64>], x: &[f64]) -> Result<Vec<f64>, String> {
     let mut atb = vec![0.0_f64; k];
     for i in 0..k {
         for j in 0..k {
-            let mut acc = 0.0;
-            for f in 0..p {
-                acc += e[i][f] * e[j][f];
-            }
-            ata[i][j] = acc;
+            ata[i][j] = dot_product(&e[i], &e[j]);
         }
-        let mut acc = 0.0;
-        for f in 0..p {
-            acc += e[i][f] * x[f];
-        }
-        atb[i] = acc;
+        atb[i] = dot_product(&e[i], x);
     }
     let trace: f64 = (0..k).map(|i| ata[i][i]).sum();
     let lambda = (trace / k as f64).max(1e-12) * 1e-10;
-    for i in 0..k {
-        ata[i][i] += lambda;
+    for (i, row) in ata.iter_mut().enumerate() {
+        row[i] += lambda;
     }
     let l = cholesky_lower(&ata).ok_or_else(|| "UCLS: EᵀE not SPD".to_string())?;
     Ok(solve_cholesky(&l, &atb))
@@ -287,17 +277,9 @@ pub fn fcls(e: &[Vec<f64>], x: &[f64], max_iter: usize, tol: f64) -> Result<Vec<
     let mut atb = vec![0.0_f64; k];
     for i in 0..k {
         for j in 0..k {
-            let mut acc = 0.0;
-            for f in 0..p {
-                acc += e[i][f] * e[j][f];
-            }
-            ata[i][j] = acc;
+            ata[i][j] = dot_product(&e[i], &e[j]);
         }
-        let mut acc = 0.0;
-        for f in 0..p {
-            acc += e[i][f] * x[f];
-        }
-        atb[i] = acc;
+        atb[i] = dot_product(&e[i], x);
     }
     // Lipschitz bound for projected gradient: 2 · λ_max(EᵀE).
     // Cheap safe estimate: 2 · sum of absolute row sums (Gershgorin).
@@ -310,14 +292,11 @@ pub fn fcls(e: &[Vec<f64>], x: &[f64], max_iter: usize, tol: f64) -> Result<Vec<
     let mut alpha = vec![1.0 / k as f64; k];
     for _ in 0..max_iter {
         // grad = 2 (EᵀE α − Eᵀx).
-        let mut grad = vec![0.0_f64; k];
-        for i in 0..k {
-            let mut acc = 0.0;
-            for j in 0..k {
-                acc += ata[i][j] * alpha[j];
-            }
-            grad[i] = 2.0 * (acc - atb[i]);
-        }
+        let grad: Vec<f64> = ata
+            .iter()
+            .zip(atb.iter())
+            .map(|(row, &b)| 2.0 * (dot_product(row, &alpha) - b))
+            .collect();
         let candidate: Vec<f64> = alpha
             .iter()
             .zip(grad.iter())
@@ -419,21 +398,15 @@ pub fn simplex_gram_determinant(endmembers: &[Vec<f64>]) -> f64 {
     let mut g = vec![vec![0.0_f64; km1]; km1];
     for i in 0..km1 {
         for j in 0..km1 {
-            let mut s = 0.0;
-            for q in 0..p {
-                s += d[i][q] * d[j][q];
-            }
-            g[i][j] = s;
+            g[i][j] = dot_product(&d[i], &d[j]);
         }
     }
     match cholesky_lower(&g) {
-        Some(l) => {
-            let mut det = 1.0;
-            for i in 0..km1 {
-                det *= l[i][i] * l[i][i];
-            }
-            det
-        }
+        Some(l) => l
+            .iter()
+            .enumerate()
+            .map(|(i, row)| row[i] * row[i])
+            .product(),
         None => 0.0,
     }
 }
@@ -453,13 +426,12 @@ pub fn nfindr(
     let mut selected = vca_result.endmember_sample_indices;
     let mut loadings = vca_result.endmember_loadings;
     let mut current_vol = simplex_gram_determinant(&loadings);
-    let n = data.len();
     for _ in 0..max_passes {
         let mut changed = false;
         for slot in 0..k {
             let mut best_idx = selected[slot];
             let mut best_vol = current_vol;
-            for s in 0..n {
+            for (s, sample) in data.iter().enumerate() {
                 if selected
                     .iter()
                     .enumerate()
@@ -467,7 +439,7 @@ pub fn nfindr(
                 {
                     continue;
                 }
-                let old_loading = std::mem::replace(&mut loadings[slot], data[s].clone());
+                let old_loading = std::mem::replace(&mut loadings[slot], sample.clone());
                 let candidate_vol = simplex_gram_determinant(&loadings);
                 if candidate_vol > best_vol {
                     best_vol = candidate_vol;
@@ -538,11 +510,7 @@ pub fn select_k_auto(
     data: &[Vec<f64>],
     k_min: usize,
     k_max: usize,
-    seed: u64,
-    endmember_method: EndmemberMethod,
-    abundance_method: AbundanceMethod,
-    fcls_max_iter: usize,
-    fcls_tol: f64,
+    cfg: UnmixConfig,
     elbow_threshold: f64,
 ) -> Result<(usize, Vec<KSweepRow>), String> {
     if k_min < 2 || k_max < k_min {
@@ -556,15 +524,7 @@ pub fn select_k_auto(
     }
     let mut residuals: Vec<(usize, f64)> = Vec::with_capacity(k_max - k_min + 1);
     for k in k_min..=k_max {
-        let result = unmix(
-            data,
-            k,
-            seed,
-            endmember_method,
-            abundance_method,
-            fcls_max_iter,
-            fcls_tol,
-        )?;
+        let result = unmix(data, k, cfg)?;
         let n = result.residual_norms.len();
         let mean = if n > 0 {
             result.residual_norms.iter().sum::<f64>() / n as f64
@@ -608,39 +568,51 @@ pub fn select_k_auto(
     Ok((chosen, rows))
 }
 
+/// Algorithm configuration for `unmix` and its callers
+/// (`select_k_auto`, `bootstrap_ci`). Bundles the five parameters
+/// that describe *how* to unmix — `k` and the data matrix are kept
+/// positional because they vary per call; everything else is stable
+/// across a sweep or bootstrap run.
+#[derive(Debug, Clone, Copy)]
+pub struct UnmixConfig {
+    pub seed: u64,
+    pub endmember_method: EndmemberMethod,
+    pub abundance_method: AbundanceMethod,
+    pub fcls_max_iter: usize,
+    pub fcls_tol: f64,
+}
+
 /// End-to-end: endmember extraction (VCA or N-FINDR) → abundance
 /// estimation → per-sample reconstruction residual.
 pub fn unmix(
     data: &[Vec<f64>],
     k: usize,
-    seed: u64,
-    endmember_method: EndmemberMethod,
-    abundance_method: AbundanceMethod,
-    fcls_max_iter: usize,
-    fcls_tol: f64,
+    cfg: UnmixConfig,
 ) -> Result<UnmixResult, String> {
-    let vca_result = match endmember_method {
-        EndmemberMethod::Vca => vca(data, k, seed)?,
-        EndmemberMethod::Nfindr { max_passes } => nfindr(data, k, seed, max_passes)?,
+    let vca_result = match cfg.endmember_method {
+        EndmemberMethod::Vca => vca(data, k, cfg.seed)?,
+        EndmemberMethod::Nfindr { max_passes } => nfindr(data, k, cfg.seed, max_passes)?,
     };
     let p = data[0].len();
     let n = data.len();
     let mut abundances = Vec::with_capacity(n);
     let mut residuals = Vec::with_capacity(n);
     for x in data {
-        let alpha = match abundance_method {
-            AbundanceMethod::Fcls => fcls(&vca_result.endmember_loadings, x, fcls_max_iter, fcls_tol)?,
+        let alpha = match cfg.abundance_method {
+            AbundanceMethod::Fcls => fcls(&vca_result.endmember_loadings, x, cfg.fcls_max_iter, cfg.fcls_tol)?,
             AbundanceMethod::Ucls => ucls(&vca_result.endmember_loadings, x)?,
         };
         // Reconstruction residual ||x - Eα||.
-        let mut r = 0.0;
-        for f in 0..p {
-            let mut pred = 0.0;
-            for (i, &a) in alpha.iter().enumerate() {
-                pred += a * vca_result.endmember_loadings[i][f];
-            }
-            r += (x[f] - pred).powi(2);
-        }
+        let r: f64 = (0..p)
+            .map(|f| {
+                let pred: f64 = alpha
+                    .iter()
+                    .zip(vca_result.endmember_loadings.iter())
+                    .map(|(&a, e)| a * e[f])
+                    .sum();
+                (x[f] - pred).powi(2)
+            })
+            .sum();
         abundances.push(alpha);
         residuals.push(r.sqrt());
     }
@@ -700,13 +672,10 @@ fn sample_indices_with_replacement(rng: &mut Xoshiro256pp, n: usize) -> Vec<usiz
 pub fn bootstrap_ci(
     pe: &UnmixResult,
     data: &[Vec<f64>],
-    seed: u64,
-    endmember_method: EndmemberMethod,
-    abundance_method: AbundanceMethod,
-    fcls_max_iter: usize,
-    fcls_tol: f64,
+    cfg: UnmixConfig,
     n_boot: usize,
 ) -> Result<(Option<LoadingCi>, Option<AbundanceCi>), String> {
+    let seed = cfg.seed;
     if n_boot == 0 {
         return Ok((None, None));
     }
@@ -726,15 +695,8 @@ pub fn bootstrap_ci(
         let mut rng = Xoshiro256pp::new(sub_seed);
         let idx = sample_indices_with_replacement(&mut rng, n);
         let resampled: Vec<Vec<f64>> = idx.iter().map(|&i| data[i].clone()).collect();
-        let boot = match unmix(
-            &resampled,
-            k,
-            sub_seed,
-            endmember_method,
-            abundance_method,
-            fcls_max_iter,
-            fcls_tol,
-        ) {
+        let sub_cfg = UnmixConfig { seed: sub_seed, ..cfg };
+        let boot = match unmix(&resampled, k, sub_cfg) {
             Ok(r) => r,
             Err(_) => {
                 // A collapsed resample is rare but possible — skip.
@@ -752,16 +714,15 @@ pub fn bootstrap_ci(
             let mut best_i = 0usize;
             let mut best_j = 0usize;
             let mut best_abs = -1.0_f64;
-            for i in 0..k {
+            for (i, pe_load) in pe.endmember_loadings.iter().enumerate() {
                 if match_for_pe[i].is_some() {
                     continue;
                 }
-                for j in 0..k {
+                for (j, boot_load) in boot.endmember_loadings.iter().enumerate() {
                     if boot_used[j] {
                         continue;
                     }
-                    let c = cosine(&pe.endmember_loadings[i], &boot.endmember_loadings[j])
-                        .abs();
+                    let c = cosine(pe_load, boot_load).abs();
                     if c > best_abs {
                         best_abs = c;
                         best_i = i;
@@ -776,34 +737,37 @@ pub fn bootstrap_ci(
             }
         }
         // Build matched+signed boot endmember matrix [k × p].
-        let mut matched: Vec<Vec<f64>> = vec![Vec::new(); k];
-        for i in 0..k {
-            if let Some(j) = match_for_pe[i] {
-                let mut loading = boot.endmember_loadings[j].clone();
-                // Sign-correct against PE reference.
-                let s = pe.endmember_loadings[i]
-                    .iter()
-                    .zip(loading.iter())
-                    .map(|(a, c)| a * c)
-                    .sum::<f64>();
-                if s < 0.0 {
-                    for v in &mut loading {
-                        *v = -*v;
+        let matched: Vec<Vec<f64>> = match_for_pe
+            .iter()
+            .copied()
+            .zip(pe.endmember_loadings.iter())
+            .map(|(slot, pe_load)| match slot {
+                Some(j) => {
+                    let mut loading = boot.endmember_loadings[j].clone();
+                    // Sign-correct against PE reference.
+                    let s = pe_load
+                        .iter()
+                        .zip(loading.iter())
+                        .map(|(a, c)| a * c)
+                        .sum::<f64>();
+                    if s < 0.0 {
+                        for v in &mut loading {
+                            *v = -*v;
+                        }
                     }
+                    loading
                 }
-                matched[i] = loading;
-            } else {
                 // No match → repeat PE loading so downstream abundance
                 // solve is still well-defined.
-                matched[i] = pe.endmember_loadings[i].clone();
-            }
-        }
+                None => pe_load.clone(),
+            })
+            .collect();
         loading_reps.push(matched.clone());
         // Abundances on ORIGINAL subjects under matched boot E.
         let mut boot_abundances: Vec<Vec<f64>> = Vec::with_capacity(n);
         for x in data {
-            let alpha = match abundance_method {
-                AbundanceMethod::Fcls => fcls(&matched, x, fcls_max_iter, fcls_tol)?,
+            let alpha = match cfg.abundance_method {
+                AbundanceMethod::Fcls => fcls(&matched, x, cfg.fcls_max_iter, cfg.fcls_tol)?,
                 AbundanceMethod::Ucls => ucls(&matched, x)?,
             };
             boot_abundances.push(alpha);
@@ -956,6 +920,22 @@ fn cosine(a: &[f64], b: &[f64]) -> f64 {
 mod tests {
     use super::*;
 
+    struct PlantedFixture {
+        data: Vec<Vec<f64>>,
+        endmembers: Vec<Vec<f64>>,
+        abundances: Vec<Vec<f64>>,
+    }
+
+    fn vca_fcls(seed: u64, fcls_max_iter: usize, fcls_tol: f64) -> UnmixConfig {
+        UnmixConfig {
+            seed,
+            endmember_method: EndmemberMethod::Vca,
+            abundance_method: AbundanceMethod::Fcls,
+            fcls_max_iter,
+            fcls_tol,
+        }
+    }
+
     /// Deterministic LCG → Box-Muller Gaussian stream.
     struct Lcg(std::num::Wrapping<u64>);
     impl Lcg {
@@ -976,9 +956,7 @@ mod tests {
 
     /// Build a fixture of `n_samples` drawn from a Dirichlet-like
     /// simplex over `k` planted endmembers on `p` features.
-    fn planted_unmix_fixture(n: usize, p: usize, k: usize, seed: u64)
-        -> (Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<Vec<f64>>)
-    {
+    fn planted_unmix_fixture(n: usize, p: usize, k: usize, seed: u64) -> PlantedFixture {
         let mut rng = Lcg::new(seed);
         // Planted endmembers: each endmember loads on a disjoint
         // block of features with amplitude ≈ 1, rest are zero with
@@ -996,23 +974,22 @@ mod tests {
         // shared background.
         let block = p / k;
         let mut endmembers = vec![vec![0.0_f64; p]; k];
-        for i in 0..k {
+        for (i, row) in endmembers.iter_mut().enumerate() {
             for f in 0..block {
                 let fi = i * block + f;
                 if fi < p {
-                    endmembers[i][fi] = 1.0 + 0.05 * rng.next_z();
+                    row[fi] = 1.0 + 0.05 * rng.next_z();
                 }
             }
         }
         // Abundances: ensure the simplex has a pure-endmember
         // anchor per endmember so VCA can find them deterministically.
         let mut abundances = vec![vec![0.0_f64; k]; n];
-        for i in 0..k {
-            abundances[i][i] = 1.0;
+        for (i, row) in abundances.iter_mut().enumerate().take(k) {
+            row[i] = 1.0;
         }
         // Remaining n-k samples are uniform Dirichlet draws.
-        for si in k..n {
-            let mut row = vec![0.0_f64; k];
+        for row in abundances.iter_mut().skip(k) {
             for v in row.iter_mut() {
                 *v = rng.next_u().max(1e-12);
                 *v = -v.ln(); // Exp(1)
@@ -1021,7 +998,6 @@ mod tests {
             for v in row.iter_mut() {
                 *v /= s;
             }
-            abundances[si] = row;
         }
         // Observations: x_i = Eᵀ α_i + small noise.
         let mut data = vec![vec![0.0_f64; p]; n];
@@ -1035,7 +1011,7 @@ mod tests {
                 data[si][f] = val;
             }
         }
-        (data, endmembers, abundances)
+        PlantedFixture { data, endmembers, abundances }
     }
 
     fn best_matched_cosine(
@@ -1064,7 +1040,8 @@ mod tests {
 
     #[test]
     fn vca_recovers_planted_endmembers_with_cosine_above_threshold() {
-        let (data, planted, _) = planted_unmix_fixture(100, 60, 3, 20260420);
+        let PlantedFixture { data, endmembers: planted, .. } =
+            planted_unmix_fixture(100, 60, 3, 20260420);
         let vca_result = vca(&data, 3, 42).unwrap();
         let cos = best_matched_cosine(&planted, &vca_result.endmember_loadings);
         for (i, c) in cos.iter().enumerate() {
@@ -1078,8 +1055,8 @@ mod tests {
 
     #[test]
     fn fcls_satisfies_simplex_constraints_within_tolerance() {
-        let (data, _planted, _dir_ab) = planted_unmix_fixture(60, 30, 3, 11);
-        let result = unmix(&data, 3, 42, EndmemberMethod::Vca, AbundanceMethod::Fcls, 500, 1e-9).unwrap();
+        let PlantedFixture { data, .. } = planted_unmix_fixture(60, 30, 3, 11);
+        let result = unmix(&data, 3, vca_fcls(42, 500, 1e-9)).unwrap();
         for (i, row) in result.abundances.iter().enumerate() {
             let sum: f64 = row.iter().sum();
             assert!(
@@ -1108,28 +1085,10 @@ mod tests {
 
     #[test]
     fn bootstrap_ci_produces_finite_bounds_and_envelops_point_estimate() {
-        let (data, _, _) = planted_unmix_fixture(60, 30, 3, 61);
-        let pe = unmix(
-            &data,
-            3,
-            42,
-            EndmemberMethod::Vca,
-            AbundanceMethod::Fcls,
-            500,
-            1e-8,
-        )
-        .unwrap();
-        let (loading_ci, abundance_ci) = bootstrap_ci(
-            &pe,
-            &data,
-            42,
-            EndmemberMethod::Vca,
-            AbundanceMethod::Fcls,
-            500,
-            1e-8,
-            30,
-        )
-        .unwrap();
+        let PlantedFixture { data, .. } = planted_unmix_fixture(60, 30, 3, 61);
+        let pe = unmix(&data, 3, vca_fcls(42, 500, 1e-8)).unwrap();
+        let (loading_ci, abundance_ci) =
+            bootstrap_ci(&pe, &data, vca_fcls(42, 500, 1e-8), 30).unwrap();
         let lci = loading_ci.unwrap();
         let aci = abundance_ci.unwrap();
         assert_eq!(lci.lower.len(), pe.endmember_loadings.len());
@@ -1153,28 +1112,9 @@ mod tests {
 
     #[test]
     fn bootstrap_ci_with_n_boot_zero_returns_none() {
-        let (data, _, _) = planted_unmix_fixture(40, 20, 3, 71);
-        let pe = unmix(
-            &data,
-            3,
-            42,
-            EndmemberMethod::Vca,
-            AbundanceMethod::Fcls,
-            300,
-            1e-8,
-        )
-        .unwrap();
-        let (lci, aci) = bootstrap_ci(
-            &pe,
-            &data,
-            42,
-            EndmemberMethod::Vca,
-            AbundanceMethod::Fcls,
-            300,
-            1e-8,
-            0,
-        )
-        .unwrap();
+        let PlantedFixture { data, .. } = planted_unmix_fixture(40, 20, 3, 71);
+        let pe = unmix(&data, 3, vca_fcls(42, 300, 1e-8)).unwrap();
+        let (lci, aci) = bootstrap_ci(&pe, &data, vca_fcls(42, 300, 1e-8), 0).unwrap();
         assert!(lci.is_none() && aci.is_none());
     }
 
@@ -1186,8 +1126,8 @@ mod tests {
         // G020..G029 (not in block 0) — expect a high p-value.
         let p = 30;
         let mut loading = vec![0.0_f64; p];
-        for i in 0..10 {
-            loading[i] = 1.0 - 0.01 * (i as f64);
+        for (i, v) in loading.iter_mut().enumerate().take(10) {
+            *v = 1.0 - 0.01 * (i as f64);
         }
         let labels: Vec<String> = (0..p).map(|i| format!("G{i:03}")).collect();
         let mut marker_sets = std::collections::BTreeMap::new();
@@ -1219,9 +1159,9 @@ mod tests {
 
     #[test]
     fn unmix_is_deterministic_under_fixed_seed() {
-        let (data, _, _) = planted_unmix_fixture(40, 20, 3, 55);
-        let a = unmix(&data, 3, 7, EndmemberMethod::Vca, AbundanceMethod::Fcls, 300, 1e-9).unwrap();
-        let b = unmix(&data, 3, 7, EndmemberMethod::Vca, AbundanceMethod::Fcls, 300, 1e-9).unwrap();
+        let PlantedFixture { data, .. } = planted_unmix_fixture(40, 20, 3, 55);
+        let a = unmix(&data, 3, vca_fcls(7, 300, 1e-9)).unwrap();
+        let b = unmix(&data, 3, vca_fcls(7, 300, 1e-9)).unwrap();
         assert_eq!(a.endmember_sample_indices, b.endmember_sample_indices);
         for (ra, rb) in a.abundances.iter().zip(b.abundances.iter()) {
             for (x, y) in ra.iter().zip(rb.iter()) {
@@ -1250,19 +1190,8 @@ mod tests {
 
     #[test]
     fn select_k_auto_picks_planted_k_on_planted_3_fixture() {
-        let (data, _, _) = planted_unmix_fixture(80, 60, 3, 77);
-        let (chosen, rows) = select_k_auto(
-            &data,
-            2,
-            6,
-            42,
-            EndmemberMethod::Vca,
-            AbundanceMethod::Fcls,
-            200,
-            1e-7,
-            0.10,
-        )
-        .unwrap();
+        let PlantedFixture { data, .. } = planted_unmix_fixture(80, 60, 3, 77);
+        let (chosen, rows) = select_k_auto(&data, 2, 6, vca_fcls(42, 200, 1e-7), 0.10).unwrap();
         assert!(
             chosen == 3 || chosen == 4,
             "expected k ≈ 3 on planted-3 fixture, got {chosen}; sweep={:?}",
@@ -1272,19 +1201,8 @@ mod tests {
 
     #[test]
     fn select_k_auto_picks_planted_k_on_planted_5_fixture() {
-        let (data, _, _) = planted_unmix_fixture(120, 100, 5, 88);
-        let (chosen, _rows) = select_k_auto(
-            &data,
-            2,
-            8,
-            42,
-            EndmemberMethod::Vca,
-            AbundanceMethod::Fcls,
-            200,
-            1e-7,
-            0.10,
-        )
-        .unwrap();
+        let PlantedFixture { data, .. } = planted_unmix_fixture(120, 100, 5, 88);
+        let (chosen, _rows) = select_k_auto(&data, 2, 8, vca_fcls(42, 200, 1e-7), 0.10).unwrap();
         assert!(
             chosen == 5 || chosen == 6,
             "expected k ≈ 5 on planted-5 fixture, got {chosen}"
@@ -1295,7 +1213,7 @@ mod tests {
     fn nfindr_volume_is_not_smaller_than_vca_volume() {
         // Starting from VCA and swapping only when volume strictly
         // increases, N-FINDR can never return a worse simplex.
-        let (data, _, _) = planted_unmix_fixture(80, 40, 3, 21);
+        let PlantedFixture { data, .. } = planted_unmix_fixture(80, 40, 3, 21);
         let vca_r = vca(&data, 3, 99).unwrap();
         let nfindr_r = nfindr(&data, 3, 99, 10).unwrap();
         let vca_vol = simplex_gram_determinant(&vca_r.endmember_loadings);
@@ -1308,7 +1226,8 @@ mod tests {
 
     #[test]
     fn nfindr_recovers_planted_endmembers_at_least_as_well_as_vca() {
-        let (data, planted, _) = planted_unmix_fixture(80, 40, 3, 31);
+        let PlantedFixture { data, endmembers: planted, .. } =
+            planted_unmix_fixture(80, 40, 3, 31);
         let vca_cos = best_matched_cosine(&planted, &vca(&data, 3, 99).unwrap().endmember_loadings);
         let nfindr_cos = best_matched_cosine(
             &planted,
@@ -1340,13 +1259,14 @@ mod tests {
 
     #[test]
     fn fcls_abundances_pearson_against_planted_is_high() {
-        let (data, _endmembers, planted_ab) = planted_unmix_fixture(120, 60, 3, 30);
-        let result = unmix(&data, 3, 42, EndmemberMethod::Vca, AbundanceMethod::Fcls, 1000, 1e-9).unwrap();
+        let PlantedFixture { data, abundances: planted_ab, .. } =
+            planted_unmix_fixture(120, 60, 3, 30);
+        let result = unmix(&data, 3, vca_fcls(42, 1000, 1e-9)).unwrap();
         // Match recovered columns to planted columns via best absolute
         // cosine between recovered endmember loadings and planted.
         let p = data[0].len();
         let planted_endmembers = {
-            let (_, e, _) = planted_unmix_fixture(120, 60, 3, 30);
+            let PlantedFixture { endmembers: e, .. } = planted_unmix_fixture(120, 60, 3, 30);
             e
         };
         let n_plant = planted_endmembers.len();

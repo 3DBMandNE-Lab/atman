@@ -84,7 +84,7 @@ pub fn apply_transform(
         return Err("non-rectangular input matrix".to_string());
     }
     match transform {
-        Transform::None => Ok(data.iter().map(|row| row.clone()).collect()),
+        Transform::None => Ok(data.to_vec()),
         Transform::Clr => Ok(clr(data)),
         Transform::Alr { reference_index }
         | Transform::RatioAnchor { reference_index } => {
@@ -138,14 +138,14 @@ fn ilr(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let p = data[0].len();
     let z = clr(data);
     let mut basis: Vec<Vec<f64>> = vec![vec![0.0; p]; p - 1];
-    for k in 0..p - 1 {
+    for (k, row) in basis.iter_mut().enumerate() {
         let kp1 = (k + 1) as f64;
         let diag = (kp1 / (kp1 + 1.0)).sqrt();
         let off = -1.0 / (kp1 * (kp1 + 1.0)).sqrt();
-        for j in 0..=k {
-            basis[k][j] = off;
+        for slot in row.iter_mut().take(k + 1) {
+            *slot = off;
         }
-        basis[k][k + 1] = diag;
+        row[k + 1] = diag;
     }
     z.iter()
         .map(|row| {

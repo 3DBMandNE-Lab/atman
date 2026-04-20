@@ -111,15 +111,17 @@ fn argmax(values: &[f64]) -> Option<usize> {
 }
 
 fn argmax_col(sim: &[Vec<f64>], col: usize, n_rows: usize) -> Option<usize> {
-    let mut best_idx: Option<usize> = None;
-    let mut best_val = f64::NEG_INFINITY;
-    for i in 0..n_rows {
-        if sim[i][col] > best_val {
-            best_val = sim[i][col];
-            best_idx = Some(i);
-        }
-    }
-    best_idx
+    sim.iter()
+        .take(n_rows)
+        .enumerate()
+        .fold((None, f64::NEG_INFINITY), |(best, best_val), (i, row)| {
+            if row[col] > best_val {
+                (Some(i), row[col])
+            } else {
+                (best, best_val)
+            }
+        })
+        .0
 }
 
 fn top_n_abs_jaccard(a: &[f64], b: &[f64], top_n: usize) -> f64 {

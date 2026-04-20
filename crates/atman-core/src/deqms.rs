@@ -208,11 +208,10 @@ pub fn tricube_moving_average(x: &[f64], y: &[f64], span: f64) -> Vec<f64> {
         let max_dist = (rank_i - lo).max(hi - rank_i).max(1) as f64;
         let mut num = 0.0_f64;
         let mut den = 0.0_f64;
-        for rank_j in lo..=hi {
+        for (rank_j, &j_orig) in order[lo..=hi].iter().enumerate().map(|(k, j)| (lo + k, j)) {
             let d = ((rank_j as isize - rank_i as isize).unsigned_abs()) as f64;
             let u = (d / max_dist).min(1.0);
             let w = (1.0 - u * u * u).max(0.0).powi(3);
-            let j_orig = order[rank_j];
             num += w * y[j_orig];
             den += w;
         }

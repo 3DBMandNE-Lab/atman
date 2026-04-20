@@ -48,7 +48,7 @@ fn median(values: &mut Vec<f64>) -> f64 {
     }
     values.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let n = values.len();
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         0.5 * (values[n / 2 - 1] + values[n / 2])
     } else {
         values[n / 2]
@@ -264,8 +264,7 @@ fn deqms_limma_path_matches_bioconductor_deqms_on_cptac() {
     // Parity against DEqMS Bioconductor reference.
     let ref_path = Path::new("tests/fixtures/deqms_cptac_reference.tsv");
     if !ref_path.exists() {
-        eprintln!("DEqMS reference missing; run `Rscript {}` to generate.",
-                  "tests/fixtures/deqms_cptac_reference.R");
+        eprintln!("DEqMS reference missing; run `Rscript tests/fixtures/deqms_cptac_reference.R` to generate.");
         return;
     }
     let (_, ref_rows) = parse_tsv(ref_path);

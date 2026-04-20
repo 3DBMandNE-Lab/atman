@@ -200,7 +200,7 @@ fn posthoc_dunnett_switches_to_hsu_on_unbalanced_design() {
         assert_eq!(r["posthoc_method"], "dunnett");
         let adj: f64 = r["posthoc_adj_p"].parse().unwrap();
         assert!(
-            adj.is_finite() && adj >= 0.0 && adj <= 1.0,
+            adj.is_finite() && (0.0..=1.0).contains(&adj),
             "dunnett adj_p {adj} out of [0, 1]"
         );
     }

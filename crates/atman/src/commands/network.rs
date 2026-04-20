@@ -174,7 +174,8 @@ fn run_influence(args: InfluenceArgs) -> Result<()> {
     }
 
     // Build feature universe + per-sample per-feature values.
-    let (features, per_sample) = collect_feature_matrix(&records, &args.feature_col)?;
+    let FeatureMatrix { features, per_sample } =
+        collect_feature_matrix(&records, &args.feature_col)?;
     if features.is_empty() {
         bail!("no features extracted from measurements");
     }
@@ -318,10 +319,17 @@ fn run_influence(args: InfluenceArgs) -> Result<()> {
     Ok(())
 }
 
+struct FeatureMatrix {
+    /// All distinct feature IDs seen, in sorted order.
+    features: Vec<String>,
+    /// `sample_id → (feature_id → abundance)`.
+    per_sample: BTreeMap<String, BTreeMap<String, f64>>,
+}
+
 fn collect_feature_matrix(
     records: &[MeasurementRecord],
     feature_col: &str,
-) -> Result<(Vec<String>, BTreeMap<String, BTreeMap<String, f64>>)> {
+) -> Result<FeatureMatrix> {
     let mut features: BTreeSet<String> = BTreeSet::new();
     let mut per_sample: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
     for r in records {
@@ -347,7 +355,10 @@ fn collect_feature_matrix(
             .or_default()
             .insert(feature, v);
     }
-    Ok((features.into_iter().collect(), per_sample))
+    Ok(FeatureMatrix {
+        features: features.into_iter().collect(),
+        per_sample,
+    })
 }
 
 fn read_stratum(path: &Path, column: &str) -> Result<BTreeMap<String, String>> {

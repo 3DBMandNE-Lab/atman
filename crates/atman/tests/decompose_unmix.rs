@@ -73,18 +73,17 @@ fn write_planted_cohort(dir: &Path, seed: u64, planted: &mut [Vec<f64>]) -> Vec<
     let block = p / k;
     let mut rng = Lcg::new(seed);
     // Planted endmembers: zero background, ~1.0 on own block.
-    for i in 0..k {
+    for (i, row) in planted.iter_mut().enumerate() {
         for f in 0..block {
-            planted[i][i * block + f] = 1.0 + 0.05 * rng.next_z();
+            row[i * block + f] = 1.0 + 0.05 * rng.next_z();
         }
     }
     // Abundances: pure anchors at sample 0..2, Dirichlet for rest.
     let mut abundances = vec![vec![0.0_f64; k]; n];
-    for i in 0..k {
-        abundances[i][i] = 1.0;
+    for (i, row) in abundances.iter_mut().enumerate().take(k) {
+        row[i] = 1.0;
     }
-    for si in k..n {
-        let mut row = vec![0.0_f64; k];
+    for row in abundances.iter_mut().skip(k) {
         for v in row.iter_mut() {
             *v = rng.next_u().max(1e-12);
             *v = -v.ln(); // Exp(1)
@@ -93,7 +92,6 @@ fn write_planted_cohort(dir: &Path, seed: u64, planted: &mut [Vec<f64>]) -> Vec<
         for v in row.iter_mut() {
             *v /= s;
         }
-        abundances[si] = row;
     }
 
     let mut samples = String::from(
@@ -121,14 +119,15 @@ fn write_planted_cohort(dir: &Path, seed: u64, planted: &mut [Vec<f64>]) -> Vec<
          detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n",
     );
     let mut order: u64 = 0;
-    for si in 0..n {
+    for (si, abundance_row) in abundances.iter().enumerate() {
         for j in 0..p {
             order += 1;
-            let mut val = 0.0;
-            for ei in 0..k {
-                val += abundances[si][ei] * planted[ei][j];
-            }
-            val += 0.01 * rng.next_z();
+            let val: f64 = abundance_row
+                .iter()
+                .zip(planted.iter())
+                .map(|(&a, planted_row)| a * planted_row[j])
+                .sum::<f64>()
+                + 0.01 * rng.next_z();
             qc.push_str(&format!(
                 "olink_explore_ngs\tS{si:03}\tA{j:03}\tG{j:03}\tP1\t{val:.6}\t\
                  {val:.6}\t{val:.6}\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n",
@@ -262,7 +261,7 @@ fn unmix_recovers_planted_endmembers_and_satisfies_simplex_constraints() {
         // Residual should be small (noise-scale); bound ≤ 1 is
         // loose but catches catastrophic misfits.
         assert!(
-            residual >= 0.0 && residual < 1.0,
+            (0.0..1.0).contains(&residual),
             "implausibly large residual for {}: {residual}",
             r["sample_id"]
         );

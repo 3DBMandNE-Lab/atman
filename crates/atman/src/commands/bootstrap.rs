@@ -385,7 +385,7 @@ fn run_protein(args: ProteinArgs) -> Result<()> {
             "ci-high": args.ci_high,
         }),
         &input_dir_sha256,
-        &[args.output.clone()],
+        std::slice::from_ref(&args.output),
         started_at,
         finished_at,
     )?;
@@ -562,7 +562,7 @@ fn run_module(args: ModuleArgs) -> Result<()> {
             "ci-high": args.ci_high,
         }),
         &input_dir_sha256,
-        &[args.output.clone()],
+        std::slice::from_ref(&args.output),
         started_at,
         finished_at,
     )?;
@@ -752,7 +752,7 @@ fn run_program(args: ProgramArgs) -> Result<()> {
             "ci-high": args.ci_high,
         }),
         &input_dir_sha256,
-        &[args.output.clone()],
+        std::slice::from_ref(&args.output),
         started_at,
         finished_at,
     )?;

@@ -242,7 +242,7 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
             "check-determinism": args.check_determinism,
         }),
         &input_dir_sha256,
-        &[args.output.clone()],
+        std::slice::from_ref(&args.output),
         started_at,
         finished_at,
     )?;
