@@ -276,3 +276,86 @@ stages:
 ```bash
 atman run --plan plan.yaml --manifest out/plan_manifest.tsv
 ```
+
+## Decomposition: discovering protein programs
+
+Standard PCA tells you which samples are different. Atman's decomposition
+commands ask a different question: **what underlying protein programs
+explain the variation, and how much of each program is active in each
+subject?**
+
+This matters in proteomics because circulating protein panels (plasma,
+CSF, synovial fluid) are mixtures of secreted programs — inflammatory
+signaling, tissue leakage, acute-phase response, complement cascades.
+Decomposition recovers those programs as interpretable components with
+per-subject activation scores, so you can ask "which program drives the
+case-control difference?" rather than "which individual proteins change?"
+
+### ICA: statistically independent programs
+
+FastICA finds maximally non-Gaussian (statistically independent)
+components. Run across multiple random seeds to assess stability —
+components that appear in most seeds are robust; components that
+fragment across seeds are noise.
+
+```bash
+# Multi-seed ICA: 50 seeds, keep components explaining 80% of variance
+atman decompose ica \
+    --input-dir out \
+    --k-selection cumulative-variance=0.80 \
+    --n-seeds 50 \
+    --seed 42 \
+    --transform clr \
+    --output-loadings out/loadings.tsv \
+    --output-activations out/activations.tsv \
+    --output-stability out/stability.tsv
+
+# Null calibration: how stable are components under permutation?
+# --k requires the concrete integer chosen by ICA (read from loadings column count)
+atman decompose null \
+    --input-dir out \
+    --k 5 \
+    --n-perm 200 \
+    --seed 42 \
+    --output out/null.tsv
+```
+
+Outputs: `loadings.tsv` (protein weights per component),
+`activations.tsv` (subject activation per component),
+`stability.tsv` (cross-seed reproducibility per component).
+
+### VCA+FCLS unmixing: compositional endmembers
+
+When the biological question is "what pure sources contribute to this
+mixture?" — e.g. plasma as a mixture of liver secretome, immune
+activation, and tissue leakage — unmixing fits better than ICA.
+VCA finds geometric endmembers (extreme compositions), FCLS
+estimates fractional abundances that sum to 1 per subject.
+
+```bash
+atman decompose unmix \
+    --input-dir out \
+    --k auto \
+    --seed 42 \
+    --n-boot 1000 \
+    --annotate-markers gene_sets.tsv \
+    --output-dir out/unmix
+```
+
+Outputs: `endmembers.tsv` (rank-ordered proteins per endmember),
+`abundances.tsv` (per-subject fractions, rows sum to 1),
+`unmix_diagnostics.tsv`, `marker_enrichment.tsv`.
+
+### Variance partition: attributing variation to covariates
+
+Before running DE, check how much protein-level variance is explained
+by your factor of interest vs batch, age, sex, or technical covariates.
+Uses a mixed model per protein with Type III F-tests.
+
+```bash
+atman decompose variance \
+    --activations out/activations.tsv \
+    --samples out/samples.tsv \
+    --factors "diagnosis + sex + age + (1|batch)" \
+    --output out/variance.tsv
+```
