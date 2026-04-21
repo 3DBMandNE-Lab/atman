@@ -322,38 +322,34 @@ fn write_long(path: &Path, rows: &[ResidualRow]) -> Result<()> {
 }
 
 fn write_wide(path: &Path, rows: &[ResidualRow]) -> Result<()> {
-    let subjects: Vec<String> = rows
+    let samples: Vec<String> = rows
         .iter()
-        .map(|row| row.subject_id.clone())
-        .filter(|subject| !subject.is_empty())
+        .map(|row| row.sample_id.clone())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
     let mut by_protein: BTreeMap<(String, String), BTreeMap<String, Vec<f64>>> = BTreeMap::new();
     for row in rows {
-        if row.subject_id.is_empty() {
-            continue;
-        }
         by_protein
             .entry((row.assay_id.clone(), row.gene_symbol.clone()))
             .or_default()
-            .entry(row.subject_id.clone())
+            .entry(row.sample_id.clone())
             .or_default()
             .push(row.residual);
     }
     let mut out = String::from("assay_id\tgene_symbol");
-    for subject in &subjects {
+    for sample in &samples {
         out.push('\t');
-        out.push_str(subject);
+        out.push_str(sample);
     }
     out.push('\n');
-    for ((assay_id, gene_symbol), per_subject) in by_protein {
+    for ((assay_id, gene_symbol), per_sample) in by_protein {
         out.push_str(&assay_id);
         out.push('\t');
         out.push_str(&gene_symbol);
-        for subject in &subjects {
+        for sample in &samples {
             out.push('\t');
-            if let Some(values) = per_subject.get(subject) {
+            if let Some(values) = per_sample.get(sample) {
                 out.push_str(&fmt(mean(values)));
             } else {
                 out.push('0');
