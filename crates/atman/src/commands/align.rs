@@ -1408,15 +1408,9 @@ fn run_project(args: ProjectArgs) -> Result<()> {
             .iter()
             .position(|c| *c == "sample_id")
             .context("samples.tsv missing sample_id")?;
-        let is_control_idx = cols.iter().position(|c| *c == "is_control");
         let mut subs = Vec::new();
         for line in lines {
             let row: Vec<&str> = line.split('\t').collect();
-            if let Some(idx) = is_control_idx {
-                if row.get(idx).copied().unwrap_or("0") == "1" {
-                    continue;
-                }
-            }
             if let Some(&sid) = row.get(sid_idx) {
                 subs.push(sid.to_string());
             }

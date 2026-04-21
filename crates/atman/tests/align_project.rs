@@ -251,6 +251,84 @@ fn align_project_partial_coverage_emits_missing_label_in_sidecar() {
 }
 
 #[test]
+fn align_project_includes_control_samples() {
+    let tmp = tempfile::tempdir().unwrap();
+    let atlas_dir = tmp.path().join("atlas");
+    let cohort_dir = tmp.path().join("cohort_ctrl");
+    let output_dir = tmp.path().join("projected_ctrl");
+    write_atlas(&atlas_dir);
+
+    std::fs::create_dir_all(&cohort_dir).unwrap();
+    let loadings_a1 = [1.0, 0.9, 0.1, 0.0];
+    let loadings_a2 = [0.0, 0.1, 0.9, 1.0];
+    let coefs: [[f64; 2]; 4] = [[1.0, 0.0], [0.0, 1.0], [0.5, 0.5], [2.0, -1.0]];
+    let genes = ["G1", "G2", "G3", "G4"];
+
+    // Two non-control, two control samples.
+    let samples = "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n\
+                   SUB01\tSUB01\tCase\t0\tplasma\t1\n\
+                   SUB02\tSUB02\tCase\t0\tplasma\t2\n\
+                   SUB03\tSUB03\tControl\t1\tplasma\t3\n\
+                   SUB04\tSUB04\tControl\t1\tplasma\t4\n";
+    std::fs::write(cohort_dir.join("samples.tsv"), samples).unwrap();
+
+    let mut proteins =
+        String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    for (j, gene) in genes.iter().enumerate() {
+        proteins.push_str(&format!(
+            "olink_explore_ngs\tA{:03}\tQ{:05}\t{}\tP1\t\n",
+            j + 1, j + 1, gene,
+        ));
+    }
+    std::fs::write(cohort_dir.join("proteins.tsv"), proteins).unwrap();
+
+    let mut qc = String::from(
+        "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
+         abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
+         detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n",
+    );
+    let mut order = 0u64;
+    for (si, c) in coefs.iter().enumerate() {
+        for (j, gene) in genes.iter().enumerate() {
+            order += 1;
+            let v = c[0] * loadings_a1[j] + c[1] * loadings_a2[j];
+            qc.push_str(&format!(
+                "olink_explore_ngs\tSUB{:02}\tA{:03}\t{}\tP1\t{v:.6}\t\
+                 {v:.6}\t{v:.6}\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n",
+                si + 1, j + 1, gene
+            ));
+        }
+    }
+    std::fs::write(cohort_dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(cohort_dir.join("measurements.tsv"), &qc).unwrap();
+
+    let status = run_atman(&[
+        "align", "project",
+        "--atlas-archetypes", atlas_dir.join("archetypes.tsv").to_str().unwrap(),
+        "--atlas-loadings", &format!(
+            "COA={},COB={}",
+            atlas_dir.join("coa_loadings.tsv").display(),
+            atlas_dir.join("cob_loadings.tsv").display(),
+        ),
+        "--cohort-dir", cohort_dir.to_str().unwrap(),
+        "--transform", "none",
+        "--projection", "ls",
+        "--output-dir", output_dir.to_str().unwrap(),
+    ]);
+    assert!(
+        status.status.success(),
+        "align project failed with controls:\nstderr:\n{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let (_, rows) = parse_tsv(&output_dir.join("projected_activations.tsv"));
+    assert_eq!(rows.len(), 4, "expected 4 subjects (including controls), got {}", rows.len());
+    let sids: Vec<&str> = rows.iter().map(|r| r["sample_id"].as_str()).collect();
+    assert!(sids.contains(&"SUB03"), "control SUB03 missing from output");
+    assert!(sids.contains(&"SUB04"), "control SUB04 missing from output");
+}
+
+#[test]
 fn align_project_refuses_on_empty_cohort_intersection() {
     let tmp = tempfile::tempdir().unwrap();
     let atlas_dir = tmp.path().join("atlas");
