@@ -9,9 +9,11 @@ use std::path::{Path, PathBuf};
 
 use crate::io::{read_measurements_long, write_measurements_long};
 
+const RULE_NAME: &str = "mask-warn-fail";
+
 #[derive(ClapArgs, Debug)]
 pub struct Args {
-    /// Directory containing `measurements.tsv` from `ingest`.
+    /// Directory containing `measurements.tsv` from upstream ingest.
     #[arg(long)]
     input_dir: PathBuf,
 
@@ -20,18 +22,9 @@ pub struct Args {
     /// `--output-dir` equal to `--input-dir` (in-place update).
     #[arg(long)]
     output_dir: PathBuf,
-
-    /// QC rule name. Supports `mask-warn-fail` (default): mark
-    /// `dropped_by_qc=true` when either `qc_sample` or `qc_assay` is not
-    /// `Pass`. This is the Olink-recommended default.
-    #[arg(long, default_value = "mask-warn-fail")]
-    rule: String,
 }
 
 pub fn run(args: Args) -> Result<()> {
-    if args.rule != "mask-warn-fail" {
-        anyhow::bail!("rule {:?} not supported", args.rule);
-    }
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
@@ -43,10 +36,10 @@ pub fn run(args: Args) -> Result<()> {
     let masked = before - after;
 
     write_measurements_long(&args.output_dir.join("measurements.tsv"), &records)?;
-    write_qc_report(&args.output_dir.join("qc_report.tsv"), &records, &args.rule)?;
+    write_qc_report(&args.output_dir.join("qc_report.tsv"), &records)?;
     eprintln!(
         "qc: rule={} total={} masked={} passed={}",
-        args.rule,
+        RULE_NAME,
         records.len(),
         masked,
         after,
@@ -54,7 +47,7 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn write_qc_report(path: &Path, records: &[MeasurementRecord], rule: &str) -> Result<()> {
+fn write_qc_report(path: &Path, records: &[MeasurementRecord]) -> Result<()> {
     let mut per_sample: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
     for r in records {
         let entry = per_sample.entry(r.sample_id.as_str()).or_insert((0, 0));
@@ -76,7 +69,11 @@ fn write_qc_report(path: &Path, records: &[MeasurementRecord], rule: &str) -> Re
         } else {
             0.0
         };
-        writeln!(w, "{}\t{}\t{}\t{:.6}\t{}", sample_id, n, masked, rate, rule)?;
+        writeln!(
+            w,
+            "{}\t{}\t{}\t{:.6}\t{}",
+            sample_id, n, masked, rate, RULE_NAME
+        )?;
     }
     w.flush()?;
     Ok(())

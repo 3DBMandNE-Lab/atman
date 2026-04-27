@@ -43,7 +43,7 @@ pub use fold_change::{
     compute_log2_fc, Comparison, FoldChangeInput, FoldChangeOutput, FoldChangePanel,
 };
 pub use ica_null::{archetype_null, generate_null_matrix, ArchetypeNullRow, NullMode, NullParams};
-pub use matrix::{DubeWidePanel, DubeWideRow};
+pub use matrix::{WidePanel, WidePanelRow};
 pub use msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
 pub use network::{
     adjacency, betweenness_centrality, eigenvector_centrality, influence_scores,

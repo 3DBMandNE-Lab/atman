@@ -88,8 +88,6 @@ fn dube_de_heat_shock_sanity() {
         tmp_path.to_str().unwrap(),
         "--output-dir",
         tmp_path.to_str().unwrap(),
-        "--rule",
-        "mask-warn-fail",
     ]);
 
     run_atman(&[

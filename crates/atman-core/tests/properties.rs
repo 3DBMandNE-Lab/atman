@@ -1,5 +1,5 @@
 use atman_core::fold_change::{compute_log2_fc, Comparison, FoldChangeInput};
-use atman_core::matrix::dube_wide_pivot;
+use atman_core::matrix::pivot_wide_panels;
 use atman_core::{
     Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, QcFlag, Sample,
 };
@@ -63,8 +63,8 @@ fn pivot_is_deterministic_across_input_order() {
     ];
     let mut reversed = base.clone();
     reversed.reverse();
-    let a = dube_wide_pivot(&base, &s);
-    let b = dube_wide_pivot(&reversed, &s);
+    let a = pivot_wide_panels(&base, &s);
+    let b = pivot_wide_panels(&reversed, &s);
     assert_eq!(a, b, "pivot output must not depend on input ordering");
 }
 

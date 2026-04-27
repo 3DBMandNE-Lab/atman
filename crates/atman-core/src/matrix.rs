@@ -1,38 +1,39 @@
-//! Long → Dube-wide pivot.
+//! Long → wide-per-panel pivot.
 //!
-//! Produces one `DubeWidePanel` per raw Olink `Panel` value, keyed by gene
-//! symbol (the raw `Assay` column), with string cell values copied verbatim
-//! from `MeasurementRecord.npx_source_str`. This is a display pivot: no
-//! numeric arithmetic, no reformatting, so the output reproduces Dube's
-//! published filtered NPX byte-for-byte.
+//! Produces one `WidePanel` per raw `Panel` value, keyed by gene symbol
+//! (the `gene_symbol` column on `MeasurementRecord`), with string cell
+//! values copied verbatim from `MeasurementRecord.npx_source_str`. This
+//! is a display pivot: no numeric arithmetic, no reformatting, so the
+//! output reproduces source byte-for-byte and is suitable for diffing
+//! against published reference NPX tables.
 
 use crate::types::{MeasurementRecord, Sample};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct DubeWideRow {
+pub struct WidePanelRow {
     /// Empty string for control samples; subject_id for biological samples.
     pub participant: String,
     /// Empty string for control samples; condition for biological samples.
     pub exposure: String,
     pub sample_id: String,
-    /// Aligned with `DubeWidePanel::assays`. `None` = missing / masked.
+    /// Aligned with `WidePanel::assays`. `None` = missing / masked.
     pub values: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct DubeWidePanel {
-    /// Raw panel name from the Olink CSV, e.g. `Inflammation_II`.
+pub struct WidePanel {
+    /// Raw panel name from the source data, e.g. `Inflammation_II`.
     pub panel: String,
     /// Gene symbols, sorted by Unicode codepoint order.
     pub assays: Vec<String>,
-    pub rows: Vec<DubeWideRow>,
+    pub rows: Vec<WidePanelRow>,
 }
 
-pub fn dube_wide_pivot(
+pub fn pivot_wide_panels(
     measurements: &[MeasurementRecord],
     samples: &[Sample],
-) -> Vec<DubeWidePanel> {
+) -> Vec<WidePanel> {
     let sample_by_id: HashMap<&str, &Sample> =
         samples.iter().map(|s| (s.sample_id.as_str(), s)).collect();
 
@@ -61,8 +62,10 @@ pub fn dube_wide_pivot(
 #[derive(Default)]
 struct PanelBuilder {
     assays: BTreeSet<String>,
-    /// sample_id → gene_symbol → Option<source string>
-    cells: HashMap<String, HashMap<String, Option<String>>>,
+    /// sample_id → gene_symbol → Option<npx_source_str>. Each entry is a
+    /// sample-level measurement; the biological replicate (subject_id) is
+    /// the statistical unit and lives on the `Sample` struct, never here.
+    measurements: HashMap<String, HashMap<String, Option<String>>>,
 }
 
 impl PanelBuilder {
@@ -76,30 +79,30 @@ impl PanelBuilder {
         } else {
             Some(m.npx_source_str.clone())
         };
-        self.cells
+        self.measurements
             .entry(sample_id.to_string())
             .or_default()
             .insert(gene.to_string(), value);
     }
 
-    fn finalize(self, panel: String, sample_by_id: &HashMap<&str, &Sample>) -> DubeWidePanel {
+    fn finalize(self, panel: String, sample_by_id: &HashMap<&str, &Sample>) -> WidePanel {
         let assays: Vec<String> = self.assays.into_iter().collect();
 
-        let mut bio: Vec<DubeWideRow> = Vec::new();
-        let mut ctl: Vec<(u64, DubeWideRow)> = Vec::new();
+        let mut bio: Vec<WidePanelRow> = Vec::new();
+        let mut ctl: Vec<(u64, WidePanelRow)> = Vec::new();
 
-        for (sample_id, cell_map) in self.cells {
+        for (sample_id, assay_values) in self.measurements {
             let s = match sample_by_id.get(sample_id.as_str()) {
                 Some(s) => *s,
                 None => continue,
             };
             let values: Vec<Option<String>> = assays
                 .iter()
-                .map(|gene| cell_map.get(gene).cloned().unwrap_or(None))
+                .map(|gene| assay_values.get(gene).cloned().unwrap_or(None))
                 .collect();
 
             if s.is_control {
-                let row = DubeWideRow {
+                let row = WidePanelRow {
                     participant: String::new(),
                     exposure: String::new(),
                     sample_id: s.sample_id.clone(),
@@ -107,7 +110,7 @@ impl PanelBuilder {
                 };
                 ctl.push((s.ingest_order, row));
             } else {
-                let row = DubeWideRow {
+                let row = WidePanelRow {
                     participant: s.subject_id.clone().unwrap_or_default(),
                     exposure: s.condition.clone().unwrap_or_default(),
                     sample_id: s.sample_id.clone(),
@@ -128,7 +131,7 @@ impl PanelBuilder {
         let mut rows = bio;
         rows.extend(ctl.into_iter().map(|(_, r)| r));
 
-        DubeWidePanel {
+        WidePanel {
             panel,
             assays,
             rows,

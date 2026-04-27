@@ -73,8 +73,6 @@ fn ensemble_grades_dube_heat_shock_proteins_as_validated() {
         canonical.to_str().unwrap(),
         "--output-dir",
         canonical.to_str().unwrap(),
-        "--rule",
-        "mask-warn-fail",
     ]);
 
     run_atman(&[

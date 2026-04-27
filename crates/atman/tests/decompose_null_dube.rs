@@ -69,8 +69,6 @@ fn decompose_null_runs_end_to_end_on_dube_cohort() {
         canonical.to_str().unwrap(),
         "--output-dir",
         canonical.to_str().unwrap(),
-        "--rule",
-        "mask-warn-fail",
     ])
     .status
     .success());

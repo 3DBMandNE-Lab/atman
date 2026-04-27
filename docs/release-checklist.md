@@ -53,7 +53,7 @@ checks above and by the Docker build below.
        example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
 
    docker run --rm -v "$(pwd)/out:/out" atman:1.0.0 \
-     qc --input-dir /out --output-dir /out --rule mask-warn-fail
+     qc --input-dir /out --output-dir /out
    ```
 
 6. Tag the release commit:

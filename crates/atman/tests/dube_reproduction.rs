@@ -76,8 +76,6 @@ fn dube_reproduction_end_to_end() {
         tmp_path.to_str().unwrap(),
         "--output-dir",
         tmp_path.to_str().unwrap(),
-        "--rule",
-        "mask-warn-fail",
     ]);
 
     // Stage 2 sanity: qc emits qc_report.tsv with the canonical header,
@@ -99,17 +97,13 @@ fn dube_reproduction_end_to_end() {
         "qc_measurements.tsv must no longer be written after the qc/raw split removal"
     );
 
-    // Stage 3: matrix (Dube-wide per-panel CSVs)
+    // Stage 3: matrix — per-panel wide CSVs.
     run_atman(&[
         "matrix",
         "--input-dir",
         tmp_path.to_str().unwrap(),
         "--output-dir",
         tmp_path.to_str().unwrap(),
-        "--format",
-        "dube-wide",
-        "--split-by",
-        "panel",
     ]);
 
     // Stage 4: fold change

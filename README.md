@@ -88,7 +88,7 @@ python3 adapters/generic/olink_explore_to_atman.py \
     example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
 
 atman validate --input-dir out --groups "PT1-PR1,PR2-PR1" --min-pairs 5
-atman qc --input-dir out --output-dir out --rule mask-warn-fail
+atman qc --input-dir out --output-dir out
 
 atman de \
     --input-dir out --output-dir out \

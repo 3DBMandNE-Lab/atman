@@ -55,7 +55,7 @@ wc -l out/measurements.tsv   # ≈122,136 including header
 ## 2. QC
 
 ```bash
-atman qc --input-dir out --output-dir out --rule mask-warn-fail
+atman qc --input-dir out --output-dir out
 ```
 
 Masks rows where `QC_Warning` or `Assay_Warning` is not `PASS`. Raw values are
@@ -123,10 +123,10 @@ Outputs:
 The command emits warnings for small effective condition groups and sparse
 proteins. Tune those thresholds with `--min-subjects` and `--sparse-threshold`.
 
-## 5. Matrix (Dube-wide pivot)
+## 5. Matrix (per-panel wide pivot)
 
 ```bash
-atman matrix --input-dir out --output-dir out --format dube-wide --split-by panel
+atman matrix --input-dir out --output-dir out
 ```
 
 Emits per-panel wide NPX CSVs matching Dube's published filtered NPX files

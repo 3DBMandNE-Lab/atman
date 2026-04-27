@@ -6,7 +6,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use atman_core::{
-    fold_change::FoldChangePanel, matrix::DubeWidePanel, Abundance, AssayId, Batch, DetectionLimit,
+    fold_change::FoldChangePanel, matrix::WidePanel, Abundance, AssayId, Batch, DetectionLimit,
     MeasurementRecord, PeptideIdentity, PeptideMeasurementRecord, Platform, ProteinIdentity,
     QcFlag, Sample,
 };
@@ -560,11 +560,13 @@ pub fn write_proteins(path: &Path, proteins: &[ProteinIdentity]) -> Result<()> {
     atomic_write(path, buf.as_bytes())
 }
 
-/// Dube-wide panel CSV writer. Starts from the source NPX string (no f64
-/// round-trip) and applies Dube's trailing-zero trim: `0.0980` → `0.098`,
-/// `1.4200` → `1.42`, `0.4000` → `0.4`. This matches the formatting rule
-/// observed empirically in the published filtered NPX files.
-pub fn write_dube_wide_panel(out_dir: &Path, panel: &DubeWidePanel) -> Result<PathBuf> {
+/// Wide-panel CSV writer. Starts from the source NPX string (no f64
+/// round-trip) and applies the trailing-zero trim documented on
+/// [`trim_npx_string`]: `0.0980` → `0.098`, `1.4200` → `1.42`,
+/// `0.4000` → `0.4`. This matches the formatting rule observed
+/// empirically in the published Olink Explore NPX files used as the
+/// byte-exact reproduction reference.
+pub fn write_wide_panel(out_dir: &Path, panel: &WidePanel) -> Result<PathBuf> {
     let filename = format!("{}_npx.csv", panel.panel.to_ascii_lowercase());
     let path = out_dir.join(filename);
     let mut buf = String::new();

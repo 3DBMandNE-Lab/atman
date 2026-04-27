@@ -1,4 +1,4 @@
-use atman_core::matrix::{dube_wide_pivot, DubeWidePanel};
+use atman_core::matrix::{pivot_wide_panels, WidePanel};
 use atman_core::{
     Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, QcFlag, Sample,
 };
@@ -94,10 +94,10 @@ fn pivot_two_panels_bio_then_control_by_gene_symbol() {
         sample_ctl("CONTROL_SAMPLE_X", 2),
     ];
 
-    let panels = dube_wide_pivot(&measurements, &samples);
+    let panels = pivot_wide_panels(&measurements, &samples);
     assert_eq!(panels.len(), 2);
 
-    let p1: &DubeWidePanel = panels.iter().find(|p| p.panel == "P1").unwrap();
+    let p1: &WidePanel = panels.iter().find(|p| p.panel == "P1").unwrap();
     assert_eq!(p1.assays, vec!["AAA".to_string(), "ZZZ".to_string()]);
     assert_eq!(p1.rows.len(), 3);
     assert_eq!(p1.rows[0].participant, "001B");
@@ -117,7 +117,7 @@ fn dropped_by_qc_becomes_missing() {
     let m1 = m("SSNA-001B-PR1", "OID1", "AAA", "P1", "1.0", 1.0, true, 0);
     let m2 = m("SSNA-001B-PR1", "OID2", "BBB", "P1", "2.0", 2.0, false, 1);
     let s = vec![sample_bio("SSNA-001B-PR1", "001B", "PR1", 0)];
-    let panels = dube_wide_pivot(&[m1, m2], &s);
+    let panels = pivot_wide_panels(&[m1, m2], &s);
     assert_eq!(panels.len(), 1);
     let row = &panels[0].rows[0];
     assert_eq!(row.values[0], None); // AAA masked
@@ -131,7 +131,7 @@ fn control_rows_preserve_ingest_order() {
         m("CONTROL_A", "OID1", "AAA", "P1", "2.0", 2.0, false, 1),
     ];
     let samples = vec![sample_ctl("CONTROL_B", 0), sample_ctl("CONTROL_A", 1)];
-    let panels = dube_wide_pivot(&measurements, &samples);
+    let panels = pivot_wide_panels(&measurements, &samples);
     assert_eq!(panels[0].rows[0].sample_id, "CONTROL_B"); // ingest order, not alpha
     assert_eq!(panels[0].rows[1].sample_id, "CONTROL_A");
 }
