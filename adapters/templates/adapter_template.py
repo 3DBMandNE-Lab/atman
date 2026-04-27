@@ -36,7 +36,7 @@ proteins = pd.DataFrame(
     columns=["platform", "assay_id", "uniprot", "gene_symbol", "panel", "panel_lot"]
 )
 
-# 4. Write measurements.tsv and qc_measurements.tsv.
+# 4. Write measurements.tsv.
 measurements = pd.DataFrame(
     columns=[
         "platform",
@@ -62,4 +62,3 @@ measurements = pd.DataFrame(
 samples.to_csv(OUT / "samples.tsv", sep="\t", index=False)
 proteins.to_csv(OUT / "proteins.tsv", sep="\t", index=False)
 measurements.to_csv(OUT / "measurements.tsv", sep="\t", index=False)
-measurements.to_csv(OUT / "qc_measurements.tsv", sep="\t", index=False)

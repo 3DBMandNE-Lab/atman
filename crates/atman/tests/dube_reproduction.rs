@@ -79,6 +79,25 @@ fn dube_reproduction_end_to_end() {
         "dube",
     ]);
 
+    // Stage 2 sanity: qc emits qc_report.tsv with the canonical header,
+    // and the legacy qc_measurements.tsv duplicate is no longer written.
+    let qc_report = tmp_path.join("qc_report.tsv");
+    assert!(qc_report.exists(), "qc must emit qc_report.tsv");
+    let header = std::fs::read_to_string(&qc_report)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        header,
+        "sample_id\tn_measurements\tn_masked\tmask_rate\trule_applied"
+    );
+    assert!(
+        !tmp_path.join("qc_measurements.tsv").exists(),
+        "qc_measurements.tsv must no longer be written after the qc/raw split removal"
+    );
+
     // Stage 3: matrix (Dube-wide per-panel CSVs)
     run_atman(&[
         "matrix",

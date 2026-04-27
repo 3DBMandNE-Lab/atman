@@ -53,11 +53,7 @@ fn run_qc(args: QcArgs) -> Result<()> {
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
-    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
-        args.input_dir.join("measurements.tsv")
-    } else {
-        args.input_dir.join("measurements.tsv")
-    };
+    let measurements_path = args.input_dir.join("measurements.tsv");
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
     let measurements = read_measurements_long(&measurements_path)?;

@@ -42,7 +42,7 @@ fn write_peptide_fixture(dir: &Path) {
                     maxquant_lfq\tA_STABLE\tQ03\tSTABLE\tMS1\t\n";
     std::fs::write(dir.join("proteins.tsv"), proteins).unwrap();
 
-    // Empty qc_measurements.tsv — msqrob doesn't read it, but the
+    // Empty measurements.tsv — msqrob doesn't read it, but the
     // `atman de` entry point reads the canonical file before dispatch.
     let qc = "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
               abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\

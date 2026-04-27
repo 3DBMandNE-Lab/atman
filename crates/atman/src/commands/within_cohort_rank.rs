@@ -37,10 +37,6 @@ pub fn run(args: Args) -> Result<()> {
         &ranked_measurements,
     )?;
 
-    let qc_measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
-    let ranked_qc = rank_records(qc_measurements);
-    write_measurements_long(&args.output_dir.join("measurements.tsv"), &ranked_qc)?;
-
     eprintln!(
         "within-cohort-rank: samples={} proteins={} measurements={}",
         samples.len(),

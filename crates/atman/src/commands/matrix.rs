@@ -7,7 +7,7 @@ use crate::io::{read_measurements_long, read_samples, write_dube_wide_panel};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
-    /// Directory containing `qc_measurements.tsv` and `samples.tsv`.
+    /// Directory containing `measurements.tsv` and `samples.tsv`.
     #[arg(long)]
     input_dir: PathBuf,
 

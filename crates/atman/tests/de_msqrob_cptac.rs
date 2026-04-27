@@ -167,7 +167,7 @@ fn write_cptac_canonical(dir: &Path) {
     }
     std::fs::write(dir.join("proteins.tsv"), proteins).unwrap();
 
-    // Empty qc_measurements.tsv with a valid canonical header.
+    // Empty measurements.tsv with a valid canonical header.
     let qc = "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
               abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
               detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n";

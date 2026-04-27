@@ -251,11 +251,7 @@ fn run_protein(args: ProteinArgs) -> Result<()> {
     }
 
     let comparisons = parse_comparisons(&args.groups)?;
-    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
-        args.input_dir.join("measurements.tsv")
-    } else {
-        args.input_dir.join("measurements.tsv")
-    };
+    let measurements_path = args.input_dir.join("measurements.tsv");
     let measurements = read_measurements_long(&measurements_path)?;
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
@@ -414,11 +410,7 @@ fn run_module(args: ModuleArgs) -> Result<()> {
 
     let comparisons = parse_comparisons(&args.groups)?;
     let modules = read_modules(&args.modules_tsv)?;
-    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
-        args.input_dir.join("measurements.tsv")
-    } else {
-        args.input_dir.join("measurements.tsv")
-    };
+    let measurements_path = args.input_dir.join("measurements.tsv");
     let measurements = read_measurements_long(&measurements_path)?;
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     let sample_by_id: HashMap<&str, &Sample> =
@@ -592,11 +584,7 @@ fn run_program(args: ProgramArgs) -> Result<()> {
 
     let comparisons = parse_comparisons(&args.groups)?;
     let loadings = read_program_loadings(&args.loadings)?;
-    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
-        args.input_dir.join("measurements.tsv")
-    } else {
-        args.input_dir.join("measurements.tsv")
-    };
+    let measurements_path = args.input_dir.join("measurements.tsv");
     let measurements = read_measurements_long(&measurements_path)?;
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     let sample_by_id: HashMap<&str, &Sample> =

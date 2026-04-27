@@ -156,11 +156,7 @@ pub fn run(args: Args) -> Result<()> {
 fn validate_dir(args: &Args, findings: &mut Findings) -> Result<()> {
     let samples_path = args.input_dir.join("samples.tsv");
     let proteins_path = args.input_dir.join("proteins.tsv");
-    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
-        args.input_dir.join("measurements.tsv")
-    } else {
-        args.input_dir.join("measurements.tsv")
-    };
+    let measurements_path = args.input_dir.join("measurements.tsv");
 
     for path in [&samples_path, &proteins_path, &measurements_path] {
         if !path.exists() {

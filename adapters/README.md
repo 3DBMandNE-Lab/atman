@@ -9,7 +9,6 @@ files directly. Any proteomics source can feed Atman by producing:
 - `samples.tsv`
 - `proteins.tsv`
 - `measurements.tsv`
-- `qc_measurements.tsv`
 
 The adapters in this directory are release-safe helpers for common matrix
 layouts. They do not encode project-specific paths or manuscript assumptions.
@@ -31,7 +30,7 @@ extra sample columns directly from `samples.tsv`.
 platform    assay_id    uniprot    gene_symbol    panel    panel_lot
 ```
 
-`measurements.tsv` and `qc_measurements.tsv`:
+`measurements.tsv`:
 
 ```text
 platform    sample_id    assay_id    gene_symbol    panel    npx_source_str    abundance    abundance_raw    abundance_unit    qc_sample    qc_assay    detection_limit    below_lod    dropped_by_qc    plate_id    panel_lot    ingest_order

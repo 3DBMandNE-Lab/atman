@@ -1,7 +1,11 @@
 use anyhow::{Context, Result};
 use atman_core::qc::apply_dube_rule_all;
+use atman_core::MeasurementRecord;
 use clap::Args as ClapArgs;
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
 
 use crate::io::{read_measurements_long, write_measurements_long};
 
@@ -11,7 +15,9 @@ pub struct Args {
     #[arg(long)]
     input_dir: PathBuf,
 
-    /// Output directory for `qc_measurements.tsv`.
+    /// Output directory for the rewritten `measurements.tsv` and the
+    /// `qc_report.tsv` summary side-channel. The common case is
+    /// `--output-dir` equal to `--input-dir` (in-place update).
     #[arg(long)]
     output_dir: PathBuf,
 
@@ -34,7 +40,8 @@ pub fn run(args: Args) -> Result<()> {
     let after = records.iter().filter(|r| !r.dropped_by_qc).count();
     let masked = before - after;
 
-    write_measurements_long(&args.output_dir.join("qc_measurements.tsv"), &records)?;
+    write_measurements_long(&args.output_dir.join("measurements.tsv"), &records)?;
+    write_qc_report(&args.output_dir.join("qc_report.tsv"), &records, &args.rule)?;
     eprintln!(
         "qc: rule={} total={} masked={} passed={}",
         args.rule,
@@ -42,5 +49,33 @@ pub fn run(args: Args) -> Result<()> {
         masked,
         after,
     );
+    Ok(())
+}
+
+fn write_qc_report(path: &Path, records: &[MeasurementRecord], rule: &str) -> Result<()> {
+    let mut per_sample: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for r in records {
+        let entry = per_sample.entry(r.sample_id.as_str()).or_insert((0, 0));
+        entry.0 += 1;
+        if r.dropped_by_qc {
+            entry.1 += 1;
+        }
+    }
+
+    let f = File::create(path).with_context(|| format!("creating {:?}", path))?;
+    let mut w = BufWriter::new(f);
+    writeln!(
+        w,
+        "sample_id\tn_measurements\tn_masked\tmask_rate\trule_applied"
+    )?;
+    for (sample_id, (n, masked)) in &per_sample {
+        let rate = if *n > 0 {
+            *masked as f64 / *n as f64
+        } else {
+            0.0
+        };
+        writeln!(w, "{}\t{}\t{}\t{:.6}\t{}", sample_id, n, masked, rate, rule)?;
+    }
+    w.flush()?;
     Ok(())
 }

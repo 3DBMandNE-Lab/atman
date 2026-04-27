@@ -69,12 +69,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sample-type-col")
     p.add_argument("--is-control-col")
     p.add_argument("--log2-transform", action="store_true")
-    p.add_argument(
-        "--copy-measurements-to-qc",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Also write qc_measurements.tsv. Disable if QC will be run separately.",
-    )
     return p.parse_args()
 
 
@@ -242,8 +236,6 @@ def main() -> None:
     samples.to_csv(args.out / "samples.tsv", sep="\t", index=False)
     proteins.to_csv(args.out / "proteins.tsv", sep="\t", index=False)
     measurements.to_csv(args.out / "measurements.tsv", sep="\t", index=False)
-    if args.copy_measurements_to_qc:
-        measurements.to_csv(args.out / "qc_measurements.tsv", sep="\t", index=False)
 
     print(
         f"wrote {args.out}: {len(samples)} samples, "

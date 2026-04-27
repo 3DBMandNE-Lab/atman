@@ -37,7 +37,7 @@ enum Command {
 
 #[derive(ClapArgs, Debug)]
 pub struct DiscoverArgs {
-    /// Canonical Atman directory (expects `qc_measurements.tsv`,
+    /// Canonical Atman directory (expects `measurements.tsv`,
     /// `samples.tsv`, `proteins.tsv`).
     #[arg(long)]
     input_dir: PathBuf,
@@ -83,10 +83,6 @@ pub struct DiscoverArgs {
     /// height form one module.
     #[arg(long, default_value_t = 0.5)]
     cut_height: f64,
-
-    /// Canonical measurements file to read.
-    #[arg(long, default_value = "qc")]
-    source: String,
 
     /// Output directory (`modules_discovered.tsv`,
     /// `module_discovery_report.tsv`, and `soft_power_diagnostics.tsv`
@@ -159,12 +155,7 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
 
     // Load the canonical measurements into a subject × feature matrix
     // keyed by gene_symbol.
-    let source_file = match args.source.as_str() {
-        "qc" => "measurements.tsv",
-        "raw" => "measurements.tsv",
-        other => bail!("--source {other:?}; expected qc or raw"),
-    };
-    let records = read_measurements_long(&args.input_dir.join(source_file))?;
+    let records = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
     let mut samples: BTreeSet<String> = BTreeSet::new();
     let mut genes: BTreeSet<String> = BTreeSet::new();
     let mut cells: BTreeMap<(String, String), f64> = BTreeMap::new();
@@ -290,7 +281,6 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
             "threshold": args.threshold,
             "min-module-size": args.min_module_size,
             "cut-height": args.cut_height,
-            "source": args.source,
             "chosen-beta": result.soft_power_chosen,
             "n-features-retained": kept_features.len(),
         }),

@@ -119,11 +119,7 @@ pub fn run(args: Args) -> Result<()> {
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     validate_design(&samples, &comparisons, &args.test, args.min_pairs)?;
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
-    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
-        args.input_dir.join("measurements.tsv")
-    } else {
-        args.input_dir.join("measurements.tsv")
-    };
+    let measurements_path = args.input_dir.join("measurements.tsv");
     let measurements = read_measurements_long(&measurements_path)?;
     let protein_cells = build_cells(&samples, &proteins, &measurements);
 

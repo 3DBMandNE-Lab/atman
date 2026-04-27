@@ -35,7 +35,7 @@ use crate::io::{
 
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
-    /// Directory containing qc_measurements.tsv, samples.tsv, proteins.tsv.
+    /// Directory containing measurements.tsv, samples.tsv, proteins.tsv.
     #[arg(long)]
     input_dir: PathBuf,
 
@@ -207,7 +207,7 @@ pub struct Args {
     alpha: f64,
 
     /// Maximum allowed fraction of non-dropped measurements flagged
-    /// `below_lod=1` in `qc_measurements.tsv`. Default 0.5. Left-censored
+    /// `below_lod=1` in `measurements.tsv`. Default 0.5. Left-censored
     /// (MNAR) data above this fraction is likely to distort unpaired-t,
     /// limma, and OLS tests that treat missing-at-random by drop. Raise
     /// the threshold, pass `--allow-censored`, or impute/filter upstream.

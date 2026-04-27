@@ -27,8 +27,7 @@ atman validate --input-dir out
 
 Checks:
 
-- Required files exist: `samples.tsv`, `proteins.tsv`, and either
-  `measurements.tsv` or `qc_measurements.tsv`.
+- Required files exist: `samples.tsv`, `proteins.tsv`, and `measurements.tsv`.
 - Required columns exist in each file.
 - `sample_id` values match between samples and measurements.
 - `assay_id` values match between proteins and measurements.
@@ -133,8 +132,7 @@ Supported sources by schema, not by brand-specific parser:
 Acceptance:
 
 - Replaces the generic Python adapter for common cases.
-- Writes `samples.tsv`, `proteins.tsv`, `measurements.tsv`, and
-  `qc_measurements.tsv`.
+- Writes `samples.tsv`, `proteins.tsv`, and `measurements.tsv`.
 - Preserves extra sample covariates after the canonical sample columns.
 - Can log2-transform positive linear intensities.
 - QC-masks non-positive values when log-transforming.
@@ -796,7 +794,7 @@ Command:
 
 ```bash
 atman network influence \
-  --input out/qc_measurements.tsv \
+  --input out/measurements.tsv \
   --samples out/samples.tsv \
   --method spearman \
   --threshold 0.3 \

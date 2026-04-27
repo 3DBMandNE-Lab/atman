@@ -5,9 +5,8 @@ path against the fixture data shipped under `example_data/dube_heat_2023/`.
 
 Atman's built-in direct ingest currently targets Olink Explore long CSV files.
 Other proteomics formats can be used by writing Atman's canonical TSV files
-(`samples.tsv`, `proteins.tsv`, `measurements.tsv`, and optionally
-`qc_measurements.tsv`) and then running the downstream analysis commands on
-that directory.
+(`samples.tsv`, `proteins.tsv`, and `measurements.tsv`) and then running the
+downstream analysis commands on that directory.
 
 ## 0. Install and verify
 
@@ -61,8 +60,9 @@ preserved; only the inferential abundance is nulled.
 
 Expected: 3,725 rows masked, 118,410 usable rows remain.
 
-For non-Olink sources, an adapter can write `qc_measurements.tsv` directly if
-the source matrix is already filtered or if QC has been handled upstream.
+For non-Olink sources, an adapter can pre-set `dropped_by_qc=true` on rows
+that are already filtered upstream and skip the `qc` step entirely. Atman's
+downstream commands honor `dropped_by_qc` regardless of how it was set.
 
 Matrix ingest alternative for non-Olink data:
 

@@ -16,7 +16,7 @@ use crate::io::read_measurements_long;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
-    /// Directory containing qc_measurements.tsv and samples.tsv.
+    /// Directory containing measurements.tsv and samples.tsv.
     #[arg(long)]
     input_dir: PathBuf,
 
@@ -69,7 +69,7 @@ pub fn run(args: Args) -> Result<()> {
 
     let comparisons = parse_comparisons(&args.groups)?;
     let modules = read_modules(&args.modules_tsv)?;
-    let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
+    let measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
     let samples = crate::io::read_samples(&args.input_dir.join("samples.tsv"))?;
 
     let sample_by_id: HashMap<&str, &atman_core::Sample> =

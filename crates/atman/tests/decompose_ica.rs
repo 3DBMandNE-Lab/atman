@@ -100,8 +100,6 @@ fn decompose_ica_emits_loadings_activations_and_stability() {
         "0.5",
         "--stability-top-n",
         "10",
-        "--source",
-        "qc",
         "--output-loadings",
         loadings.to_str().unwrap(),
         "--output-activations",
@@ -161,7 +159,6 @@ fn decompose_ica_emits_loadings_activations_and_stability() {
     assert_eq!(sidecar["args"]["seed-stability-threshold"], 0.5);
     assert_eq!(sidecar["args"]["stability-metric"], "jaccard-top20");
     assert_eq!(sidecar["args"]["stability-top-n"], 10);
-    assert_eq!(sidecar["args"]["source"], "qc");
     assert!(sidecar["atman_version"].is_string());
     assert!(sidecar["atman_git_sha"].is_string());
     assert!(sidecar["os_arch"].is_string());
@@ -222,8 +219,6 @@ fn decompose_ica_is_deterministic_across_runs() {
             "20260418".to_string(),
             "--stability-top-n".to_string(),
             "10".to_string(),
-            "--source".to_string(),
-            "qc".to_string(),
             "--output-loadings".to_string(),
             l.to_string(),
             "--output-activations".to_string(),
@@ -246,8 +241,6 @@ fn decompose_ica_is_deterministic_across_runs() {
         "20260418",
         "--stability-top-n",
         "10",
-        "--source",
-        "qc",
         "--output-loadings",
         loadings_a.to_str().unwrap(),
         "--output-activations",

@@ -265,7 +265,7 @@ stages:
       atman ingest --platform olink-explore-ngs --parser dube
       --output-dir out example_data/dube_heat_2023/*.csv
   - name: de
-    inputs: [out/qc_measurements.tsv, out/samples.tsv]
+    inputs: [out/measurements.tsv, out/samples.tsv]
     outputs: [out/de_results.tsv, out/de_report.tsv]
     cmd: >
       atman de --input-dir out --output-dir out

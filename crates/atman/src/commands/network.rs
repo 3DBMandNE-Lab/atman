@@ -59,7 +59,7 @@ impl MetricArg {
 #[derive(ClapArgs, Debug)]
 pub struct InfluenceArgs {
     /// Canonical long-format measurements TSV (usually
-    /// `qc_measurements.tsv`) with `sample_id, assay_id, gene_symbol,
+    /// `measurements.tsv`) with `sample_id, assay_id, gene_symbol,
     /// abundance, dropped_by_qc` columns.
     #[arg(long)]
     input: PathBuf,

@@ -49,7 +49,7 @@ enum Command {
 
 #[derive(ClapArgs, Debug)]
 pub struct IcaArgs {
-    /// Canonical Atman input directory (contains `qc_measurements.tsv` or `measurements.tsv`).
+    /// Canonical Atman input directory (contains `measurements.tsv`).
     #[arg(long)]
     input_dir: PathBuf,
 
@@ -96,10 +96,6 @@ pub struct IcaArgs {
     /// FastICA convergence tolerance.
     #[arg(long, default_value_t = 1e-4)]
     tol: f64,
-
-    /// Source for the abundance matrix: `qc` (default, `qc_measurements.tsv`) or `raw` (`measurements.tsv`).
-    #[arg(long, default_value = "qc")]
-    source: String,
 
     /// Drop assays where the fraction of missing samples exceeds this value. 0 = strict complete-case.
     #[arg(long, default_value_t = 0.0)]
@@ -755,7 +751,7 @@ impl NullModeArg {
 
 #[derive(ClapArgs, Debug)]
 pub struct NullArgs {
-    /// Canonical Atman input directory (contains `qc_measurements.tsv` or `measurements.tsv`).
+    /// Canonical Atman input directory (contains `measurements.tsv`).
     #[arg(long)]
     input_dir: PathBuf,
 
@@ -796,11 +792,6 @@ pub struct NullArgs {
     /// FastICA convergence tolerance.
     #[arg(long, default_value_t = 1e-4)]
     tol: f64,
-
-    /// Measurement source — `qc` reads `qc_measurements.tsv`, `raw`
-    /// reads `measurements.tsv`. Defaults mirror `decompose ica`.
-    #[arg(long, default_value = "qc")]
-    source: String,
 
     /// Drop assays with more than this fraction of missing samples.
     #[arg(long, default_value_t = 0.0)]
@@ -855,7 +846,6 @@ fn run_null(args: NullArgs) -> Result<()> {
         stability_top_n: args.top_n,
         max_iter: args.max_iter,
         tol: args.tol,
-        source: args.source.clone(),
         max_missing_fraction: args.max_missing_fraction,
         impute: args.impute.clone(),
         output_loadings: PathBuf::new(),
@@ -935,10 +925,7 @@ fn run_null(args: NullArgs) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let canonical_inputs: &[&str] = match args.source.as_str() {
-        "qc" => &["measurements.tsv", "samples.tsv", "proteins.tsv"],
-        _ => &["measurements.tsv", "samples.tsv", "proteins.tsv"],
-    };
+    let canonical_inputs: &[&str] = &["measurements.tsv", "samples.tsv", "proteins.tsv"];
     let inputs_sha256 = hash_canonical_inputs(&args.input_dir, canonical_inputs)?;
     let sidecar = sidecar_path_for(&args.output);
     write_run_sidecar(
@@ -955,7 +942,6 @@ fn run_null(args: NullArgs) -> Result<()> {
             "top-n": args.top_n,
             "max-iter": args.max_iter,
             "tol": args.tol,
-            "source": args.source,
             "max-missing-fraction": args.max_missing_fraction,
             "impute": args.impute,
             "q-threshold": args.q_threshold,
@@ -1060,10 +1046,7 @@ fn run_ica(args: IcaArgs) -> Result<()> {
     };
 
     let finished_at = SystemTime::now();
-    let canonical_inputs: &[&str] = match args.source.as_str() {
-        "qc" => &["measurements.tsv", "samples.tsv", "proteins.tsv"],
-        _ => &["measurements.tsv", "samples.tsv", "proteins.tsv"],
-    };
+    let canonical_inputs: &[&str] = &["measurements.tsv", "samples.tsv", "proteins.tsv"];
     let inputs_sha256 = hash_canonical_inputs(&args.input_dir, canonical_inputs)?;
     let sidecar = sidecar_path_for(&args.output_loadings);
     let stability_metric = match args.stability_metric {
@@ -1093,7 +1076,6 @@ fn run_ica(args: IcaArgs) -> Result<()> {
             "stability-top-n": args.stability_top_n,
             "max-iter": args.max_iter,
             "tol": args.tol,
-            "source": args.source,
             "max-missing-fraction": args.max_missing_fraction,
             "impute": args.impute,
             "output-loadings": args.output_loadings.display().to_string(),
@@ -1193,12 +1175,7 @@ struct AssayInfo {
 }
 
 fn load_matrix(args: &IcaArgs) -> Result<AbundanceMatrix> {
-    let filename = match args.source.as_str() {
-        "qc" => "measurements.tsv",
-        "raw" => "measurements.tsv",
-        other => bail!("--source {:?}; expected qc or raw", other),
-    };
-    let tsv = args.input_dir.join(filename);
+    let tsv = args.input_dir.join("measurements.tsv");
     let records = read_measurements_long(&tsv)?;
     if records.is_empty() {
         bail!("no measurements in {:?}", tsv);
@@ -1639,8 +1616,8 @@ fn threshold_fraction(_threshold: f64) -> f64 {
 
 #[derive(ClapArgs, Debug)]
 pub struct UnmixArgs {
-    /// Canonical Atman input directory (expects `qc_measurements.tsv`
-    /// or `measurements.tsv`, plus `samples.tsv`, `proteins.tsv`).
+    /// Canonical Atman input directory (expects `measurements.tsv`,
+    /// `samples.tsv`, `proteins.tsv`).
     #[arg(long)]
     input_dir: PathBuf,
 
@@ -1700,10 +1677,6 @@ pub struct UnmixArgs {
     /// meaning on log-ratio coordinates.
     #[arg(long, default_value_t = false)]
     allow_unconstrained_simplex: bool,
-
-    /// Canonical measurements file: `qc` (default) or `raw`.
-    #[arg(long, default_value = "qc")]
-    source: String,
 
     /// Seed for VCA's initial projection direction. Sub-seeds for
     /// each VCA step derive from this via SplitMix64.
@@ -1798,17 +1771,12 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
     }
 
     // Load subject × protein matrix, keyed by gene_symbol.
-    let source_file = match args.source.as_str() {
-        "qc" => "measurements.tsv",
-        "raw" => "measurements.tsv",
-        other => bail!("--source {other:?}; expected qc or raw"),
-    };
     let SubjectProteinMatrix {
         sample_ids: subject_ids,
         protein_labels,
         data,
     } = load_subject_protein_matrix(
-        &args.input_dir.join(source_file),
+        &args.input_dir.join("measurements.tsv"),
         args.max_missing_fraction,
         impute_mean,
     )?;
@@ -1995,7 +1963,6 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
             "transform": args.transform,
             "alr-reference": args.alr_reference,
             "allow-unconstrained-simplex": args.allow_unconstrained_simplex,
-            "source": args.source,
             "seed": args.seed,
             "fcls-max-iter": args.fcls_max_iter,
             "fcls-tol": args.fcls_tol,

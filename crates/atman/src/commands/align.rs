@@ -120,7 +120,7 @@ pub fn run(args: Args) -> Result<()> {
 #[derive(ClapArgs, Debug)]
 pub struct BootstrapArgs {
     /// Comma-separated list of canonical Atman directories, one per
-    /// cohort. Each must contain `qc_measurements.tsv`, `samples.tsv`,
+    /// cohort. Each must contain `measurements.tsv`, `samples.tsv`,
     /// `proteins.tsv`. All cohorts share the same protein universe
     /// (intersection across cohorts is enforced).
     #[arg(long)]
@@ -189,10 +189,6 @@ pub struct BootstrapArgs {
     #[arg(long, default_value = "none")]
     impute: String,
 
-    /// Canonical input filename to read. `qc` (default) or `raw`.
-    #[arg(long, default_value = "qc")]
-    source: String,
-
     /// Output TSV path. Summary with one row per point-estimate
     /// archetype.
     #[arg(long)]
@@ -248,15 +244,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
     let matrices: Vec<CohortMatrix> = cohort_dirs
         .iter()
         .zip(labels.iter())
-        .map(|(dir, label)| {
-            load_cohort_matrix(
-                dir,
-                label,
-                &args.source,
-                args.max_missing_fraction,
-                impute_mean,
-            )
-        })
+        .map(|(dir, label)| load_cohort_matrix(dir, label, args.max_missing_fraction, impute_mean))
         .collect::<Result<Vec<_>>>()?;
     // Enforce common protein universe across cohorts by intersecting
     // their label sets and restricting each matrix to the
@@ -309,10 +297,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
     // Hash each cohort's canonical input directory separately.
     let mut labeled: Vec<(String, PathBuf)> = Vec::new();
     for (dir, label) in cohort_dirs.iter().zip(labels.iter()) {
-        let file = match args.source.as_str() {
-            "qc" => "measurements.tsv",
-            _ => "measurements.tsv",
-        };
+        let file = "measurements.tsv";
         labeled.push((format!("{}_{}", label, file), dir.join(file)));
         labeled.push((format!("{}_samples", label), dir.join("samples.tsv")));
         labeled.push((format!("{}_proteins", label), dir.join("proteins.tsv")));
@@ -341,7 +326,6 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
             "min-subjects": args.min_subjects,
             "max-missing-fraction": args.max_missing_fraction,
             "impute": args.impute,
-            "source": args.source,
             "output": args.output.display().to_string(),
         }),
         &inputs_sha256,
@@ -357,15 +341,10 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
 fn load_cohort_matrix(
     dir: &Path,
     label: &str,
-    source: &str,
     max_missing_fraction: f64,
     impute_mean: bool,
 ) -> Result<CohortMatrix> {
-    let file = match source {
-        "qc" => "measurements.tsv",
-        "raw" => "measurements.tsv",
-        other => bail!("--source {other:?}; expected qc or raw"),
-    };
+    let file = "measurements.tsv";
     let records = read_measurements_long(&dir.join(file))?;
     if records.is_empty() {
         bail!("no measurements in {:?}", dir.join(file));
@@ -1023,10 +1002,6 @@ pub struct ProjectArgs {
     #[arg(long, default_value_t = 0.01)]
     ridge_lambda: f64,
 
-    /// Canonical input filename for the new cohort: `qc` (default) or `raw`.
-    #[arg(long, default_value = "qc")]
-    source: String,
-
     /// Drop assays with more than this fraction of missing samples
     /// in the new cohort (before projection).
     #[arg(long, default_value_t = 0.0)]
@@ -1285,7 +1260,6 @@ fn run_project(args: ProjectArgs) -> Result<()> {
     let mut cohort_matrix = load_cohort_matrix(
         &args.cohort_dir,
         "cohort",
-        &args.source,
         args.max_missing_fraction,
         impute_mean,
     )?;
@@ -1438,10 +1412,7 @@ fn run_project(args: ProjectArgs) -> Result<()> {
     for (cohort, path) in &loadings_spec {
         labeled.push((format!("atlas_loadings_{}", cohort), path.clone()));
     }
-    let file = match args.source.as_str() {
-        "qc" => "measurements.tsv",
-        _ => "measurements.tsv",
-    };
+    let file = "measurements.tsv";
     labeled.push((format!("cohort_{file}"), args.cohort_dir.join(file)));
     labeled.push(("cohort_samples".into(), args.cohort_dir.join("samples.tsv")));
     labeled.push((
@@ -1466,7 +1437,6 @@ fn run_project(args: ProjectArgs) -> Result<()> {
             "alr-reference": args.alr_reference,
             "projection": args.projection,
             "ridge-lambda": args.ridge_lambda,
-            "source": args.source,
             "max-missing-fraction": args.max_missing_fraction,
             "impute": args.impute,
             "atlas-proteins-missing-in-cohort": result.atlas_proteins_missing_in_cohort,
