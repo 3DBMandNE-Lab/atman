@@ -57,7 +57,6 @@ fn build_synthetic_canonical(tmp: &std::path::Path) -> std::path::PathBuf {
         }
     }
     std::fs::write(input_dir.join("measurements.tsv"), &measurements).unwrap();
-    std::fs::write(input_dir.join("measurements.tsv"), &measurements).unwrap();
 
     // samples.tsv with subject_id == sample_id.
     let mut samples =

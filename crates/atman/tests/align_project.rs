@@ -127,7 +127,6 @@ fn write_cohort(dir: &Path, drop_last_protein: bool) {
         }
     }
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
-    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
 #[test]
@@ -318,7 +317,6 @@ fn align_project_includes_control_samples() {
         }
     }
     std::fs::write(cohort_dir.join("measurements.tsv"), &qc).unwrap();
-    std::fs::write(cohort_dir.join("measurements.tsv"), &qc).unwrap();
 
     let status = run_atman(&[
         "align",
@@ -386,7 +384,6 @@ fn align_project_refuses_on_empty_cohort_intersection() {
          detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n\
          olink_explore_ngs\tSUB01\tX001\tZZZ1\tP1\t1.0\t1.0\t1.0\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t1\n\
          olink_explore_ngs\tSUB02\tX001\tZZZ1\tP1\t1.5\t1.5\t1.5\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t2\n";
-    std::fs::write(cohort_dir.join("measurements.tsv"), qc).unwrap();
     std::fs::write(cohort_dir.join("measurements.tsv"), qc).unwrap();
 
     let status = run_atman(&[

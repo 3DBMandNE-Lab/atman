@@ -48,7 +48,6 @@ fn write_peptide_fixture(dir: &Path) {
               abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
               detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n";
     std::fs::write(dir.join("measurements.tsv"), qc).unwrap();
-    std::fs::write(dir.join("measurements.tsv"), qc).unwrap();
 
     // 4 peptides per protein, 12 peptides total.
     let mut peptides =

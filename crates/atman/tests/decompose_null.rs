@@ -113,7 +113,6 @@ fn write_planted_canonical(dir: &Path) {
         }
     }
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
-    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
 fn parse_tsv(path: &Path) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {

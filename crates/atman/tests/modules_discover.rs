@@ -105,7 +105,6 @@ fn write_two_block_cohort(dir: &Path, seed: u64) {
         }
     }
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
-    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
 #[test]
@@ -281,7 +280,6 @@ fn modules_discover_refuses_when_features_below_min_module_size() {
             ));
         }
     }
-    std::fs::write(input.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(input.join("measurements.tsv"), &qc).unwrap();
 
     let out = run_atman(&[

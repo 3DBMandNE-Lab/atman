@@ -210,17 +210,31 @@ pub struct FitFDistOutput {
 }
 
 /// Robust variant of [`fit_f_dist`] per Phipson et al. 2016: Winsorize
-/// `z = log(s²)` before refitting, using limma's default
-/// `winsor.tail.p = c(0.05, 0.1)` — clamp the bottom 5% of values to the
-/// 5th-percentile cutoff and the top 10% to the 90th-percentile cutoff.
-/// This down-weights per-feature outlier variances that would otherwise
-/// pull `s²_prior` upward.
+/// `z = log(s²)` before refitting. The caller supplies the lower/upper
+/// tail fractions: typical limma defaults are `0.05` / `0.10`, meaning
+/// clamp the bottom 5% of values to the 5th-percentile cutoff and the
+/// top 10% to the 90th-percentile cutoff. This down-weights per-feature
+/// outlier variances that would otherwise pull `s²_prior` upward.
 ///
-/// Default Winsor tails match limma's `winsor.tail.p = c(0.05, 0.1)`.
+/// Both tails must be in `(0.0, 0.5)` and their sum must be `< 1.0`. The
+/// function returns `None` if the resulting Winsor window collapses
+/// (`upper_idx <= lower_idx` after rounding) or if there are fewer than
+/// three finite positive `s²` values to fit on.
 ///
-/// Implementation mirrors `fitFDistRobustly` in limma, simplified to
-/// match the MVP's "one robust pass with fixed tails" scope.
-pub fn fit_f_dist_robust(s2: &[f64], df_res: f64) -> Option<FitFDistOutput> {
+/// Implementation mirrors `fitFDistRobustly` in limma, simplified to a
+/// single robust pass.
+pub fn fit_f_dist_robust(
+    s2: &[f64],
+    df_res: f64,
+    winsor_lower: f64,
+    winsor_upper: f64,
+) -> Option<FitFDistOutput> {
+    if !(0.0..0.5).contains(&winsor_lower) || !(0.0..0.5).contains(&winsor_upper) {
+        return None;
+    }
+    if winsor_lower + winsor_upper >= 1.0 {
+        return None;
+    }
     let mut log_s2: Vec<f64> = s2
         .iter()
         .copied()
@@ -233,11 +247,9 @@ pub fn fit_f_dist_robust(s2: &[f64], df_res: f64) -> Option<FitFDistOutput> {
     log_s2.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     let n = log_s2.len();
-    let lower_tail = 0.05_f64;
-    let upper_tail = 0.10_f64;
-    let lower_idx = ((lower_tail * n as f64).floor() as usize).min(n - 1);
+    let lower_idx = ((winsor_lower * n as f64).floor() as usize).min(n - 1);
     let upper_idx =
-        (n.saturating_sub(1)).saturating_sub(((upper_tail * n as f64).floor()) as usize);
+        (n.saturating_sub(1)).saturating_sub(((winsor_upper * n as f64).floor()) as usize);
     if upper_idx <= lower_idx {
         return None;
     }
@@ -593,6 +605,12 @@ pub struct LimmaOptions {
     pub trend: bool,
     /// Use the Winsorized robust F-fit.
     pub robust: bool,
+    /// Lower Winsor tail fraction for the robust prior fit. Ignored when
+    /// `robust` is `false`. limma's default is `0.05`.
+    pub winsor_lower: f64,
+    /// Upper Winsor tail fraction for the robust prior fit. Ignored when
+    /// `robust` is `false`. limma's default is `0.10`.
+    pub winsor_upper: f64,
     /// TREAT minimum-effect threshold (on the log-fold-change scale).
     /// `0.0` produces the standard moderated-t p-value.
     pub lfc_threshold: f64,
@@ -791,7 +809,7 @@ pub fn limma_fit(
 
     // eBayes prior fit.
     let prior = if options.robust {
-        fit_f_dist_robust(&ratios, df_res)
+        fit_f_dist_robust(&ratios, df_res, options.winsor_lower, options.winsor_upper)
             .map(|o| (o.df_prior, o.s2_prior))
             .or_else(|| fit_f_dist(&ratios, df_res))
     } else {
@@ -1024,7 +1042,7 @@ mod tests {
         s2[0] = 1e6;
 
         let (df_non, s2_non) = super::fit_f_dist(&s2, df_res).expect("ok");
-        let out = super::fit_f_dist_robust(&s2, df_res).expect("ok");
+        let out = super::fit_f_dist_robust(&s2, df_res, 0.05, 0.10).expect("ok");
         // Robust fit is closer to the truth than the non-robust fit.
         assert!(
             (out.s2_prior - s2_prior_true).abs() < (s2_non - s2_prior_true).abs(),
@@ -1182,6 +1200,8 @@ mod tests {
             super::LimmaOptions {
                 trend: true,
                 robust: true,
+                winsor_lower: 0.05,
+                winsor_upper: 0.10,
                 lfc_threshold: 0.0,
                 peptide_counts: None,
             },

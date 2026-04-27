@@ -107,7 +107,6 @@ fn write_three_stage_canonical(dir: &Path) {
     }
     std::fs::write(dir.join("samples.tsv"), samples).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
-    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
 #[test]

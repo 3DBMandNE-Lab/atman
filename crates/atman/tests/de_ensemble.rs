@@ -75,7 +75,6 @@ fn write_synthetic(dir: &Path) {
         }
     }
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
-    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
 #[test]

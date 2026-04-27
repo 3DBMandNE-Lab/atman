@@ -83,7 +83,6 @@ fn write_small_canonical(dir: &Path, n_proteins: usize, n_samples: usize) {
         }
     }
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
-    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
 fn args_for_ica(input: &Path, out_dir: &Path, transform: &str, extra: &[&str]) -> Vec<String> {

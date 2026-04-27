@@ -377,10 +377,6 @@ fn write_canonical(
     atomic_write(
         &output_dir.join("measurements.tsv"),
         measurements.as_bytes(),
-    )?;
-    atomic_write(
-        &output_dir.join("measurements.tsv"),
-        measurements.as_bytes(),
     )
 }
 

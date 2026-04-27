@@ -196,6 +196,8 @@ pub(super) fn run_limma(
         let options = LimmaOptions {
             trend: args.trend || deqms_enabled,
             robust: args.robust,
+            winsor_lower: args.limma_winsor_lower,
+            winsor_upper: args.limma_winsor_upper,
             lfc_threshold: args.lfc_threshold,
             peptide_counts,
         };

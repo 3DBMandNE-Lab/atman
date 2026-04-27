@@ -136,7 +136,6 @@ fn write_planted_cohort(dir: &Path, seed: u64, planted: &mut [Vec<f64>]) -> Vec<
         }
     }
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
-    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     abundances
 }
 

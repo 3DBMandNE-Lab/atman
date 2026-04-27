@@ -189,7 +189,6 @@ fn write_cptac_protein_canonical(dir: &Path) {
     std::fs::write(dir.join("proteins.tsv"), proteins).unwrap();
     std::fs::write(dir.join("peptides.tsv"), peptides).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
-    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
 #[test]

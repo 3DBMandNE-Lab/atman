@@ -123,6 +123,18 @@ pub struct Args {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set, num_args = 1)]
     robust: bool,
 
+    /// Lower Winsor tail fraction for the limma robust prior fit. Must be
+    /// in `(0, 0.5)`. Ignored when `--robust false`. Default matches limma's
+    /// `winsor.tail.p[1]`.
+    #[arg(long, default_value_t = 0.05)]
+    limma_winsor_lower: f64,
+
+    /// Upper Winsor tail fraction for the limma robust prior fit. Must be
+    /// in `(0, 0.5)` and `lower + upper < 1`. Ignored when `--robust false`.
+    /// Default matches limma's `winsor.tail.p[2]`.
+    #[arg(long, default_value_t = 0.10)]
+    limma_winsor_upper: f64,
+
     /// Peptide-level long TSV (one row per sample × peptide).
     /// Required for `--test msqrob`. Rejected for other tests.
     /// Schema: `sample_id, peptide_id, abundance, abundance_unit,
@@ -264,6 +276,28 @@ pub fn run(args: Args) -> Result<()> {
         && (!args.moderation_prior_df.is_finite() || args.moderation_prior_df <= 0.0)
     {
         anyhow::bail!("moderation-prior-df must be > 0 for moderated test");
+    }
+    if args.test == "limma" && args.robust {
+        if !(0.0..0.5).contains(&args.limma_winsor_lower) || !args.limma_winsor_lower.is_finite() {
+            anyhow::bail!(
+                "--limma-winsor-lower {} must be in (0, 0.5)",
+                args.limma_winsor_lower
+            );
+        }
+        if !(0.0..0.5).contains(&args.limma_winsor_upper) || !args.limma_winsor_upper.is_finite() {
+            anyhow::bail!(
+                "--limma-winsor-upper {} must be in (0, 0.5)",
+                args.limma_winsor_upper
+            );
+        }
+        if args.limma_winsor_lower + args.limma_winsor_upper >= 1.0 {
+            anyhow::bail!(
+                "--limma-winsor-lower + --limma-winsor-upper must be < 1.0; got {} + {} = {}",
+                args.limma_winsor_lower,
+                args.limma_winsor_upper,
+                args.limma_winsor_lower + args.limma_winsor_upper
+            );
+        }
     }
     if args.test != "ols"
         && args.test != "mixed"
@@ -1047,6 +1081,8 @@ pub fn run(args: Args) -> Result<()> {
             "lfc-threshold": args.lfc_threshold,
             "trend": args.trend,
             "robust": args.robust,
+            "limma-winsor-lower": args.limma_winsor_lower,
+            "limma-winsor-upper": args.limma_winsor_upper,
             "peptide-measurements": args.peptide_measurements.as_ref().map(|p| p.display().to_string()),
             "peptide-metadata": args.peptide_metadata.as_ref().map(|p| p.display().to_string()),
             "ridge-lambda": args.ridge_lambda,

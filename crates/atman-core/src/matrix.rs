@@ -30,10 +30,7 @@ pub struct WidePanel {
     pub rows: Vec<WidePanelRow>,
 }
 
-pub fn pivot_wide_panels(
-    measurements: &[MeasurementRecord],
-    samples: &[Sample],
-) -> Vec<WidePanel> {
+pub fn pivot_wide_panels(measurements: &[MeasurementRecord], samples: &[Sample]) -> Vec<WidePanel> {
     let sample_by_id: HashMap<&str, &Sample> =
         samples.iter().map(|s| (s.sample_id.as_str(), s)).collect();
 
