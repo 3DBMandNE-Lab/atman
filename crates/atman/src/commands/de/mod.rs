@@ -49,9 +49,13 @@ pub struct Args {
     #[arg(long, default_value = "paired-t")]
     test: String,
 
-    /// Biological-replicate key column on samples.tsv. Required for
-    /// `paired-t` and `moderated`; ignored for `welch-t` and `ols`.
-    #[arg(long, default_value = "participant")]
+    /// Biological-replicate key. Currently fixed to the canonical
+    /// `subject_id` column from samples.tsv; the legacy alias
+    /// `participant` is also accepted for backward compatibility.
+    /// Required for `paired-t` and `moderated`; ignored for the
+    /// unpaired tests (`welch-t`, `ols`, `mixed`, `limma`, `msqrob`,
+    /// `ensemble`).
+    #[arg(long, default_value = "subject_id")]
     paired_by: String,
 
     /// Comma-separated covariate column names from samples.tsv for
@@ -246,9 +250,11 @@ pub fn run(args: Args) -> Result<()> {
         || args.test == "limma"
         || args.test == "msqrob"
         || args.test == "ensemble";
-    if !is_unpaired && args.paired_by != "participant" {
+    if !is_unpaired && !matches!(args.paired_by.as_str(), "subject_id" | "participant") {
         anyhow::bail!(
-            "paired-by {:?} not supported for paired tests (expected `participant`)",
+            "paired-by {:?} not supported for paired tests; pairing currently uses the \
+             canonical `subject_id` column from samples.tsv. Use `subject_id` (or the \
+             legacy alias `participant`).",
             args.paired_by
         );
     }
@@ -302,10 +308,7 @@ pub fn run(args: Args) -> Result<()> {
         // `ridge_lambda` is validated inside run_msqrob.
     } else if args.peptide_measurements.is_some() && args.test != "ensemble" {
         anyhow::bail!("--peptide-measurements requires --test msqrob");
-    } else if args.peptide_metadata.is_some()
-        && args.test != "limma"
-        && args.test != "ensemble"
-    {
+    } else if args.peptide_metadata.is_some() && args.test != "limma" && args.test != "ensemble" {
         anyhow::bail!(
             "--peptide-metadata is accepted for --test msqrob, --test limma (DEqMS), or --test ensemble; \
              got --test {:?}",
@@ -347,9 +350,7 @@ pub fn run(args: Args) -> Result<()> {
                 .unwrap_or("")
                 .is_empty()
             {
-                anyhow::bail!(
-                    "--post-hoc sidak requires --post-hoc-factor or --omnibus-factor"
-                );
+                anyhow::bail!("--post-hoc sidak requires --post-hoc-factor or --omnibus-factor");
             }
             if !(0.0..=1.0).contains(&args.alpha) {
                 anyhow::bail!("--alpha must be in [0, 1]");
@@ -378,9 +379,7 @@ pub fn run(args: Args) -> Result<()> {
                 .unwrap_or("")
                 .is_empty()
             {
-                anyhow::bail!(
-                    "--post-hoc tukey requires --post-hoc-factor or --omnibus-factor"
-                );
+                anyhow::bail!("--post-hoc tukey requires --post-hoc-factor or --omnibus-factor");
             }
             if !(0.0..=1.0).contains(&args.alpha) {
                 anyhow::bail!("--alpha must be in [0, 1]");
@@ -412,9 +411,7 @@ pub fn run(args: Args) -> Result<()> {
                 .unwrap_or("")
                 .is_empty()
             {
-                anyhow::bail!(
-                    "--post-hoc dunnett requires --post-hoc-factor or --omnibus-factor"
-                );
+                anyhow::bail!("--post-hoc dunnett requires --post-hoc-factor or --omnibus-factor");
             }
             if !(0.0..=1.0).contains(&args.alpha) {
                 anyhow::bail!("--alpha must be in [0, 1]");
@@ -604,327 +601,326 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     if args.test == "msqrob" {
-        let (msqrob_rows, msqrob_reports) =
-            run_msqrob(&args, &samples, &proteins, &comparisons)?;
+        let (msqrob_rows, msqrob_reports) = run_msqrob(&args, &samples, &proteins, &comparisons)?;
         all_rows.extend(msqrob_rows);
         report_rows.extend(msqrob_reports);
     }
 
     if args.test != "limma" && args.test != "msqrob" {
-    for (comp_a, comp_b) in &comparisons {
-        let comparison_label = format!("{}-{}", comp_a, comp_b);
-        // Per-family p-value vector aligned with `family_rows` order.
-        let mut family_p: Vec<Option<f64>> = Vec::new();
-        let mut family_rows: Vec<DeResultRow> = Vec::new();
+        for (comp_a, comp_b) in &comparisons {
+            let comparison_label = format!("{}-{}", comp_a, comp_b);
+            // Per-family p-value vector aligned with `family_rows` order.
+            let mut family_p: Vec<Option<f64>> = Vec::new();
+            let mut family_rows: Vec<DeResultRow> = Vec::new();
 
-        // OLS mode: precompute the encoded design matrix (excluding y) for
-        // this comparison so every per-protein fit reuses it, only swapping
-        // the y vector (with complete-case filtering on non-finite abundance).
-        let model_design: Option<OlsDesign> = if args.test == "ols" || args.test == "mixed" {
-            let setup = model_setup
-                .as_ref()
-                .expect("model_setup populated when test=ols or mixed");
-            let design = build_ols_design(&samples, comp_a, comp_b, setup)?;
-            design_rows.extend(design.report_rows.clone());
-            Some(design)
-        } else {
-            None
-        };
-
-        for ((panel, gene), by_condition) in &cells {
-            let (assay_id, uniprot) = match gene_meta.get(&(panel.clone(), gene.clone())) {
-                Some(meta) => meta.clone(),
-                None => (String::new(), vec![]),
+            // OLS mode: precompute the encoded design matrix (excluding y) for
+            // this comparison so every per-protein fit reuses it, only swapping
+            // the y vector (with complete-case filtering on non-finite abundance).
+            let model_design: Option<OlsDesign> = if args.test == "ols" || args.test == "mixed" {
+                let setup = model_setup
+                    .as_ref()
+                    .expect("model_setup populated when test=ols or mixed");
+                let design = build_ols_design(&samples, comp_a, comp_b, setup)?;
+                design_rows.extend(design.report_rows.clone());
+                Some(design)
+            } else {
+                None
             };
 
-            // Build per-condition cell vectors. In paired mode we intersect
-            // by subject_id; in unpaired (welch-t) mode we treat each
-            // condition's samples as an independent group and drop the
-            // subject linkage.
-            let empty: Vec<(String, f64)> = Vec::new();
-            let va = by_condition.get(comp_a).unwrap_or(&empty);
-            let vb = by_condition.get(comp_b).unwrap_or(&empty);
+            for ((panel, gene), by_condition) in &cells {
+                let (assay_id, uniprot) = match gene_meta.get(&(panel.clone(), gene.clone())) {
+                    Some(meta) => meta.clone(),
+                    None => (String::new(), vec![]),
+                };
 
-            let (result, robust) = if args.test == "mixed" {
-                let design = model_design
-                    .as_ref()
-                    .expect("model_design populated when test=mixed");
-                let mut y: Vec<f64> = Vec::with_capacity(design.rows.len());
-                let mut rows: Vec<Vec<f64>> = Vec::with_capacity(design.rows.len());
-                let mut groups: Vec<String> = Vec::with_capacity(design.rows.len());
-                for (sid, row) in design.rows.iter() {
-                    if let Some(abundance) =
-                        cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone()))
-                    {
-                        let sample = sample_by_id
-                            .get(sid.as_str())
-                            .expect("design sample exists in sample_by_id");
-                        y.push(*abundance);
-                        rows.push(row.clone());
-                        groups.push(sample.subject_id.as_ref().unwrap_or(sid).clone());
-                    }
-                }
-                let fit = mixed_random_intercept(&rows, &y, &groups, args.min_pairs);
-                let (mean_a_raw, mean_b_raw) = raw_group_means(&y, &rows, design.group_col);
-                (
-                    ols_to_paired_t_result(
-                        fit,
-                        design,
-                        mean_a_raw,
-                        mean_b_raw,
-                        panel,
-                        gene,
-                        &comparison_label,
-                        &mut covariate_rows,
-                    ),
-                    RobustStats::default(),
-                )
-            } else if args.test == "ols" {
-                let design = model_design
-                    .as_ref()
-                    .expect("ols_design populated when test=ols");
-                // Look up per-sample abundance for this protein; drop
-                // samples where the cell is QC-masked (missing from
-                // cells_by_sample).
-                let mut y: Vec<f64> = Vec::with_capacity(design.rows.len());
-                let mut rows: Vec<Vec<f64>> = Vec::with_capacity(design.rows.len());
-                for (sid, row) in design.rows.iter() {
-                    if let Some(abundance) =
-                        cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone()))
-                    {
-                        y.push(*abundance);
-                        rows.push(row.clone());
-                    }
-                }
-                let fit = ols(&rows, &y, args.min_pairs);
-                // Omnibus F-test on the --omnibus-factor's columns,
-                // captured before the fit is consumed downstream. The
-                // factor is identified by matching design_labels
-                // starting with its name (mirrors how categorical
-                // one-hot columns are labelled in OlsDesign).
-                if let (OlsOutcome::Computed(f), Some(factor_name)) =
-                    (&fit, args.omnibus_factor.as_deref())
-                {
-                    let factor_cols: Vec<usize> = design
-                        .design_labels
-                        .iter()
-                        .enumerate()
-                        .filter(|(idx, l)| {
-                            *idx != 0 && *idx != design.group_col && l.starts_with(factor_name)
-                        })
-                        .map(|(i, _)| i)
-                        .collect();
-                    if factor_cols.len() >= 2 {
-                        if let Some(om) = atman_core::de::omnibus_f_test(
-                            &rows,
-                            &f.beta,
-                            &factor_cols,
-                            f.sigma2,
-                            f.df,
-                        ) {
-                            omnibus_rows.push(OmnibusRow {
-                                panel: panel.clone(),
-                                assay_id: assay_id.clone(),
-                                gene_symbol: gene.clone(),
-                                factor: factor_name.to_string(),
-                                comparison: comparison_label.clone(),
-                                f_statistic: om.f_statistic,
-                                df_num: om.df_num,
-                                df_den: om.df_den,
-                                p_value: om.p_value,
-                                bh_q: None,
-                            });
+                // Build per-condition cell vectors. In paired mode we intersect
+                // by subject_id; in unpaired (welch-t) mode we treat each
+                // condition's samples as an independent group and drop the
+                // subject linkage.
+                let empty: Vec<(String, f64)> = Vec::new();
+                let va = by_condition.get(comp_a).unwrap_or(&empty);
+                let vb = by_condition.get(comp_b).unwrap_or(&empty);
+
+                let (result, robust) = if args.test == "mixed" {
+                    let design = model_design
+                        .as_ref()
+                        .expect("model_design populated when test=mixed");
+                    let mut y: Vec<f64> = Vec::with_capacity(design.rows.len());
+                    let mut rows: Vec<Vec<f64>> = Vec::with_capacity(design.rows.len());
+                    let mut groups: Vec<String> = Vec::with_capacity(design.rows.len());
+                    for (sid, row) in design.rows.iter() {
+                        if let Some(abundance) =
+                            cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone()))
+                        {
+                            let sample = sample_by_id
+                                .get(sid.as_str())
+                                .expect("design sample exists in sample_by_id");
+                            y.push(*abundance);
+                            rows.push(row.clone());
+                            groups.push(sample.subject_id.as_ref().unwrap_or(sid).clone());
                         }
                     }
-                }
-                // Compute raw group means for schema compatibility with
-                // paired-t / welch-t.
-                let (mean_a_raw, mean_b_raw) = raw_group_means(&y, &rows, design.group_col);
-                (
-                    ols_to_paired_t_result(
-                        fit,
-                        design,
-                        mean_a_raw,
-                        mean_b_raw,
-                        panel,
-                        gene,
-                        &comparison_label,
-                        &mut covariate_rows,
-                    ),
-                    RobustStats::default(),
-                )
-            } else if is_unpaired {
-                let a_vals: Vec<f64> = va.iter().map(|(_, v)| *v).collect();
-                let b_vals: Vec<f64> = vb.iter().map(|(_, v)| *v).collect();
-                (
-                    welch_t(&a_vals, &b_vals, args.min_pairs),
-                    robust_unpaired(&a_vals, &b_vals, args.min_pairs),
-                )
-            } else {
-                // Subject → value, for fast paired join.
-                let a_by_subj: HashMap<&str, f64> =
-                    va.iter().map(|(s, v)| (s.as_str(), *v)).collect();
-                let b_by_subj: HashMap<&str, f64> =
-                    vb.iter().map(|(s, v)| (s.as_str(), *v)).collect();
-                let pairs: Vec<(f64, f64)> = a_by_subj
-                    .iter()
-                    .filter_map(|(subj, a)| b_by_subj.get(subj).map(|b| (*a, *b)))
-                    .collect();
-                (
-                    paired_t(&pairs, args.min_pairs),
-                    robust_paired(&pairs, args.min_pairs),
-                )
-            };
-            let row = match &result {
-                PairedTResult::Computed {
-                    n_pairs,
-                    mean_a,
-                    mean_b,
-                    mean_diff,
-                    t,
-                    df,
-                    p_value,
-                } => DeResultRow {
-                    panel: panel.clone(),
-                    assay_id: assay_id.clone(),
-                    gene_symbol: gene.clone(),
-                    uniprot: uniprot.join(","),
-                    comparison: comparison_label.clone(),
-                    n_pairs: *n_pairs,
-                    mean_a: Some(*mean_a),
-                    mean_b: Some(*mean_b),
-                    mean_diff: Some(*mean_diff),
-                    t: Some(*t),
-                    df: Some(*df),
-                    p_value: Some(*p_value),
-                    bh_q: None, // filled after BH sweep
-                    effect_size: robust.effect_size,
-                    effect_size_method: robust.effect_size_method.clone(),
-                    ci_low: robust.ci_low,
-                    ci_high: robust.ci_high,
-                    wilcoxon_p: robust.wilcoxon_p,
-                    wilcoxon_method: robust.wilcoxon_method.clone(),
-                    median_diff: robust.median_diff,
-                    trimmed_mean_diff: robust.trimmed_mean_diff,
-                    skip_reason: String::new(),
-                    s2_trend: None,
-                    s2_prior: None,
-                    s2_posterior: None,
-                    df_prior: None,
-                    df_total: None,
-                    f_statistic: None,
-                    f_p_value: None,
-                    f_bh_q: None,
-                    lfc_threshold: None,
-                    n_peptides_observed: None,
-                    peptide_variance_ratio: None,
-                    ridge_lambda: None,
-                    method: args.test.clone(),
-                    posthoc_method: String::new(),
-                    posthoc_p: None,
-                    posthoc_adj_p: None,
-                },
-                PairedTResult::Skipped { reason, n_pairs } => DeResultRow {
-                    panel: panel.clone(),
-                    assay_id: assay_id.clone(),
-                    gene_symbol: gene.clone(),
-                    uniprot: uniprot.join(","),
-                    comparison: comparison_label.clone(),
-                    n_pairs: *n_pairs,
-                    mean_a: None,
-                    mean_b: None,
-                    mean_diff: None,
-                    t: None,
-                    df: None,
-                    p_value: None,
-                    bh_q: None,
-                    effect_size: robust.effect_size,
-                    effect_size_method: robust.effect_size_method.clone(),
-                    ci_low: robust.ci_low,
-                    ci_high: robust.ci_high,
-                    wilcoxon_p: robust.wilcoxon_p,
-                    wilcoxon_method: robust.wilcoxon_method.clone(),
-                    median_diff: robust.median_diff,
-                    trimmed_mean_diff: robust.trimmed_mean_diff,
-                    skip_reason: match reason {
-                        SkipReason::InsufficientPairs => "insufficient_pairs".to_string(),
-                        SkipReason::ZeroVariance => "zero_variance".to_string(),
-                        SkipReason::NonFiniteInput => "non_finite_input".to_string(),
+                    let fit = mixed_random_intercept(&rows, &y, &groups, args.min_pairs);
+                    let (mean_a_raw, mean_b_raw) = raw_group_means(&y, &rows, design.group_col);
+                    (
+                        ols_to_paired_t_result(
+                            fit,
+                            design,
+                            mean_a_raw,
+                            mean_b_raw,
+                            panel,
+                            gene,
+                            &comparison_label,
+                            &mut covariate_rows,
+                        ),
+                        RobustStats::default(),
+                    )
+                } else if args.test == "ols" {
+                    let design = model_design
+                        .as_ref()
+                        .expect("ols_design populated when test=ols");
+                    // Look up per-sample abundance for this protein; drop
+                    // samples where the cell is QC-masked (missing from
+                    // cells_by_sample).
+                    let mut y: Vec<f64> = Vec::with_capacity(design.rows.len());
+                    let mut rows: Vec<Vec<f64>> = Vec::with_capacity(design.rows.len());
+                    for (sid, row) in design.rows.iter() {
+                        if let Some(abundance) =
+                            cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone()))
+                        {
+                            y.push(*abundance);
+                            rows.push(row.clone());
+                        }
+                    }
+                    let fit = ols(&rows, &y, args.min_pairs);
+                    // Omnibus F-test on the --omnibus-factor's columns,
+                    // captured before the fit is consumed downstream. The
+                    // factor is identified by matching design_labels
+                    // starting with its name (mirrors how categorical
+                    // one-hot columns are labelled in OlsDesign).
+                    if let (OlsOutcome::Computed(f), Some(factor_name)) =
+                        (&fit, args.omnibus_factor.as_deref())
+                    {
+                        let factor_cols: Vec<usize> = design
+                            .design_labels
+                            .iter()
+                            .enumerate()
+                            .filter(|(idx, l)| {
+                                *idx != 0 && *idx != design.group_col && l.starts_with(factor_name)
+                            })
+                            .map(|(i, _)| i)
+                            .collect();
+                        if factor_cols.len() >= 2 {
+                            if let Some(om) = atman_core::de::omnibus_f_test(
+                                &rows,
+                                &f.beta,
+                                &factor_cols,
+                                f.sigma2,
+                                f.df,
+                            ) {
+                                omnibus_rows.push(OmnibusRow {
+                                    panel: panel.clone(),
+                                    assay_id: assay_id.clone(),
+                                    gene_symbol: gene.clone(),
+                                    factor: factor_name.to_string(),
+                                    comparison: comparison_label.clone(),
+                                    f_statistic: om.f_statistic,
+                                    df_num: om.df_num,
+                                    df_den: om.df_den,
+                                    p_value: om.p_value,
+                                    bh_q: None,
+                                });
+                            }
+                        }
+                    }
+                    // Compute raw group means for schema compatibility with
+                    // paired-t / welch-t.
+                    let (mean_a_raw, mean_b_raw) = raw_group_means(&y, &rows, design.group_col);
+                    (
+                        ols_to_paired_t_result(
+                            fit,
+                            design,
+                            mean_a_raw,
+                            mean_b_raw,
+                            panel,
+                            gene,
+                            &comparison_label,
+                            &mut covariate_rows,
+                        ),
+                        RobustStats::default(),
+                    )
+                } else if is_unpaired {
+                    let a_vals: Vec<f64> = va.iter().map(|(_, v)| *v).collect();
+                    let b_vals: Vec<f64> = vb.iter().map(|(_, v)| *v).collect();
+                    (
+                        welch_t(&a_vals, &b_vals, args.min_pairs),
+                        robust_unpaired(&a_vals, &b_vals, args.min_pairs),
+                    )
+                } else {
+                    // Subject → value, for fast paired join.
+                    let a_by_subj: HashMap<&str, f64> =
+                        va.iter().map(|(s, v)| (s.as_str(), *v)).collect();
+                    let b_by_subj: HashMap<&str, f64> =
+                        vb.iter().map(|(s, v)| (s.as_str(), *v)).collect();
+                    let pairs: Vec<(f64, f64)> = a_by_subj
+                        .iter()
+                        .filter_map(|(subj, a)| b_by_subj.get(subj).map(|b| (*a, *b)))
+                        .collect();
+                    (
+                        paired_t(&pairs, args.min_pairs),
+                        robust_paired(&pairs, args.min_pairs),
+                    )
+                };
+                let row = match &result {
+                    PairedTResult::Computed {
+                        n_pairs,
+                        mean_a,
+                        mean_b,
+                        mean_diff,
+                        t,
+                        df,
+                        p_value,
+                    } => DeResultRow {
+                        panel: panel.clone(),
+                        assay_id: assay_id.clone(),
+                        gene_symbol: gene.clone(),
+                        uniprot: uniprot.join(","),
+                        comparison: comparison_label.clone(),
+                        n_pairs: *n_pairs,
+                        mean_a: Some(*mean_a),
+                        mean_b: Some(*mean_b),
+                        mean_diff: Some(*mean_diff),
+                        t: Some(*t),
+                        df: Some(*df),
+                        p_value: Some(*p_value),
+                        bh_q: None, // filled after BH sweep
+                        effect_size: robust.effect_size,
+                        effect_size_method: robust.effect_size_method.clone(),
+                        ci_low: robust.ci_low,
+                        ci_high: robust.ci_high,
+                        wilcoxon_p: robust.wilcoxon_p,
+                        wilcoxon_method: robust.wilcoxon_method.clone(),
+                        median_diff: robust.median_diff,
+                        trimmed_mean_diff: robust.trimmed_mean_diff,
+                        skip_reason: String::new(),
+                        s2_trend: None,
+                        s2_prior: None,
+                        s2_posterior: None,
+                        df_prior: None,
+                        df_total: None,
+                        f_statistic: None,
+                        f_p_value: None,
+                        f_bh_q: None,
+                        lfc_threshold: None,
+                        n_peptides_observed: None,
+                        peptide_variance_ratio: None,
+                        ridge_lambda: None,
+                        method: args.test.clone(),
+                        posthoc_method: String::new(),
+                        posthoc_p: None,
+                        posthoc_adj_p: None,
                     },
-                    s2_trend: None,
-                    s2_prior: None,
-                    s2_posterior: None,
-                    df_prior: None,
-                    df_total: None,
-                    f_statistic: None,
-                    f_p_value: None,
-                    f_bh_q: None,
-                    lfc_threshold: None,
-                    n_peptides_observed: None,
-                    peptide_variance_ratio: None,
-                    ridge_lambda: None,
-                    method: args.test.clone(),
-                    posthoc_method: String::new(),
-                    posthoc_p: None,
-                    posthoc_adj_p: None,
-                },
-            };
-            family_p.push(row.p_value);
-            family_rows.push(row);
-        }
-
-        if args.test == "moderated" {
-            apply_moderated_shrinkage(&mut family_rows, args.moderation_prior_df)?;
-            family_p = family_rows.iter().map(|r| r.p_value).collect();
-        }
-
-        // BH-FDR within this comparison family.
-        let qs = bh_fdr(&family_p);
-        for (row, q) in family_rows.iter_mut().zip(qs.into_iter()) {
-            row.bh_q = q;
-        }
-
-        // Per-panel report summary.
-        let mut per_panel: BTreeMap<String, ReportAccumulator> = BTreeMap::new();
-        for row in &family_rows {
-            let acc = per_panel.entry(row.panel.clone()).or_default();
-            acc.n_tests += 1;
-            if let Some(q) = row.bh_q {
-                if q < 0.05 {
-                    acc.n_q_lt_05 += 1;
-                }
-                if q < 0.10 {
-                    acc.n_q_lt_10 += 1;
-                }
-                if acc.min_q.map(|m| q < m).unwrap_or(true) {
-                    acc.min_q = Some(q);
-                }
-            } else {
-                acc.n_skipped += 1;
+                    PairedTResult::Skipped { reason, n_pairs } => DeResultRow {
+                        panel: panel.clone(),
+                        assay_id: assay_id.clone(),
+                        gene_symbol: gene.clone(),
+                        uniprot: uniprot.join(","),
+                        comparison: comparison_label.clone(),
+                        n_pairs: *n_pairs,
+                        mean_a: None,
+                        mean_b: None,
+                        mean_diff: None,
+                        t: None,
+                        df: None,
+                        p_value: None,
+                        bh_q: None,
+                        effect_size: robust.effect_size,
+                        effect_size_method: robust.effect_size_method.clone(),
+                        ci_low: robust.ci_low,
+                        ci_high: robust.ci_high,
+                        wilcoxon_p: robust.wilcoxon_p,
+                        wilcoxon_method: robust.wilcoxon_method.clone(),
+                        median_diff: robust.median_diff,
+                        trimmed_mean_diff: robust.trimmed_mean_diff,
+                        skip_reason: match reason {
+                            SkipReason::InsufficientPairs => "insufficient_pairs".to_string(),
+                            SkipReason::ZeroVariance => "zero_variance".to_string(),
+                            SkipReason::NonFiniteInput => "non_finite_input".to_string(),
+                        },
+                        s2_trend: None,
+                        s2_prior: None,
+                        s2_posterior: None,
+                        df_prior: None,
+                        df_total: None,
+                        f_statistic: None,
+                        f_p_value: None,
+                        f_bh_q: None,
+                        lfc_threshold: None,
+                        n_peptides_observed: None,
+                        peptide_variance_ratio: None,
+                        ridge_lambda: None,
+                        method: args.test.clone(),
+                        posthoc_method: String::new(),
+                        posthoc_p: None,
+                        posthoc_adj_p: None,
+                    },
+                };
+                family_p.push(row.p_value);
+                family_rows.push(row);
             }
-            if let Some(d) = row.mean_diff {
-                let abs_d = d.abs();
-                if acc.max_abs_effect.map(|m| abs_d > m).unwrap_or(true) {
-                    acc.max_abs_effect = Some(abs_d);
+
+            if args.test == "moderated" {
+                apply_moderated_shrinkage(&mut family_rows, args.moderation_prior_df)?;
+                family_p = family_rows.iter().map(|r| r.p_value).collect();
+            }
+
+            // BH-FDR within this comparison family.
+            let qs = bh_fdr(&family_p);
+            for (row, q) in family_rows.iter_mut().zip(qs.into_iter()) {
+                row.bh_q = q;
+            }
+
+            // Per-panel report summary.
+            let mut per_panel: BTreeMap<String, ReportAccumulator> = BTreeMap::new();
+            for row in &family_rows {
+                let acc = per_panel.entry(row.panel.clone()).or_default();
+                acc.n_tests += 1;
+                if let Some(q) = row.bh_q {
+                    if q < 0.05 {
+                        acc.n_q_lt_05 += 1;
+                    }
+                    if q < 0.10 {
+                        acc.n_q_lt_10 += 1;
+                    }
+                    if acc.min_q.map(|m| q < m).unwrap_or(true) {
+                        acc.min_q = Some(q);
+                    }
+                } else {
+                    acc.n_skipped += 1;
+                }
+                if let Some(d) = row.mean_diff {
+                    let abs_d = d.abs();
+                    if acc.max_abs_effect.map(|m| abs_d > m).unwrap_or(true) {
+                        acc.max_abs_effect = Some(abs_d);
+                    }
                 }
             }
-        }
-        for (panel, acc) in per_panel {
-            report_rows.push(DeReportRow {
-                comparison: comparison_label.clone(),
-                panel,
-                n_tests: acc.n_tests,
-                n_skipped: acc.n_skipped,
-                n_q_lt_05: acc.n_q_lt_05,
-                n_q_lt_10: acc.n_q_lt_10,
-                min_q: acc.min_q,
-                max_abs_effect: acc.max_abs_effect,
-                limma_trend_fallback_used: None,
-            });
-        }
+            for (panel, acc) in per_panel {
+                report_rows.push(DeReportRow {
+                    comparison: comparison_label.clone(),
+                    panel,
+                    n_tests: acc.n_tests,
+                    n_skipped: acc.n_skipped,
+                    n_q_lt_05: acc.n_q_lt_05,
+                    n_q_lt_10: acc.n_q_lt_10,
+                    min_q: acc.min_q,
+                    max_abs_effect: acc.max_abs_effect,
+                    limma_trend_fallback_used: None,
+                });
+            }
 
-        all_rows.extend(family_rows);
-    }
+            all_rows.extend(family_rows);
+        }
     } // end of gating the paired/ols/welch/mixed dispatch
 
     // Stable sort for inspection: (comparison, bh_q asc with None last, |mean_diff| desc).
@@ -1063,7 +1059,7 @@ pub fn run(args: Args) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("de: sidecar={}", sidecar.display());
     Ok(())
 }
