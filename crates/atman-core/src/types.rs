@@ -12,6 +12,7 @@ pub enum Platform {
     OlinkTargetQpcr,
     SomaScan,
     MaxQuantLfq,
+    MaxQuantTmt,
     DiannReport,
     SpectronautReport,
 }
@@ -23,6 +24,7 @@ impl Platform {
             Self::OlinkTargetQpcr => "olink_target_qpcr",
             Self::SomaScan => "somascan",
             Self::MaxQuantLfq => "maxquant_lfq",
+            Self::MaxQuantTmt => "maxquant_tmt",
             Self::DiannReport => "diann_report",
             Self::SpectronautReport => "spectronaut_report",
         }
@@ -38,6 +40,7 @@ impl FromStr for Platform {
             "olink_target_qpcr" | "olink-target-qpcr" => Ok(Self::OlinkTargetQpcr),
             "somascan" | "soma_scan" => Ok(Self::SomaScan),
             "maxquant_lfq" | "maxquant-lfq" => Ok(Self::MaxQuantLfq),
+            "maxquant_tmt" | "maxquant-tmt" | "tmt" => Ok(Self::MaxQuantTmt),
             "diann_report" | "diann-report" | "diann_dia" | "dia-nn" | "diann" => {
                 Ok(Self::DiannReport)
             }
@@ -207,4 +210,34 @@ pub struct Sample {
     pub is_control: bool,
     pub sample_type: Option<String>,
     pub ingest_order: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Platform;
+
+    #[test]
+    fn platform_round_trips_through_string() {
+        for variant in [
+            Platform::OlinkExploreNgs,
+            Platform::OlinkTargetQpcr,
+            Platform::SomaScan,
+            Platform::MaxQuantLfq,
+            Platform::MaxQuantTmt,
+            Platform::DiannReport,
+            Platform::SpectronautReport,
+        ] {
+            let s = variant.as_str();
+            let parsed: Platform = s.parse().expect("canonical string parses back");
+            assert_eq!(variant, parsed, "round-trip for {s}");
+        }
+    }
+
+    #[test]
+    fn maxquant_tmt_accepts_aliases() {
+        for alias in ["maxquant_tmt", "maxquant-tmt", "tmt", "TMT", " MaxQuant_TMT "] {
+            let parsed: Platform = alias.parse().unwrap_or_else(|e| panic!("{alias}: {e}"));
+            assert_eq!(parsed, Platform::MaxQuantTmt);
+        }
+    }
 }
