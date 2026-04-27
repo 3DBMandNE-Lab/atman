@@ -82,16 +82,11 @@ fn write_small_canonical(dir: &Path, n_proteins: usize, n_samples: usize) {
             ));
         }
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
-fn args_for_ica(
-    input: &Path,
-    out_dir: &Path,
-    transform: &str,
-    extra: &[&str],
-) -> Vec<String> {
+fn args_for_ica(input: &Path, out_dir: &Path, transform: &str, extra: &[&str]) -> Vec<String> {
     let mut v: Vec<String> = vec![
         "decompose".into(),
         "ica".into(),
@@ -112,7 +107,10 @@ fn args_for_ica(
         "--output-loadings".into(),
         out_dir.join("loadings.tsv").to_string_lossy().into_owned(),
         "--output-activations".into(),
-        out_dir.join("activations.tsv").to_string_lossy().into_owned(),
+        out_dir
+            .join("activations.tsv")
+            .to_string_lossy()
+            .into_owned(),
         "--output-stability".into(),
         out_dir.join("stability.tsv").to_string_lossy().into_owned(),
     ];
@@ -120,12 +118,7 @@ fn args_for_ica(
     v
 }
 
-fn run_ica_with_transform(
-    input: &Path,
-    out_dir: &Path,
-    transform: &str,
-    extra: &[&str],
-) -> Output {
+fn run_ica_with_transform(input: &Path, out_dir: &Path, transform: &str, extra: &[&str]) -> Output {
     std::fs::create_dir_all(out_dir).unwrap();
     let args = args_for_ica(input, out_dir, transform, extra);
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -215,12 +208,7 @@ fn alr_with_valid_reference_runs_end_to_end() {
     let input = tmp.path().join("canonical");
     let out_dir = tmp.path().join("alr_ok");
     write_small_canonical(&input, 12, 20);
-    let status = run_ica_with_transform(
-        &input,
-        &out_dir,
-        "alr",
-        &["--alr-reference", "G010"],
-    );
+    let status = run_ica_with_transform(&input, &out_dir, "alr", &["--alr-reference", "G010"]);
     assert!(
         status.status.success(),
         "alr run failed:\n{}",

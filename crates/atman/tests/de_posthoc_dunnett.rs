@@ -23,12 +23,15 @@ fn run_atman(args: &[&str]) -> Output {
     Command::new(bin).args(args).output().expect("run atman")
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -48,7 +51,7 @@ fn copy_fixture_to_canonical(tmp: &Path) -> std::path::PathBuf {
     for (src, dst) in [
         ("posthoc_sidak_samples.tsv", "samples.tsv"),
         ("posthoc_sidak_proteins.tsv", "proteins.tsv"),
-        ("posthoc_sidak_qc_measurements.tsv", "qc_measurements.tsv"),
+        ("posthoc_sidak_qc_measurements.tsv", "measurements.tsv"),
         ("posthoc_sidak_measurements.tsv", "measurements.tsv"),
     ] {
         std::fs::copy(fixtures.join(src), input.join(dst)).unwrap();
@@ -63,13 +66,20 @@ fn posthoc_dunnett_adjustment_is_self_consistent_with_core_pdunnett() {
     let output = tmp.path().join("dunnett_out");
     let out = run_atman(&[
         "de",
-        "--input-dir", input.to_str().unwrap(),
-        "--output-dir", output.to_str().unwrap(),
-        "--test", "ols",
-        "--design", "~ stage + age",
-        "--post-hoc", "dunnett",
-        "--post-hoc-factor", "stage",
-        "--min-pairs", "4",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--test",
+        "ols",
+        "--design",
+        "~ stage + age",
+        "--post-hoc",
+        "dunnett",
+        "--post-hoc-factor",
+        "stage",
+        "--min-pairs",
+        "4",
     ]);
     assert!(
         out.status.success(),
@@ -166,19 +176,26 @@ fn posthoc_dunnett_switches_to_hsu_on_unbalanced_design() {
          olink_explore_ngs\tR001\tQ00001\tRESPONDER\tP1\t\n",
     )
     .unwrap();
-    std::fs::write(input.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(input.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(input.join("measurements.tsv"), &qc).unwrap();
 
     let output = tmp.path().join("out_unbalanced");
     let out = run_atman(&[
         "de",
-        "--input-dir", input.to_str().unwrap(),
-        "--output-dir", output.to_str().unwrap(),
-        "--test", "ols",
-        "--design", "~ stage + age",
-        "--post-hoc", "dunnett",
-        "--post-hoc-factor", "stage",
-        "--min-pairs", "4",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--test",
+        "ols",
+        "--design",
+        "~ stage + age",
+        "--post-hoc",
+        "dunnett",
+        "--post-hoc-factor",
+        "stage",
+        "--min-pairs",
+        "4",
     ]);
     assert!(
         out.status.success(),
@@ -190,7 +207,10 @@ fn posthoc_dunnett_switches_to_hsu_on_unbalanced_design() {
         &std::fs::read_to_string(output.join("de_results.tsv.run.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(sidecar["args"]["dunnett-unbalanced"], serde_json::Value::Bool(true));
+    assert_eq!(
+        sidecar["args"]["dunnett-unbalanced"],
+        serde_json::Value::Bool(true)
+    );
     assert_eq!(
         sidecar["args"]["dunnett-hsu-n-mc"].as_u64().unwrap(),
         50_000
@@ -213,20 +233,31 @@ fn posthoc_dunnett_magnitude_detects_planted_stage_effect() {
     let output = tmp.path().join("dunnett_magnitude");
     let out = run_atman(&[
         "de",
-        "--input-dir", input.to_str().unwrap(),
-        "--output-dir", output.to_str().unwrap(),
-        "--test", "ols",
-        "--design", "~ stage + age",
-        "--post-hoc", "dunnett",
-        "--post-hoc-factor", "stage",
-        "--min-pairs", "4",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--test",
+        "ols",
+        "--design",
+        "~ stage + age",
+        "--post-hoc",
+        "dunnett",
+        "--post-hoc-factor",
+        "stage",
+        "--min-pairs",
+        "4",
     ]);
     assert!(out.status.success());
     let (_, rows) = parse_tsv(&output.join("de_results.tsv"));
 
     let responder: Vec<&HashMap<String, String>> = rows
         .iter()
-        .filter(|r| r.get("gene_symbol").map(|g| g == "RESPONDER").unwrap_or(false))
+        .filter(|r| {
+            r.get("gene_symbol")
+                .map(|g| g == "RESPONDER")
+                .unwrap_or(false)
+        })
         .collect();
     let nullp: Vec<&HashMap<String, String>> = rows
         .iter()

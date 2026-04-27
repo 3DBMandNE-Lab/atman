@@ -151,9 +151,6 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     skip_normalization_check: bool,
 
-    /// Do not copy measurements.tsv to qc_measurements.tsv.
-    #[arg(long, default_value_t = false)]
-    no_copy_measurements_to_qc: bool,
 }
 
 #[derive(Debug)]
@@ -211,13 +208,6 @@ pub fn run(args: Args) -> Result<()> {
         &measurements,
         &args.abundance_unit,
     )?;
-    if !args.no_copy_measurements_to_qc {
-        write_measurements(
-            &args.output_dir.join("qc_measurements.tsv"),
-            &measurements,
-            &args.abundance_unit,
-        )?;
-    }
 
     eprintln!(
         "ingest-matrix: {} samples, {} proteins, {} measurements",
@@ -238,14 +228,11 @@ pub fn run(args: Args) -> Result<()> {
     let measurements_out = args.output_dir.join("measurements.tsv");
     let proteins_out = args.output_dir.join("proteins.tsv");
     let samples_out = args.output_dir.join("samples.tsv");
-    let mut outputs: Vec<PathBuf> = vec![
+    let outputs: Vec<PathBuf> = vec![
         measurements_out.clone(),
         proteins_out.clone(),
         samples_out.clone(),
     ];
-    if !args.no_copy_measurements_to_qc {
-        outputs.push(args.output_dir.join("qc_measurements.tsv"));
-    }
     let orientation = match args.orientation {
         Orientation::ProteinsRows => "proteins-rows",
         Orientation::SamplesRows => "samples-rows",
@@ -275,14 +262,13 @@ pub fn run(args: Args) -> Result<()> {
             "log2-transform": args.log2_transform,
             "normalize": args.normalize.as_str(),
             "skip-normalization-check": args.skip_normalization_check,
-            "no-copy-measurements-to-qc": args.no_copy_measurements_to_qc,
         }),
         &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("ingest-matrix: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -731,8 +717,7 @@ fn apply_median_normalization(rows: &mut [MeasurementRow]) {
     if sample_medians.is_empty() {
         return;
     }
-    let grand: f64 =
-        sample_medians.values().copied().sum::<f64>() / sample_medians.len() as f64;
+    let grand: f64 = sample_medians.values().copied().sum::<f64>() / sample_medians.len() as f64;
     for r in rows.iter_mut() {
         if let Some(v) = r.abundance.as_mut() {
             if let Some(&m) = sample_medians.get(&r.sample_id) {

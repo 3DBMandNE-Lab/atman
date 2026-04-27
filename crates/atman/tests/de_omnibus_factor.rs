@@ -23,12 +23,15 @@ fn run_atman(args: &[&str]) -> Output {
     Command::new(bin).args(args).output().expect("run atman")
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -103,7 +106,7 @@ fn write_three_stage_canonical(dir: &Path) {
         }
     }
     std::fs::write(dir.join("samples.tsv"), samples).unwrap();
-    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
@@ -223,7 +226,10 @@ fn omnibus_factor_requires_design_and_ols() {
     ]);
     assert!(!no_design.status.success());
     let stderr = String::from_utf8_lossy(&no_design.stderr);
-    assert!(stderr.contains("--design"), "expected --design error: {stderr}");
+    assert!(
+        stderr.contains("--design"),
+        "expected --design error: {stderr}"
+    );
 
     // With welch-t, --omnibus-factor must refuse.
     let no_ols = run_atman(&[

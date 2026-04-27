@@ -8,8 +8,7 @@
 
 use anyhow::{bail, Context, Result};
 use atman_core::modules_discover::{
-    discover, DiscoveryMethod, ModuleAssignment, ModuleReportRow, Similarity,
-    SoftPowerSweepRow,
+    discover, DiscoveryMethod, ModuleAssignment, ModuleReportRow, Similarity, SoftPowerSweepRow,
 };
 use clap::{Args as ClapArgs, Subcommand};
 use serde_json::json;
@@ -161,7 +160,7 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
     // Load the canonical measurements into a subject × feature matrix
     // keyed by gene_symbol.
     let source_file = match args.source.as_str() {
-        "qc" => "qc_measurements.tsv",
+        "qc" => "measurements.tsv",
         "raw" => "measurements.tsv",
         other => bail!("--source {other:?}; expected qc or raw"),
     };
@@ -270,7 +269,7 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
-            "qc_measurements.tsv",
+            "measurements.tsv",
             "measurements.tsv",
             "samples.tsv",
             "proteins.tsv",
@@ -300,7 +299,7 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("modules discover: sidecar={}", sidecar.display());
     Ok(())
 }

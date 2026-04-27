@@ -12,12 +12,15 @@ fn run_atman(args: &[&str]) -> Output {
     Command::new(bin).args(args).output().expect("run atman")
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -46,7 +49,7 @@ fn copy_fixture_to_canonical(tmp: &Path) -> std::path::PathBuf {
     .unwrap();
     std::fs::copy(
         fixtures.join("posthoc_sidak_qc_measurements.tsv"),
-        input.join("qc_measurements.tsv"),
+        input.join("measurements.tsv"),
     )
     .unwrap();
     std::fs::copy(

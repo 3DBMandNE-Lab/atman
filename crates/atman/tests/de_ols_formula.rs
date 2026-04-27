@@ -72,7 +72,7 @@ spectronaut_report\tP00002\tP00002\tGENE2\tspectronaut\t\n",
             order += 1;
         }
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), measurements).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), measurements).unwrap();
 }
 
 #[test]

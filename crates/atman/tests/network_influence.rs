@@ -12,12 +12,15 @@ fn run_atman(args: &[&str]) -> Output {
     Command::new(bin).args(args).output().expect("run atman")
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -60,8 +63,9 @@ fn write_star_fixture(dir: &Path) {
     let leaf_count = 6usize;
     let mut rng = Lcg::new(20260420);
 
-    let mut samples =
-        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\tstratum\n");
+    let mut samples = String::from(
+        "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\tstratum\n",
+    );
     for i in 1..=n_samples {
         let stratum = if i % 2 == 0 { "A" } else { "B" };
         samples.push_str(&format!(
@@ -107,7 +111,7 @@ fn write_star_fixture(dir: &Path) {
             ));
         }
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
@@ -122,7 +126,7 @@ fn network_influence_emits_expected_schema_and_stratum_column() {
         "network",
         "influence",
         "--input",
-        fixture.join("qc_measurements.tsv").to_str().unwrap(),
+        fixture.join("measurements.tsv").to_str().unwrap(),
         "--samples",
         fixture.join("samples.tsv").to_str().unwrap(),
         "--method",
@@ -185,7 +189,7 @@ fn network_influence_refuses_empty_graph_at_high_threshold() {
         "network",
         "influence",
         "--input",
-        fixture.join("qc_measurements.tsv").to_str().unwrap(),
+        fixture.join("measurements.tsv").to_str().unwrap(),
         "--samples",
         fixture.join("samples.tsv").to_str().unwrap(),
         "--method",
@@ -216,7 +220,7 @@ fn network_influence_stratify_emits_one_block_per_stratum() {
         "network",
         "influence",
         "--input",
-        fixture.join("qc_measurements.tsv").to_str().unwrap(),
+        fixture.join("measurements.tsv").to_str().unwrap(),
         "--samples",
         fixture.join("samples.tsv").to_str().unwrap(),
         "--method",
@@ -259,7 +263,7 @@ fn network_influence_is_deterministic_across_runs() {
             "network",
             "influence",
             "--input",
-            fixture.join("qc_measurements.tsv").to_str().unwrap(),
+            fixture.join("measurements.tsv").to_str().unwrap(),
             "--samples",
             fixture.join("samples.tsv").to_str().unwrap(),
             "--method",
@@ -271,7 +275,11 @@ fn network_influence_is_deterministic_across_runs() {
             "--output",
             out.to_str().unwrap(),
         ]);
-        assert!(status.status.success(), "{}", String::from_utf8_lossy(&status.stderr));
+        assert!(
+            status.status.success(),
+            "{}",
+            String::from_utf8_lossy(&status.stderr)
+        );
     }
     let a = std::fs::read_to_string(&out1).unwrap();
     let b = std::fs::read_to_string(&out2).unwrap();
@@ -288,7 +296,7 @@ fn network_influence_refuses_conflicting_adjacency_flags() {
         "network",
         "influence",
         "--input",
-        fixture.join("qc_measurements.tsv").to_str().unwrap(),
+        fixture.join("measurements.tsv").to_str().unwrap(),
         "--samples",
         fixture.join("samples.tsv").to_str().unwrap(),
         "--threshold",

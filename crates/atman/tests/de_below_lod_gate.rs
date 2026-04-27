@@ -49,7 +49,7 @@ diann_report\tA4\t\tG4\tms\t\n",
             order += 1;
         }
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), &buf).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &buf).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &buf).unwrap();
 }
 
@@ -60,11 +60,16 @@ fn de_refuses_when_below_lod_fraction_exceeds_default_threshold() {
     write_fixture(dir, 0.70);
     let output = run_atman(&[
         "de",
-        "--input-dir", dir.to_str().unwrap(),
-        "--output-dir", dir.join("out").to_str().unwrap(),
-        "--test", "welch-t",
-        "--groups", "Case-Control",
-        "--min-pairs", "2",
+        "--input-dir",
+        dir.to_str().unwrap(),
+        "--output-dir",
+        dir.join("out").to_str().unwrap(),
+        "--test",
+        "welch-t",
+        "--groups",
+        "Case-Control",
+        "--min-pairs",
+        "2",
     ]);
     assert!(!output.status.success(), "expected failure");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -81,11 +86,16 @@ fn de_runs_when_below_lod_fraction_below_threshold() {
     write_fixture(dir, 0.20);
     let output = run_atman(&[
         "de",
-        "--input-dir", dir.to_str().unwrap(),
-        "--output-dir", dir.join("out").to_str().unwrap(),
-        "--test", "welch-t",
-        "--groups", "Case-Control",
-        "--min-pairs", "2",
+        "--input-dir",
+        dir.to_str().unwrap(),
+        "--output-dir",
+        dir.join("out").to_str().unwrap(),
+        "--test",
+        "welch-t",
+        "--groups",
+        "Case-Control",
+        "--min-pairs",
+        "2",
     ]);
     assert!(
         output.status.success(),
@@ -101,11 +111,16 @@ fn de_runs_when_below_lod_fraction_high_but_allow_censored_set() {
     write_fixture(dir, 0.70);
     let output = run_atman(&[
         "de",
-        "--input-dir", dir.to_str().unwrap(),
-        "--output-dir", dir.join("out").to_str().unwrap(),
-        "--test", "welch-t",
-        "--groups", "Case-Control",
-        "--min-pairs", "2",
+        "--input-dir",
+        dir.to_str().unwrap(),
+        "--output-dir",
+        dir.join("out").to_str().unwrap(),
+        "--test",
+        "welch-t",
+        "--groups",
+        "Case-Control",
+        "--min-pairs",
+        "2",
         "--allow-censored",
     ]);
     assert!(

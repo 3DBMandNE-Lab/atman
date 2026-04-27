@@ -15,9 +15,8 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use super::{
-    classify_covariates, covariate_names_from_terms, parse_design_terms,
-    push_encoded_covariate, read_covariate_columns, Args, CovKind, DesignReportRow, DesignTerm,
-    OlsSetup,
+    classify_covariates, covariate_names_from_terms, parse_design_terms, push_encoded_covariate,
+    read_covariate_columns, Args, CovKind, DesignReportRow, DesignTerm, OlsSetup,
 };
 use crate::io::{
     atomic_write, hash_canonical_inputs, read_measurements_long, read_proteins, read_samples,
@@ -76,7 +75,7 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
         .expect("validated non-empty above");
 
     // Read inputs.
-    let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
+    let measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
 
@@ -108,11 +107,7 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
         contrast: None,
         label: formula.to_string(),
     };
-    if !setup
-        .cov_names
-        .iter()
-        .any(|n| n == &factor_name)
-    {
+    if !setup.cov_names.iter().any(|n| n == &factor_name) {
         anyhow::bail!(
             "--post-hoc-factor {:?} is not in --design covariates {:?}",
             factor_name,
@@ -128,9 +123,7 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
         cov_kinds,
     } = build_posthoc_full_design(&samples, &setup, &factor_name)?;
     if design_rows.is_empty() {
-        anyhow::bail!(
-            "no samples retained after complete-case filter on --design covariates"
-        );
+        anyhow::bail!("no samples retained after complete-case filter on --design covariates");
     }
 
     // Resolve factor-column-span + ref level for contrast-vector
@@ -242,9 +235,7 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
         let mut design_cc: Vec<Vec<f64>> = Vec::new();
         let mut y_cc: Vec<f64> = Vec::new();
         for (sid, row) in &design_rows {
-            if let Some(&abund) =
-                cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone()))
-            {
+            if let Some(&abund) = cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone())) {
                 if abund.is_finite() {
                     design_cc.push(row.clone());
                     y_cc.push(abund);
@@ -299,12 +290,28 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
                         n_pairs: n,
                         mean_a: None,
                         mean_b: None,
-                        mean_diff: if ests[i].is_finite() { Some(ests[i]) } else { None },
+                        mean_diff: if ests[i].is_finite() {
+                            Some(ests[i])
+                        } else {
+                            None
+                        },
                         t: if ts[i].is_finite() { Some(ts[i]) } else { None },
-                        df: if fit.df.is_finite() { Some(fit.df) } else { None },
-                        p_value: if raw_ps[i].is_finite() { Some(raw_ps[i]) } else { None },
+                        df: if fit.df.is_finite() {
+                            Some(fit.df)
+                        } else {
+                            None
+                        },
+                        p_value: if raw_ps[i].is_finite() {
+                            Some(raw_ps[i])
+                        } else {
+                            None
+                        },
                         bh_q: None,
-                        effect_size: if ests[i].is_finite() { Some(ests[i]) } else { None },
+                        effect_size: if ests[i].is_finite() {
+                            Some(ests[i])
+                        } else {
+                            None
+                        },
                         effect_size_method: "ols-posthoc-sidak".into(),
                         ci_low: if ests[i].is_finite() && ses[i].is_finite() {
                             Some(ests[i] - 1.96 * ses[i])
@@ -335,7 +342,11 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
                         ridge_lambda: None,
                         method: "ols".into(),
                         posthoc_method: "sidak".into(),
-                        posthoc_p: if raw_ps[i].is_finite() { Some(raw_ps[i]) } else { None },
+                        posthoc_p: if raw_ps[i].is_finite() {
+                            Some(raw_ps[i])
+                        } else {
+                            None
+                        },
                         posthoc_adj_p: if adj.is_finite() { Some(adj) } else { None },
                     });
                 }
@@ -438,7 +449,7 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
-            "qc_measurements.tsv",
+            "measurements.tsv",
             "measurements.tsv",
             "samples.tsv",
             "proteins.tsv",
@@ -466,7 +477,7 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("de posthoc sidak: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -497,7 +508,7 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
         .or_else(|| args.omnibus_factor.clone())
         .expect("validated non-empty above");
 
-    let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
+    let measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
 
@@ -538,9 +549,7 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
         cov_kinds,
     } = build_posthoc_full_design(&samples, &setup, &factor_name)?;
     if design_rows.is_empty() {
-        anyhow::bail!(
-            "no samples retained after complete-case filter on --design covariates"
-        );
+        anyhow::bail!("no samples retained after complete-case filter on --design covariates");
     }
 
     let factor_cov_idx = setup
@@ -572,13 +581,15 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
                 if !factor_levels.contains(a) {
                     anyhow::bail!(
                         "contrast level {:?} not among observed factor levels {:?}",
-                        a, factor_levels
+                        a,
+                        factor_levels
                     );
                 }
                 if !factor_levels.contains(b) {
                     anyhow::bail!(
                         "contrast level {:?} not among observed factor levels {:?}",
-                        b, factor_levels
+                        b,
+                        factor_levels
                     );
                 }
             }
@@ -607,7 +618,8 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "factor column {:?} missing from design labels {:?}",
-                        label, design_labels
+                        label,
+                        design_labels
                     )
                 })?;
             Ok::<_, anyhow::Error>((lvl.clone(), idx))
@@ -662,9 +674,7 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
         let mut design_cc: Vec<Vec<f64>> = Vec::new();
         let mut y_cc: Vec<f64> = Vec::new();
         for (sid, row) in &design_rows {
-            if let Some(&abund) =
-                cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone()))
-            {
+            if let Some(&abund) = cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone())) {
                 if abund.is_finite() {
                     design_cc.push(row.clone());
                     y_cc.push(abund);
@@ -677,26 +687,29 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
             OlsOutcome::Computed(fit) => {
                 for (a, b) in &contrast_list {
                     let c = build_posthoc_contrast_vector(
-                        a, b, &ref_level, &factor_col_by_level, design_labels.len(),
+                        a,
+                        b,
+                        &ref_level,
+                        &factor_col_by_level,
+                        design_labels.len(),
                     );
-                    let (raw_p, est, se, t_stat, adj_p) = match contrast_inference(
-                        &design_cc, &fit.beta, &c, fit.sigma2, fit.df,
-                    ) {
-                        Some(r) => {
-                            let q = if r.se > 0.0 && r.se.is_finite() {
-                                r.estimate.abs() * std::f64::consts::SQRT_2 / r.se
-                            } else {
-                                f64::NAN
-                            };
-                            let p_tukey = if q.is_finite() && fit.df.is_finite() {
-                                (1.0 - ptukey(q, k_nmeans, fit.df)).clamp(0.0, 1.0)
-                            } else {
-                                f64::NAN
-                            };
-                            (r.p_value, r.estimate, r.se, r.t, p_tukey)
-                        }
-                        None => (f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN),
-                    };
+                    let (raw_p, est, se, t_stat, adj_p) =
+                        match contrast_inference(&design_cc, &fit.beta, &c, fit.sigma2, fit.df) {
+                            Some(r) => {
+                                let q = if r.se > 0.0 && r.se.is_finite() {
+                                    r.estimate.abs() * std::f64::consts::SQRT_2 / r.se
+                                } else {
+                                    f64::NAN
+                                };
+                                let p_tukey = if q.is_finite() && fit.df.is_finite() {
+                                    (1.0 - ptukey(q, k_nmeans, fit.df)).clamp(0.0, 1.0)
+                                } else {
+                                    f64::NAN
+                                };
+                                (r.p_value, r.estimate, r.se, r.t, p_tukey)
+                            }
+                            None => (f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN),
+                        };
                     all_rows.push(DeResultRow {
                         panel: panel.clone(),
                         assay_id: assay_id.clone(),
@@ -707,8 +720,16 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
                         mean_a: None,
                         mean_b: None,
                         mean_diff: if est.is_finite() { Some(est) } else { None },
-                        t: if t_stat.is_finite() { Some(t_stat) } else { None },
-                        df: if fit.df.is_finite() { Some(fit.df) } else { None },
+                        t: if t_stat.is_finite() {
+                            Some(t_stat)
+                        } else {
+                            None
+                        },
+                        df: if fit.df.is_finite() {
+                            Some(fit.df)
+                        } else {
+                            None
+                        },
                         p_value: if raw_p.is_finite() { Some(raw_p) } else { None },
                         bh_q: None,
                         effect_size: if est.is_finite() { Some(est) } else { None },
@@ -761,23 +782,38 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
                         uniprot: uniprot.join(","),
                         comparison: contrast_label_for(&(a.clone(), b.clone())),
                         n_pairs: n,
-                        mean_a: None, mean_b: None, mean_diff: None,
-                        t: None, df: None, p_value: None, bh_q: None,
+                        mean_a: None,
+                        mean_b: None,
+                        mean_diff: None,
+                        t: None,
+                        df: None,
+                        p_value: None,
+                        bh_q: None,
                         effect_size: None,
                         effect_size_method: "ols-posthoc-tukey".into(),
-                        ci_low: None, ci_high: None,
-                        wilcoxon_p: None, wilcoxon_method: String::new(),
-                        median_diff: None, trimmed_mean_diff: None,
+                        ci_low: None,
+                        ci_high: None,
+                        wilcoxon_p: None,
+                        wilcoxon_method: String::new(),
+                        median_diff: None,
+                        trimmed_mean_diff: None,
                         skip_reason: reason_str.into(),
-                        s2_trend: None, s2_prior: None, s2_posterior: None,
-                        df_prior: None, df_total: None,
-                        f_statistic: None, f_p_value: None, f_bh_q: None,
+                        s2_trend: None,
+                        s2_prior: None,
+                        s2_posterior: None,
+                        df_prior: None,
+                        df_total: None,
+                        f_statistic: None,
+                        f_p_value: None,
+                        f_bh_q: None,
                         lfc_threshold: None,
-                        n_peptides_observed: None, peptide_variance_ratio: None,
+                        n_peptides_observed: None,
+                        peptide_variance_ratio: None,
                         ridge_lambda: None,
                         method: "ols".into(),
                         posthoc_method: "tukey".into(),
-                        posthoc_p: None, posthoc_adj_p: None,
+                        posthoc_p: None,
+                        posthoc_adj_p: None,
                     });
                 }
             }
@@ -827,7 +863,7 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
-            "qc_measurements.tsv",
+            "measurements.tsv",
             "measurements.tsv",
             "samples.tsv",
             "proteins.tsv",
@@ -855,7 +891,7 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("de posthoc tukey: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -873,9 +909,7 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
 /// draws, byte-equal under fixed `--seed`).
 pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<()> {
     use atman_core::de::{contrast_inference, ols, OlsOutcome};
-    use atman_core::multivariate_t::{
-        dunnett_hsu_correlation_matrix, pdunnett, pdunnett_hsu,
-    };
+    use atman_core::multivariate_t::{dunnett_hsu_correlation_matrix, pdunnett, pdunnett_hsu};
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
@@ -885,7 +919,7 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
         .or_else(|| args.omnibus_factor.clone())
         .expect("validated non-empty above");
 
-    let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
+    let measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
 
@@ -925,9 +959,7 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
         cov_kinds,
     } = build_posthoc_full_design(&samples, &setup, &factor_name)?;
     if design_rows.is_empty() {
-        anyhow::bail!(
-            "no samples retained after complete-case filter on --design covariates"
-        );
+        anyhow::bail!("no samples retained after complete-case filter on --design covariates");
     }
 
     let factor_cov_idx = setup
@@ -971,7 +1003,8 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "factor column {:?} missing from design labels {:?}",
-                        label, design_labels
+                        label,
+                        design_labels
                     )
                 })?;
             Ok::<_, anyhow::Error>((lvl.clone(), idx))
@@ -1046,7 +1079,12 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
         .skip(1)
         .map(|lvl| *level_counts.get(lvl).unwrap_or(&0))
         .collect();
-    let max_n = n_treatments.iter().copied().max().unwrap_or(1).max(n_control) as f64;
+    let max_n = n_treatments
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(1)
+        .max(n_control) as f64;
     let min_n = n_treatments
         .iter()
         .copied()
@@ -1085,9 +1123,7 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
         let mut design_cc: Vec<Vec<f64>> = Vec::new();
         let mut y_cc: Vec<f64> = Vec::new();
         for (sid, row) in &design_rows {
-            if let Some(&abund) =
-                cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone()))
-            {
+            if let Some(&abund) = cells_by_sample.get(&(panel.clone(), gene.clone(), sid.clone())) {
                 if abund.is_finite() {
                     design_cc.push(row.clone());
                     y_cc.push(abund);
@@ -1100,22 +1136,25 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
             OlsOutcome::Computed(fit) => {
                 for (a, b) in &contrast_list {
                     let c = build_posthoc_contrast_vector(
-                        a, b, &control, &factor_col_by_level, design_labels.len(),
+                        a,
+                        b,
+                        &control,
+                        &factor_col_by_level,
+                        design_labels.len(),
                     );
-                    let (raw_p, est, se, t_stat, adj_p) = match contrast_inference(
-                        &design_cc, &fit.beta, &c, fit.sigma2, fit.df,
-                    ) {
-                        Some(r) => {
-                            let q = r.t.abs();
-                            let p_dun = if q.is_finite() && fit.df.is_finite() {
-                                (1.0 - dunnett_cdf(q, fit.df)).clamp(0.0, 1.0)
-                            } else {
-                                f64::NAN
-                            };
-                            (r.p_value, r.estimate, r.se, r.t, p_dun)
-                        }
-                        None => (f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN),
-                    };
+                    let (raw_p, est, se, t_stat, adj_p) =
+                        match contrast_inference(&design_cc, &fit.beta, &c, fit.sigma2, fit.df) {
+                            Some(r) => {
+                                let q = r.t.abs();
+                                let p_dun = if q.is_finite() && fit.df.is_finite() {
+                                    (1.0 - dunnett_cdf(q, fit.df)).clamp(0.0, 1.0)
+                                } else {
+                                    f64::NAN
+                                };
+                                (r.p_value, r.estimate, r.se, r.t, p_dun)
+                            }
+                            None => (f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN),
+                        };
                     all_rows.push(DeResultRow {
                         panel: panel.clone(),
                         assay_id: assay_id.clone(),
@@ -1126,8 +1165,16 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
                         mean_a: None,
                         mean_b: None,
                         mean_diff: if est.is_finite() { Some(est) } else { None },
-                        t: if t_stat.is_finite() { Some(t_stat) } else { None },
-                        df: if fit.df.is_finite() { Some(fit.df) } else { None },
+                        t: if t_stat.is_finite() {
+                            Some(t_stat)
+                        } else {
+                            None
+                        },
+                        df: if fit.df.is_finite() {
+                            Some(fit.df)
+                        } else {
+                            None
+                        },
                         p_value: if raw_p.is_finite() { Some(raw_p) } else { None },
                         bh_q: None,
                         effect_size: if est.is_finite() { Some(est) } else { None },
@@ -1180,23 +1227,38 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
                         uniprot: uniprot.join(","),
                         comparison: contrast_label_for(&(a.clone(), b.clone())),
                         n_pairs: n,
-                        mean_a: None, mean_b: None, mean_diff: None,
-                        t: None, df: None, p_value: None, bh_q: None,
+                        mean_a: None,
+                        mean_b: None,
+                        mean_diff: None,
+                        t: None,
+                        df: None,
+                        p_value: None,
+                        bh_q: None,
                         effect_size: None,
                         effect_size_method: "ols-posthoc-dunnett".into(),
-                        ci_low: None, ci_high: None,
-                        wilcoxon_p: None, wilcoxon_method: String::new(),
-                        median_diff: None, trimmed_mean_diff: None,
+                        ci_low: None,
+                        ci_high: None,
+                        wilcoxon_p: None,
+                        wilcoxon_method: String::new(),
+                        median_diff: None,
+                        trimmed_mean_diff: None,
                         skip_reason: reason_str.into(),
-                        s2_trend: None, s2_prior: None, s2_posterior: None,
-                        df_prior: None, df_total: None,
-                        f_statistic: None, f_p_value: None, f_bh_q: None,
+                        s2_trend: None,
+                        s2_prior: None,
+                        s2_posterior: None,
+                        df_prior: None,
+                        df_total: None,
+                        f_statistic: None,
+                        f_p_value: None,
+                        f_bh_q: None,
                         lfc_threshold: None,
-                        n_peptides_observed: None, peptide_variance_ratio: None,
+                        n_peptides_observed: None,
+                        peptide_variance_ratio: None,
                         ridge_lambda: None,
                         method: "ols".into(),
                         posthoc_method: "dunnett".into(),
-                        posthoc_p: None, posthoc_adj_p: None,
+                        posthoc_p: None,
+                        posthoc_adj_p: None,
                     });
                 }
             }
@@ -1246,7 +1308,7 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
-            "qc_measurements.tsv",
+            "measurements.tsv",
             "measurements.tsv",
             "samples.tsv",
             "proteins.tsv",
@@ -1279,7 +1341,7 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("de posthoc dunnett: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -1325,9 +1387,7 @@ fn build_posthoc_full_design(
         }
     }
     if kept.is_empty() {
-        anyhow::bail!(
-            "no samples with complete values for every --design covariate"
-        );
+        anyhow::bail!("no samples with complete values for every --design covariate");
     }
 
     let raw_vals_opt: Vec<Vec<Option<String>>> = kept
@@ -1351,7 +1411,11 @@ fn build_posthoc_full_design(
         }
         rows.push((s.sample_id.clone(), row));
     }
-    Ok(PosthocDesign { rows, labels: design_labels, cov_kinds })
+    Ok(PosthocDesign {
+        rows,
+        labels: design_labels,
+        cov_kinds,
+    })
 }
 
 /// Build the contrast weight vector `c` (length `p`) for the

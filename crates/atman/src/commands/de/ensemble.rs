@@ -94,9 +94,8 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
         match run(sub.clone()) {
             Ok(()) => {
                 let results_path = sub.output_dir.join("de_results.tsv");
-                let rows = read_de_results(&results_path).with_context(|| {
-                    format!("reading sub-method de_results for {method:?}")
-                })?;
+                let rows = read_de_results(&results_path)
+                    .with_context(|| format!("reading sub-method de_results for {method:?}"))?;
                 merged_rows.extend(rows);
                 applied.push(method.clone());
             }
@@ -166,7 +165,10 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
     // BH on ensemble_p within each comparison, then assign grade per
     // protein from (ensemble_q, sign consistency).
     for indices in by_comparison.values() {
-        let ps: Vec<Option<f64>> = indices.iter().map(|&i| ensemble_rows[i].ensemble_p).collect();
+        let ps: Vec<Option<f64>> = indices
+            .iter()
+            .map(|&i| ensemble_rows[i].ensemble_p)
+            .collect();
         let qs = atman_core::bh_fdr(&ps);
         for (j, &i) in indices.iter().enumerate() {
             ensemble_rows[i].ensemble_q = qs[j];
@@ -210,7 +212,7 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
-            "qc_measurements.tsv",
+            "measurements.tsv",
             "measurements.tsv",
             "samples.tsv",
             "proteins.tsv",
@@ -255,7 +257,7 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
             );
             Some(extras)
         },
-)?;
+    )?;
     eprintln!(
         "de ensemble: {} rows, {} applied: [{}], {} skipped: [{}]",
         ensemble_rows.len(),

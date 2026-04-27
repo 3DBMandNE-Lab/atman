@@ -53,9 +53,7 @@ fn write_planted_canonical(dir: &Path) {
         String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
     for i in 1..=n_samples {
         let cond = if i <= n_samples / 2 { "A" } else { "B" };
-        samples.push_str(&format!(
-            "S{i:03}\tS{i:03}\t{cond}\t0\tplasma\t{i}\n"
-        ));
+        samples.push_str(&format!("S{i:03}\tS{i:03}\t{cond}\t0\tplasma\t{i}\n"));
     }
     std::fs::write(dir.join("samples.tsv"), samples).unwrap();
 
@@ -114,16 +112,19 @@ fn write_planted_canonical(dir: &Path) {
             ));
         }
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -257,11 +258,18 @@ fn decompose_null_is_deterministic_across_runs() {
             "--tol",
             "1e-3",
         ]);
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
     let a = std::fs::read_to_string(&out_a).unwrap();
     let b = std::fs::read_to_string(&out_b).unwrap();
-    assert_eq!(a, b, "decompose null output must be byte-identical under fixed seed");
+    assert_eq!(
+        a, b,
+        "decompose null output must be byte-identical under fixed seed"
+    );
 }
 
 #[test]

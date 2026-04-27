@@ -38,7 +38,7 @@ spectronaut_report\tK2\tP00001\tGENE1\tspectronaut\t12.1\t12.1\t12.1\t{abundance
             "spectronaut_report\tK2\tP00001\tGENE1\tspectronaut\t12.1\t12.1\t12.1\t{abundance_unit}\tPASS\tPASS\t\t0\t0\t\t\t5\n"
         ));
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), measurements).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), measurements).unwrap();
 }
 
 #[test]
@@ -71,6 +71,62 @@ fn validate_accepts_clean_non_olink_dataset_and_writes_report() {
         std::fs::read_to_string(report).unwrap(),
         "severity\tcode\tmessage\n"
     );
+}
+
+#[test]
+fn validate_accepts_reordered_samples_columns_and_de_still_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("input");
+    let output_dir = tmp.path().join("out");
+    std::fs::create_dir_all(&output_dir).unwrap();
+    write_valid_input(&input, "log2_intensity", false);
+    std::fs::write(
+        input.join("samples.tsv"),
+        "\
+condition\tsample_type\tingest_order\tsample_id\tis_control\tsubject_id\n\
+Control\tcsf\t1\tC1\t0\tC1\n\
+Control\tcsf\t2\tC2\t0\tC2\n\
+Case\tcsf\t3\tK1\t0\tK1\n\
+Case\tcsf\t4\tK2\t0\tK2\n",
+    )
+    .unwrap();
+
+    let validate = run_atman(&[
+        "validate",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--groups",
+        "Case-Control",
+        "--min-pairs",
+        "2",
+    ]);
+    assert!(
+        validate.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let de = run_atman(&[
+        "de",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output_dir.to_str().unwrap(),
+        "--test",
+        "welch-t",
+        "--groups",
+        "Case-Control",
+        "--min-pairs",
+        "2",
+    ]);
+    assert!(
+        de.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&de.stdout),
+        String::from_utf8_lossy(&de.stderr)
+    );
+    let results = std::fs::read_to_string(output_dir.join("de_results.tsv")).unwrap();
+    assert!(results.lines().count() > 1, "expected computed DE rows");
 }
 
 #[test]

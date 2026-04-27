@@ -34,7 +34,7 @@ pub fn run(args: Args) -> Result<()> {
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
-    let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
+    let measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
 
     let panels = dube_wide_pivot(&measurements, &samples);

@@ -68,8 +68,8 @@ pub fn run(args: Args) -> Result<()> {
         );
     }
 
-    let measurements_path = if args.input_dir.join("qc_measurements.tsv").exists() {
-        args.input_dir.join("qc_measurements.tsv")
+    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
+        args.input_dir.join("measurements.tsv")
     } else {
         args.input_dir.join("measurements.tsv")
     };
@@ -359,8 +359,6 @@ fn write_wide(path: &Path, rows: &[ResidualRow]) -> Result<()> {
     }
     atomic_write(path, out.as_bytes())
 }
-
-
 
 fn fmt(value: f64) -> String {
     if value.abs() < 5e-13 {

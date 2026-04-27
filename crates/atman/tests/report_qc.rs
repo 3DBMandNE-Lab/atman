@@ -31,7 +31,7 @@ spectronaut_report\tP00002\tP00002\tGENE2\tspectronaut\t\n",
     )
     .unwrap();
     std::fs::write(
-        input.join("qc_measurements.tsv"),
+        input.join("measurements.tsv"),
         "\
 platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\tabundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\tdetection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n\
 spectronaut_report\tC1\tP00001\tGENE1\tspectronaut\t10.0\t10.0\t10.0\tlog2_intensity\tPASS\tPASS\t\t0\t0\t\t\t1\n\

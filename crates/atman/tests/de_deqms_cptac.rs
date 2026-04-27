@@ -28,7 +28,12 @@ fn run_atman(args: &[&str]) -> Output {
 fn parse_tsv(path: &Path) -> (Vec<String>, Vec<HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows: Vec<HashMap<String, String>> = lines
         .map(|line| {
             header
@@ -122,8 +127,7 @@ fn write_cptac_protein_canonical(dir: &Path) {
         per_protein_peps.entry(razor.clone()).or_default().push(idx);
     }
 
-    let mut proteins =
-        String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    let mut proteins = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
     let mut peptides =
         String::from("peptide_id\tassay_id\tsequence\tcharge\tmodifications\tmissed_cleavages\n");
     let mut qc = String::from(
@@ -150,9 +154,7 @@ fn write_cptac_protein_canonical(dir: &Path) {
         // Peptide catalog rows.
         for &pep_idx in pep_indices {
             let seq = &rows[pep_idx][&header[seq_col]];
-            peptides.push_str(&format!(
-                "P{pep_idx:04}_{seq}\t{razor}\t{seq}\t\t\t\n"
-            ));
+            peptides.push_str(&format!("P{pep_idx:04}_{seq}\t{razor}\t{seq}\t\t\t\n"));
         }
         // Per-sample median-summarized protein abundance.
         for (sid, col) in &all_cols {
@@ -186,7 +188,7 @@ fn write_cptac_protein_canonical(dir: &Path) {
     }
     std::fs::write(dir.join("proteins.tsv"), proteins).unwrap();
     std::fs::write(dir.join("peptides.tsv"), peptides).unwrap();
-    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
@@ -233,10 +235,7 @@ fn deqms_limma_path_matches_bioconductor_deqms_on_cptac() {
     eprintln!("atman wrote {} rows; skip reasons:", ab.len());
     let mut skip_tally: BTreeMap<String, usize> = BTreeMap::new();
     for r in &ab {
-        let reason = r
-            .get("skip_reason")
-            .cloned()
-            .unwrap_or_default();
+        let reason = r.get("skip_reason").cloned().unwrap_or_default();
         *skip_tally.entry(reason).or_insert(0) += 1;
     }
     for (reason, count) in &skip_tally {
@@ -280,7 +279,11 @@ fn deqms_limma_path_matches_bioconductor_deqms_on_cptac() {
 
     let mut diffs: Vec<(String, f64, f64, f64)> = Vec::new();
     for row in &ab {
-        if row.get("skip_reason").map(|s| !s.is_empty()).unwrap_or(true) {
+        if row
+            .get("skip_reason")
+            .map(|s| !s.is_empty())
+            .unwrap_or(true)
+        {
             continue;
         }
         let id = match row.get("assay_id") {
@@ -309,13 +312,14 @@ fn deqms_limma_path_matches_bioconductor_deqms_on_cptac() {
         diffs.len()
     );
 
-    eprintln!(
-        "\nDEqMS parity (atman mean_diff vs DEqMS −logFC_B_minus_A):"
-    );
+    eprintln!("\nDEqMS parity (atman mean_diff vs DEqMS −logFC_B_minus_A):");
     let mut sorted = diffs.clone();
     sorted.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap());
     for (id, a, r, d) in sorted.iter().take(10) {
-        eprintln!("  {:<40} atman={:+6.3}  deqms={:+6.3}  Δ={:5.3}", id, a, r, d);
+        eprintln!(
+            "  {:<40} atman={:+6.3}  deqms={:+6.3}  Δ={:5.3}",
+            id, a, r, d
+        );
     }
 
     // Sign on signal proteins (|ref| ≥ 0.3).
@@ -325,7 +329,11 @@ fn deqms_limma_path_matches_bioconductor_deqms_on_cptac() {
         .iter()
         .filter(|(_, a, r, _)| (*a > 0.0) == (*r > 0.0))
         .count();
-    assert!(signal.len() >= 8, "need ≥8 signal proteins; got {}", signal.len());
+    assert!(
+        signal.len() >= 8,
+        "need ≥8 signal proteins; got {}",
+        signal.len()
+    );
     let sign_rate = sign_match as f64 / signal.len() as f64;
     assert!(
         sign_rate >= 0.9,

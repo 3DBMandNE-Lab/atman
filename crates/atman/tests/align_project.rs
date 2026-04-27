@@ -22,12 +22,15 @@ fn run_atman(args: &[&str]) -> Output {
     Command::new(bin).args(args).output().expect("run atman")
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -86,22 +89,20 @@ fn write_cohort(dir: &Path, drop_last_protein: bool) {
     let n_proteins = if drop_last_protein { 3 } else { 4 };
     let genes = ["G1", "G2", "G3", "G4"];
 
-    let mut samples = String::from(
-        "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n",
-    );
+    let mut samples =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
     for i in 1..=coefs.len() {
-        samples.push_str(&format!(
-            "SUB{i:02}\tSUB{i:02}\tN/A\t0\tplasma\t{i}\n"
-        ));
+        samples.push_str(&format!("SUB{i:02}\tSUB{i:02}\tN/A\t0\tplasma\t{i}\n"));
     }
     std::fs::write(dir.join("samples.tsv"), samples).unwrap();
 
-    let mut proteins =
-        String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    let mut proteins = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
     for (j, gene) in genes.iter().enumerate().take(n_proteins) {
         proteins.push_str(&format!(
             "olink_explore_ngs\tA{:03}\tQ{:05}\t{}\tP1\t\n",
-            j + 1, j + 1, gene,
+            j + 1,
+            j + 1,
+            gene,
         ));
     }
     std::fs::write(dir.join("proteins.tsv"), proteins).unwrap();
@@ -119,11 +120,13 @@ fn write_cohort(dir: &Path, drop_last_protein: bool) {
             qc.push_str(&format!(
                 "olink_explore_ngs\tSUB{:02}\tA{:03}\t{}\tP1\t{v:.6}\t\
                  {v:.6}\t{v:.6}\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n",
-                si + 1, j + 1, genes[j]
+                si + 1,
+                j + 1,
+                genes[j]
             ));
         }
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
@@ -137,17 +140,24 @@ fn align_project_recovers_planted_coefficients_on_full_coverage() {
     write_cohort(&cohort_dir, false);
 
     let status = run_atman(&[
-        "align", "project",
-        "--atlas-archetypes", atlas_dir.join("archetypes.tsv").to_str().unwrap(),
-        "--atlas-loadings", &format!(
+        "align",
+        "project",
+        "--atlas-archetypes",
+        atlas_dir.join("archetypes.tsv").to_str().unwrap(),
+        "--atlas-loadings",
+        &format!(
             "COA={},COB={}",
             atlas_dir.join("coa_loadings.tsv").display(),
             atlas_dir.join("cob_loadings.tsv").display(),
         ),
-        "--cohort-dir", cohort_dir.to_str().unwrap(),
-        "--transform", "none",
-        "--projection", "ls",
-        "--output-dir", output_dir.to_str().unwrap(),
+        "--cohort-dir",
+        cohort_dir.to_str().unwrap(),
+        "--transform",
+        "none",
+        "--projection",
+        "ls",
+        "--output-dir",
+        output_dir.to_str().unwrap(),
     ]);
     assert!(
         status.status.success(),
@@ -212,26 +222,31 @@ fn align_project_partial_coverage_emits_missing_label_in_sidecar() {
     write_cohort(&cohort_dir, true);
 
     let status = run_atman(&[
-        "align", "project",
-        "--atlas-archetypes", atlas_dir.join("archetypes.tsv").to_str().unwrap(),
-        "--atlas-loadings", &format!(
+        "align",
+        "project",
+        "--atlas-archetypes",
+        atlas_dir.join("archetypes.tsv").to_str().unwrap(),
+        "--atlas-loadings",
+        &format!(
             "COA={},COB={}",
             atlas_dir.join("coa_loadings.tsv").display(),
             atlas_dir.join("cob_loadings.tsv").display(),
         ),
-        "--cohort-dir", cohort_dir.to_str().unwrap(),
-        "--transform", "none",
-        "--projection", "ridge",
-        "--ridge-lambda", "0.01",
-        "--output-dir", output_dir.to_str().unwrap(),
+        "--cohort-dir",
+        cohort_dir.to_str().unwrap(),
+        "--transform",
+        "none",
+        "--projection",
+        "ridge",
+        "--ridge-lambda",
+        "0.01",
+        "--output-dir",
+        output_dir.to_str().unwrap(),
     ]);
     assert!(status.status.success());
 
     let sidecar_json: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            output_dir.join("projected_activations.tsv.run.json"),
-        )
-        .unwrap(),
+        &std::fs::read_to_string(output_dir.join("projected_activations.tsv.run.json")).unwrap(),
     )
     .unwrap();
     let missing = sidecar_json["args"]["atlas-proteins-missing-in-cohort"]
@@ -272,12 +287,13 @@ fn align_project_includes_control_samples() {
                    SUB04\tSUB04\tControl\t1\tplasma\t4\n";
     std::fs::write(cohort_dir.join("samples.tsv"), samples).unwrap();
 
-    let mut proteins =
-        String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    let mut proteins = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
     for (j, gene) in genes.iter().enumerate() {
         proteins.push_str(&format!(
             "olink_explore_ngs\tA{:03}\tQ{:05}\t{}\tP1\t\n",
-            j + 1, j + 1, gene,
+            j + 1,
+            j + 1,
+            gene,
         ));
     }
     std::fs::write(cohort_dir.join("proteins.tsv"), proteins).unwrap();
@@ -295,25 +311,34 @@ fn align_project_includes_control_samples() {
             qc.push_str(&format!(
                 "olink_explore_ngs\tSUB{:02}\tA{:03}\t{}\tP1\t{v:.6}\t\
                  {v:.6}\t{v:.6}\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n",
-                si + 1, j + 1, gene
+                si + 1,
+                j + 1,
+                gene
             ));
         }
     }
-    std::fs::write(cohort_dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(cohort_dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(cohort_dir.join("measurements.tsv"), &qc).unwrap();
 
     let status = run_atman(&[
-        "align", "project",
-        "--atlas-archetypes", atlas_dir.join("archetypes.tsv").to_str().unwrap(),
-        "--atlas-loadings", &format!(
+        "align",
+        "project",
+        "--atlas-archetypes",
+        atlas_dir.join("archetypes.tsv").to_str().unwrap(),
+        "--atlas-loadings",
+        &format!(
             "COA={},COB={}",
             atlas_dir.join("coa_loadings.tsv").display(),
             atlas_dir.join("cob_loadings.tsv").display(),
         ),
-        "--cohort-dir", cohort_dir.to_str().unwrap(),
-        "--transform", "none",
-        "--projection", "ls",
-        "--output-dir", output_dir.to_str().unwrap(),
+        "--cohort-dir",
+        cohort_dir.to_str().unwrap(),
+        "--transform",
+        "none",
+        "--projection",
+        "ls",
+        "--output-dir",
+        output_dir.to_str().unwrap(),
     ]);
     assert!(
         status.status.success(),
@@ -322,7 +347,12 @@ fn align_project_includes_control_samples() {
     );
 
     let (_, rows) = parse_tsv(&output_dir.join("projected_activations.tsv"));
-    assert_eq!(rows.len(), 4, "expected 4 subjects (including controls), got {}", rows.len());
+    assert_eq!(
+        rows.len(),
+        4,
+        "expected 4 subjects (including controls), got {}",
+        rows.len()
+    );
     let sids: Vec<&str> = rows.iter().map(|r| r["sample_id"].as_str()).collect();
     assert!(sids.contains(&"SUB03"), "control SUB03 missing from output");
     assert!(sids.contains(&"SUB04"), "control SUB04 missing from output");
@@ -356,20 +386,26 @@ fn align_project_refuses_on_empty_cohort_intersection() {
          detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n\
          olink_explore_ngs\tSUB01\tX001\tZZZ1\tP1\t1.0\t1.0\t1.0\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t1\n\
          olink_explore_ngs\tSUB02\tX001\tZZZ1\tP1\t1.5\t1.5\t1.5\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t2\n";
-    std::fs::write(cohort_dir.join("qc_measurements.tsv"), qc).unwrap();
+    std::fs::write(cohort_dir.join("measurements.tsv"), qc).unwrap();
     std::fs::write(cohort_dir.join("measurements.tsv"), qc).unwrap();
 
     let status = run_atman(&[
-        "align", "project",
-        "--atlas-archetypes", atlas_dir.join("archetypes.tsv").to_str().unwrap(),
-        "--atlas-loadings", &format!(
+        "align",
+        "project",
+        "--atlas-archetypes",
+        atlas_dir.join("archetypes.tsv").to_str().unwrap(),
+        "--atlas-loadings",
+        &format!(
             "COA={},COB={}",
             atlas_dir.join("coa_loadings.tsv").display(),
             atlas_dir.join("cob_loadings.tsv").display(),
         ),
-        "--cohort-dir", cohort_dir.to_str().unwrap(),
-        "--transform", "none",
-        "--output-dir", output_dir.to_str().unwrap(),
+        "--cohort-dir",
+        cohort_dir.to_str().unwrap(),
+        "--transform",
+        "none",
+        "--output-dir",
+        output_dir.to_str().unwrap(),
     ]);
     // The cohort has only 1 protein (ZZZ1) that isn't in the atlas →
     // zero overlap → the projection solve runs on a zero-input vector

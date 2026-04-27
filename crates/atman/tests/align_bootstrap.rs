@@ -36,7 +36,13 @@ impl Lcg {
     }
 }
 
-fn write_cohort(dir: &Path, cohort_label: &str, planted_a_specific: bool, planted_b_specific: bool, seed: u64) {
+fn write_cohort(
+    dir: &Path,
+    cohort_label: &str,
+    planted_a_specific: bool,
+    planted_b_specific: bool,
+    seed: u64,
+) {
     std::fs::create_dir_all(dir).unwrap();
     let n_samples = 30usize;
     let n_proteins = 10usize;
@@ -75,29 +81,40 @@ fn write_cohort(dir: &Path, cohort_label: &str, planted_a_specific: bool, plante
         for j in 1..=n_proteins {
             order += 1;
             let universal_weight = if (1..=4).contains(&j) { 1.0 } else { 0.0 };
-            let a_weight =
-                if planted_a_specific && (5..=7).contains(&j) { 1.0 } else { 0.0 };
-            let b_weight =
-                if planted_b_specific && (8..=10).contains(&j) { 1.0 } else { 0.0 };
+            let a_weight = if planted_a_specific && (5..=7).contains(&j) {
+                1.0
+            } else {
+                0.0
+            };
+            let b_weight = if planted_b_specific && (8..=10).contains(&j) {
+                1.0
+            } else {
+                0.0
+            };
             let noise = (rng.next() - 0.5) * 0.3;
-            let value =
-                universal_weight * universal_source + a_weight * a_source + b_weight * b_source + noise;
+            let value = universal_weight * universal_source
+                + a_weight * a_source
+                + b_weight * b_source
+                + noise;
             qc.push_str(&format!(
                 "olink_explore_ngs\t{cohort_label}_S{i:03}\tA{j:03}\tG{j:03}\tP1\t{value:.6}\t\
                  {value:.6}\t{value:.6}\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n"
             ));
         }
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -266,18 +283,30 @@ fn align_bootstrap_magnitude_universal_vs_specific_on_strong_fixture() {
     write_strong_cohort(&b, "B", false, true, 202);
     let out = tmp.path().join("summary.tsv");
     let status = run_atman(&[
-        "align", "bootstrap",
-        "--cohorts", &format!("{},{}", a.display(), b.display()),
-        "--labels", "A,B",
-        "--k", "2",
-        "--n-boot", "30",
-        "--seed", "20260420",
-        "--cosine-tau", "0.1",
-        "--match-tau", "0.1",
-        "--min-subjects", "10",
-        "--max-iter", "80",
-        "--tol", "1e-3",
-        "--output", out.to_str().unwrap(),
+        "align",
+        "bootstrap",
+        "--cohorts",
+        &format!("{},{}", a.display(), b.display()),
+        "--labels",
+        "A,B",
+        "--k",
+        "2",
+        "--n-boot",
+        "30",
+        "--seed",
+        "20260420",
+        "--cosine-tau",
+        "0.1",
+        "--match-tau",
+        "0.1",
+        "--min-subjects",
+        "10",
+        "--max-iter",
+        "80",
+        "--tol",
+        "1e-3",
+        "--output",
+        out.to_str().unwrap(),
     ]);
     assert!(
         status.status.success(),
@@ -286,7 +315,10 @@ fn align_bootstrap_magnitude_universal_vs_specific_on_strong_fixture() {
         String::from_utf8_lossy(&status.stderr)
     );
     let (_, rows) = parse_tsv(&out);
-    assert!(!rows.is_empty(), "no archetypes recovered; fixture is broken");
+    assert!(
+        !rows.is_empty(),
+        "no archetypes recovered; fixture is broken"
+    );
     // At least one archetype should behave like a universal archetype:
     // prob_multi >= 0.7, entropy reasonably low, BCa upper ≥ 2.
     let has_universal = rows.iter().any(|r| {
@@ -302,8 +334,10 @@ fn align_bootstrap_magnitude_universal_vs_specific_on_strong_fixture() {
         rows.iter()
             .map(|r| format!(
                 "  id={} prob_multi={} entropy={} bca=[{}, {}]",
-                r["archetype_id"], r["bootstrap_prob_multi"],
-                r["alignment_entropy"], r["bca_lower_n_cohorts"],
+                r["archetype_id"],
+                r["bootstrap_prob_multi"],
+                r["alignment_entropy"],
+                r["bca_lower_n_cohorts"],
                 r["bca_upper_n_cohorts"]
             ))
             .collect::<Vec<_>>()
@@ -312,8 +346,11 @@ fn align_bootstrap_magnitude_universal_vs_specific_on_strong_fixture() {
 }
 
 fn write_strong_cohort(
-    dir: &Path, cohort_label: &str,
-    planted_a_specific: bool, planted_b_specific: bool, seed: u64,
+    dir: &Path,
+    cohort_label: &str,
+    planted_a_specific: bool,
+    planted_b_specific: bool,
+    seed: u64,
 ) {
     // 40 subjects × 15 proteins. Proteins 1-6 are universal; 7-10 are
     // A-specific; 11-15 are B-specific. Noise is low relative to the
@@ -350,18 +387,28 @@ fn write_strong_cohort(
         for j in 1..=n_proteins {
             order += 1;
             let universal_weight = if (1..=6).contains(&j) { 1.0 } else { 0.0 };
-            let a_weight = if planted_a_specific && (7..=10).contains(&j) { 1.0 } else { 0.0 };
-            let b_weight = if planted_b_specific && (11..=15).contains(&j) { 1.0 } else { 0.0 };
+            let a_weight = if planted_a_specific && (7..=10).contains(&j) {
+                1.0
+            } else {
+                0.0
+            };
+            let b_weight = if planted_b_specific && (11..=15).contains(&j) {
+                1.0
+            } else {
+                0.0
+            };
             let noise = (rng.next() - 0.5) * 0.1;
             let value = universal_weight * universal_source
-                + a_weight * a_source + b_weight * b_source + noise;
+                + a_weight * a_source
+                + b_weight * b_source
+                + noise;
             qc.push_str(&format!(
                 "olink_explore_ngs\t{cohort_label}_S{i:03}\tA{j:03}\tG{j:03}\tP1\t{value:.6}\t\
                  {value:.6}\t{value:.6}\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n"
             ));
         }
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
@@ -401,9 +448,16 @@ fn align_bootstrap_is_deterministic_across_runs() {
             "--output",
             out.to_str().unwrap(),
         ]);
-        assert!(status.status.success(), "{}", String::from_utf8_lossy(&status.stderr));
+        assert!(
+            status.status.success(),
+            "{}",
+            String::from_utf8_lossy(&status.stderr)
+        );
     }
     let a = std::fs::read_to_string(&out1).unwrap();
     let b = std::fs::read_to_string(&out2).unwrap();
-    assert_eq!(a, b, "align bootstrap must be deterministic under fixed seed");
+    assert_eq!(
+        a, b,
+        "align bootstrap must be deterministic under fixed seed"
+    );
 }

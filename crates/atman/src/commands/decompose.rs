@@ -5,11 +5,11 @@ use atman_core::decompose_unmix::{
     bootstrap_ci, ora_enrichment, select_k_auto, unmix, AbundanceCi, AbundanceMethod,
     AnnotationRow, EndmemberMethod, KSweepRow, LoadingCi, UnmixConfig, UnmixResult,
 };
-use atman_core::ica::{fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult};
-use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
-use atman_core::variance_decomposition::{
-    decompose_archetype_variance, FixedFactor, VarianceRow,
+use atman_core::ica::{
+    fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult,
 };
+use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
+use atman_core::variance_decomposition::{decompose_archetype_variance, FixedFactor, VarianceRow};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use csv::ReaderBuilder;
 use serde_json::json;
@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::io::{
-    atomic_write, format_float, hash_canonical_inputs, read_measurements_long,
-    read_samples, sidecar_path_for, write_run_sidecar,
+    atomic_write, format_float, hash_canonical_inputs, read_measurements_long, read_samples,
+    sidecar_path_for, write_run_sidecar,
 };
 
 #[derive(ClapArgs, Debug)]
@@ -336,7 +336,7 @@ fn run_variance(args: VarianceArgs) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("decompose variance: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -349,10 +349,7 @@ fn parse_variance_formula(formula: &str) -> Result<(Vec<String>, Option<String>)
         if term.is_empty() {
             continue;
         }
-        if let Some(rest) = term
-            .strip_prefix('(')
-            .and_then(|s| s.strip_suffix(')'))
-        {
+        if let Some(rest) = term.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
             // (1|group_col)
             let inner = rest.trim();
             if let Some(group) = inner.strip_prefix("1|") {
@@ -401,10 +398,7 @@ fn read_samples_extras(path: &Path) -> Result<BTreeMap<String, BTreeMap<String, 
     let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     for row in reader.records() {
         let row = row.with_context(|| format!("reading {:?}", path))?;
-        let sample = row
-            .get(sample_col)
-            .unwrap_or_default()
-            .to_string();
+        let sample = row.get(sample_col).unwrap_or_default().to_string();
         if sample.is_empty() {
             continue;
         }
@@ -474,7 +468,11 @@ fn read_activations(path: &Path) -> Result<ActivationsTable> {
         by_key.insert((program, sample), value);
     }
     let programs_order: Vec<String> = programs.into_iter().collect();
-    Ok(ActivationsTable { by_key, programs_order, samples_order })
+    Ok(ActivationsTable {
+        by_key,
+        programs_order,
+        samples_order,
+    })
 }
 
 /// Build the design matrix + per-factor column ranges + per-sample
@@ -563,10 +561,14 @@ fn build_variance_design(
     // alphabetically-first level as reference and uses `k-1` columns.
     let mut fixed_factors: Vec<FixedFactor> = Vec::new();
     let mut total_cols = 1; // intercept
-    // Intercept isn't a named factor row in the output; factor rows
-    // are for the user-requested terms.
+                            // Intercept isn't a named factor row in the output; factor rows
+                            // are for the user-requested terms.
     for t in &term_info {
-        let width = if t.numeric { 1 } else { t.levels.len().saturating_sub(1) };
+        let width = if t.numeric {
+            1
+        } else {
+            t.levels.len().saturating_sub(1)
+        };
         if width == 0 {
             bail!(
                 "fixed term {:?} has only one level; cannot contribute variance",
@@ -639,7 +641,11 @@ fn build_variance_design(
         design.push(row);
         kept.push(sid.clone());
     }
-    let group_labels = if random_group.is_some() { Some(groups) } else { None };
+    let group_labels = if random_group.is_some() {
+        Some(groups)
+    } else {
+        None
+    };
     Ok(VarianceDesign {
         design,
         fixed_factors,
@@ -930,7 +936,7 @@ fn run_null(args: NullArgs) -> Result<()> {
 
     let finished_at = SystemTime::now();
     let canonical_inputs: &[&str] = match args.source.as_str() {
-        "qc" => &["qc_measurements.tsv", "samples.tsv", "proteins.tsv"],
+        "qc" => &["measurements.tsv", "samples.tsv", "proteins.tsv"],
         _ => &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     };
     let inputs_sha256 = hash_canonical_inputs(&args.input_dir, canonical_inputs)?;
@@ -959,7 +965,7 @@ fn run_null(args: NullArgs) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("decompose null: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -1055,7 +1061,7 @@ fn run_ica(args: IcaArgs) -> Result<()> {
 
     let finished_at = SystemTime::now();
     let canonical_inputs: &[&str] = match args.source.as_str() {
-        "qc" => &["qc_measurements.tsv", "samples.tsv", "proteins.tsv"],
+        "qc" => &["measurements.tsv", "samples.tsv", "proteins.tsv"],
         _ => &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     };
     let inputs_sha256 = hash_canonical_inputs(&args.input_dir, canonical_inputs)?;
@@ -1109,11 +1115,15 @@ fn run_ica(args: IcaArgs) -> Result<()> {
             // the path: `cli` when --k was passed, `<rule>` otherwise.
             let mut extras = serde_json::Map::new();
             extras.insert("k_resolved".into(), serde_json::json!(k));
-            let source = if args.k.is_some() { "cli".to_string() } else { args.k_selection.clone() };
+            let source = if args.k.is_some() {
+                "cli".to_string()
+            } else {
+                args.k_selection.clone()
+            };
             extras.insert("k_resolution_source".into(), serde_json::json!(source));
             Some(extras)
         },
-)?;
+    )?;
     eprintln!("decompose ica: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -1131,7 +1141,9 @@ fn resolve_k(matrix: &AbundanceMatrix, args: &IcaArgs) -> Result<usize> {
         &whitening.full_spectrum,
         target,
         args.k_min,
-        args.k_max.min(matrix.samples.len().saturating_sub(1)).max(1),
+        args.k_max
+            .min(matrix.samples.len().saturating_sub(1))
+            .max(1),
     );
     Ok(chosen)
 }
@@ -1182,7 +1194,7 @@ struct AssayInfo {
 
 fn load_matrix(args: &IcaArgs) -> Result<AbundanceMatrix> {
     let filename = match args.source.as_str() {
-        "qc" => "qc_measurements.tsv",
+        "qc" => "measurements.tsv",
         "raw" => "measurements.tsv",
         other => bail!("--source {:?}; expected qc or raw", other),
     };
@@ -1209,7 +1221,9 @@ fn load_matrix(args: &IcaArgs) -> Result<AbundanceMatrix> {
         if seen_samples.insert(sample.clone()) {
             sample_order.push(sample.clone());
         }
-        assay_meta.entry(assay.clone()).or_insert_with(|| r.gene_symbol.clone());
+        assay_meta
+            .entry(assay.clone())
+            .or_insert_with(|| r.gene_symbol.clone());
         abundance_by_key.insert((assay, sample), (abundance, r.gene_symbol.clone()));
     }
 
@@ -1367,9 +1381,7 @@ fn apply_compositional(
             },
         ));
     }
-    if matches!(args.transform, TransformArg::Ilr)
-        && args.alr_reference.is_some()
-    {
+    if matches!(args.transform, TransformArg::Ilr) && args.alr_reference.is_some() {
         eprintln!("decompose ica: --alr-reference is ignored for --transform ilr");
     }
     let needs_reference = matches!(
@@ -1379,9 +1391,7 @@ fn apply_compositional(
     let resolved_reference: Option<(usize, String)> = if needs_reference {
         let gene = match args.alr_reference.as_deref() {
             Some(g) if !g.is_empty() => g,
-            _ => bail!(
-                "--transform {transform_name} requires --alr-reference <gene_symbol>"
-            ),
+            _ => bail!("--transform {transform_name} requires --alr-reference <gene_symbol>"),
         };
         let idx = matrix
             .assays
@@ -1498,12 +1508,8 @@ fn canonicalize(result: &IcaResult) -> CanonicalIca {
         .collect();
     let mut order: Vec<usize> = (0..k).collect();
     order.sort_by(|&a, &b| {
-        let ma = loadings[a]
-            .iter()
-            .fold(0.0_f64, |acc, v| acc.max(v.abs()));
-        let mb = loadings[b]
-            .iter()
-            .fold(0.0_f64, |acc, v| acc.max(v.abs()));
+        let ma = loadings[a].iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
+        let mb = loadings[b].iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
         mb.partial_cmp(&ma).unwrap_or(Ordering::Equal)
     });
     let ordered_loadings: Vec<Vec<f64>> = order.iter().map(|&i| loadings[i].clone()).collect();
@@ -1793,7 +1799,7 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
 
     // Load subject × protein matrix, keyed by gene_symbol.
     let source_file = match args.source.as_str() {
-        "qc" => "qc_measurements.tsv",
+        "qc" => "measurements.tsv",
         "raw" => "measurements.tsv",
         other => bail!("--source {other:?}; expected qc or raw"),
     };
@@ -1811,7 +1817,8 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
         if args.k_min < 2 || args.k_max < args.k_min {
             bail!(
                 "invalid --k auto sweep: k-min={} k-max={}",
-                args.k_min, args.k_max
+                args.k_min,
+                args.k_max
             );
         }
         if args.k_max * 2 > subject_ids.len() {
@@ -1848,9 +1855,10 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
         )
         .map_err(|e| anyhow::anyhow!(e))?
     } else {
-        let k: usize = args.k.parse().with_context(|| {
-            format!("--k {:?}: expected an integer or `auto`", args.k)
-        })?;
+        let k: usize = args
+            .k
+            .parse()
+            .with_context(|| format!("--k {:?}: expected an integer or `auto`", args.k))?;
         (k, Vec::new())
     };
     if subject_ids.len() < effective_k * 2 {
@@ -1874,10 +1882,10 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
             let idx = protein_labels
                 .iter()
                 .position(|l| l == reference)
-                .with_context(|| {
-                    format!("--alr-reference {reference:?} not in protein labels")
-                })?;
-            Transform::Alr { reference_index: idx }
+                .with_context(|| format!("--alr-reference {reference:?} not in protein labels"))?;
+            Transform::Alr {
+                reference_index: idx,
+            }
         }
         "ratio-anchor" => {
             let reference = args
@@ -1887,15 +1895,15 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
             let idx = protein_labels
                 .iter()
                 .position(|l| l == reference)
-                .with_context(|| {
-                    format!("--alr-reference {reference:?} not in protein labels")
-                })?;
-            Transform::RatioAnchor { reference_index: idx }
+                .with_context(|| format!("--alr-reference {reference:?} not in protein labels"))?;
+            Transform::RatioAnchor {
+                reference_index: idx,
+            }
         }
         _ => unreachable!(),
     };
-    let transformed = apply_transform(&data, transform)
-        .map_err(|e| anyhow::anyhow!("transform failed: {e}"))?;
+    let transformed =
+        apply_transform(&data, transform).map_err(|e| anyhow::anyhow!("transform failed: {e}"))?;
 
     let cfg = UnmixConfig {
         seed: args.seed,
@@ -1919,10 +1927,19 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
         loading_ci.as_ref(),
     )?;
     let abundances_path = args.output_dir.join("abundances.tsv");
-    write_unmix_abundances(&abundances_path, &result, &subject_ids, abundance_ci.as_ref())?;
+    write_unmix_abundances(
+        &abundances_path,
+        &result,
+        &subject_ids,
+        abundance_ci.as_ref(),
+    )?;
     let diag_path = args.output_dir.join("unmix_diagnostics.tsv");
     write_unmix_diagnostics(&diag_path, &result, &subject_ids)?;
-    let mut outputs = vec![endmembers_path.clone(), abundances_path.clone(), diag_path.clone()];
+    let mut outputs = vec![
+        endmembers_path.clone(),
+        abundances_path.clone(),
+        diag_path.clone(),
+    ];
     if !k_sweep.is_empty() {
         let k_path = args.output_dir.join("k_selection.tsv");
         write_k_selection(&k_path, &k_sweep, effective_k)?;
@@ -1955,7 +1972,7 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
-            "qc_measurements.tsv",
+            "measurements.tsv",
             "measurements.tsv",
             "samples.tsv",
             "proteins.tsv",
@@ -2010,7 +2027,7 @@ fn run_unmix(args: UnmixArgs) -> Result<()> {
             extras.insert("k_resolution_source".into(), serde_json::json!(source));
             Some(extras)
         },
-)?;
+    )?;
     eprintln!("decompose unmix: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -2066,9 +2083,7 @@ fn write_endmember_annotations(path: &Path, rows: &[AnnotationRow]) -> Result<()
 }
 
 fn write_k_selection(path: &Path, rows: &[KSweepRow], chosen_k: usize) -> Result<()> {
-    let mut buf = String::from(
-        "k\tmean_residual_norm\tmarginal_improvement\tchosen\n",
-    );
+    let mut buf = String::from("k\tmean_residual_norm\tmarginal_improvement\tchosen\n");
     for r in rows {
         buf.push_str(&format!(
             "{}\t{:.6}\t{:.6}\t{}\n",
@@ -2409,4 +2424,3 @@ fn run_counterfactual(args: CounterfactualArgs) -> Result<()> {
     eprintln!("decompose counterfactual: sidecar={}", sidecar.display());
     Ok(())
 }
-

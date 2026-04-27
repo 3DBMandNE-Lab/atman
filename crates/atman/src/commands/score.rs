@@ -79,8 +79,8 @@ fn run_modules(args: ModulesArgs) -> Result<()> {
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     let sample_by_id: HashMap<&str, &Sample> =
         samples.iter().map(|s| (s.sample_id.as_str(), s)).collect();
-    let measurements_path = if args.input_dir.join("qc_measurements.tsv").exists() {
-        args.input_dir.join("qc_measurements.tsv")
+    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
+        args.input_dir.join("measurements.tsv")
     } else {
         args.input_dir.join("measurements.tsv")
     };
@@ -379,7 +379,7 @@ fn write_canonical(
         ));
     }
     atomic_write(
-        &output_dir.join("qc_measurements.tsv"),
+        &output_dir.join("measurements.tsv"),
         measurements.as_bytes(),
     )?;
     atomic_write(
@@ -417,7 +417,6 @@ fn read_modules(path: &Path) -> Result<BTreeMap<String, BTreeSet<String>>> {
     }
     Ok(out)
 }
-
 
 fn sample_sd(values: &[f64], mean: f64) -> f64 {
     (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64).sqrt()

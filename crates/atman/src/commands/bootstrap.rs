@@ -251,8 +251,8 @@ fn run_protein(args: ProteinArgs) -> Result<()> {
     }
 
     let comparisons = parse_comparisons(&args.groups)?;
-    let measurements_path = if args.input_dir.join("qc_measurements.tsv").exists() {
-        args.input_dir.join("qc_measurements.tsv")
+    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
+        args.input_dir.join("measurements.tsv")
     } else {
         args.input_dir.join("measurements.tsv")
     };
@@ -363,7 +363,7 @@ fn run_protein(args: ProteinArgs) -> Result<()> {
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
-            "qc_measurements.tsv",
+            "measurements.tsv",
             "measurements.tsv",
             "samples.tsv",
             "proteins.tsv",
@@ -389,7 +389,7 @@ fn run_protein(args: ProteinArgs) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("bootstrap protein: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -414,8 +414,8 @@ fn run_module(args: ModuleArgs) -> Result<()> {
 
     let comparisons = parse_comparisons(&args.groups)?;
     let modules = read_modules(&args.modules_tsv)?;
-    let measurements_path = if args.input_dir.join("qc_measurements.tsv").exists() {
-        args.input_dir.join("qc_measurements.tsv")
+    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
+        args.input_dir.join("measurements.tsv")
     } else {
         args.input_dir.join("measurements.tsv")
     };
@@ -535,12 +535,12 @@ fn run_module(args: ModuleArgs) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let qc_path = args.input_dir.join("qc_measurements.tsv");
+    let qc_path = args.input_dir.join("measurements.tsv");
     let raw_path = args.input_dir.join("measurements.tsv");
     let samples_path = args.input_dir.join("samples.tsv");
     let proteins_path = args.input_dir.join("proteins.tsv");
     let inputs_sha256 = hash_labeled_inputs(&[
-        ("qc_measurements.tsv", qc_path.as_path()),
+        ("measurements.tsv", qc_path.as_path()),
         ("measurements.tsv", raw_path.as_path()),
         ("samples.tsv", samples_path.as_path()),
         ("proteins.tsv", proteins_path.as_path()),
@@ -567,7 +567,7 @@ fn run_module(args: ModuleArgs) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("bootstrap module: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -592,8 +592,8 @@ fn run_program(args: ProgramArgs) -> Result<()> {
 
     let comparisons = parse_comparisons(&args.groups)?;
     let loadings = read_program_loadings(&args.loadings)?;
-    let measurements_path = if args.input_dir.join("qc_measurements.tsv").exists() {
-        args.input_dir.join("qc_measurements.tsv")
+    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
+        args.input_dir.join("measurements.tsv")
     } else {
         args.input_dir.join("measurements.tsv")
     };
@@ -726,12 +726,12 @@ fn run_program(args: ProgramArgs) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let qc_path = args.input_dir.join("qc_measurements.tsv");
+    let qc_path = args.input_dir.join("measurements.tsv");
     let raw_path = args.input_dir.join("measurements.tsv");
     let samples_path = args.input_dir.join("samples.tsv");
     let proteins_path = args.input_dir.join("proteins.tsv");
     let inputs_sha256 = hash_labeled_inputs(&[
-        ("qc_measurements.tsv", qc_path.as_path()),
+        ("measurements.tsv", qc_path.as_path()),
         ("measurements.tsv", raw_path.as_path()),
         ("samples.tsv", samples_path.as_path()),
         ("proteins.tsv", proteins_path.as_path()),
@@ -758,7 +758,7 @@ fn run_program(args: ProgramArgs) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("bootstrap program: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -1127,7 +1127,6 @@ fn subject_means(input: Option<&BTreeMap<String, Vec<f64>>>) -> BTreeMap<String,
         .map(|(subject, values)| (subject.clone(), mean(values)))
         .collect()
 }
-
 
 fn bootstrap_mean(values: &[f64], rng: &mut Rng64) -> f64 {
     let mut total = 0.0;

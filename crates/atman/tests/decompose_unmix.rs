@@ -25,12 +25,15 @@ fn run_atman(args: &[&str]) -> Output {
     Command::new(bin).args(args).output().expect("run atman")
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -94,18 +97,14 @@ fn write_planted_cohort(dir: &Path, seed: u64, planted: &mut [Vec<f64>]) -> Vec<
         }
     }
 
-    let mut samples = String::from(
-        "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n",
-    );
+    let mut samples =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
     for i in 1..=n {
-        samples.push_str(&format!(
-            "S{i:03}\tS{i:03}\tN/A\t0\tplasma\t{i}\n"
-        ));
+        samples.push_str(&format!("S{i:03}\tS{i:03}\tN/A\t0\tplasma\t{i}\n"));
     }
     std::fs::write(dir.join("samples.tsv"), samples).unwrap();
 
-    let mut proteins =
-        String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    let mut proteins = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
     for j in 1..=p {
         proteins.push_str(&format!(
             "olink_explore_ngs\tA{j:03}\tQ{j:05}\tG{j:03}\tP1\t\n"
@@ -136,15 +135,12 @@ fn write_planted_cohort(dir: &Path, seed: u64, planted: &mut [Vec<f64>]) -> Vec<
             ));
         }
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     abundances
 }
 
-fn best_permuted_cosine(
-    planted: &[Vec<f64>],
-    recovered: &[Vec<f64>],
-) -> Vec<f64> {
+fn best_permuted_cosine(planted: &[Vec<f64>], recovered: &[Vec<f64>]) -> Vec<f64> {
     planted
         .iter()
         .map(|p| {
@@ -174,16 +170,26 @@ fn unmix_recovers_planted_endmembers_and_satisfies_simplex_constraints() {
     write_planted_cohort(&input, 20260420, &mut planted);
 
     let status = run_atman(&[
-        "decompose", "unmix",
-        "--input-dir", input.to_str().unwrap(),
-        "--k", "3",
-        "--method", "vca",
-        "--abundance", "fcls",
-        "--transform", "none",
-        "--seed", "42",
-        "--fcls-max-iter", "1000",
-        "--fcls-tol", "1e-9",
-        "--output-dir", output.to_str().unwrap(),
+        "decompose",
+        "unmix",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--k",
+        "3",
+        "--method",
+        "vca",
+        "--abundance",
+        "fcls",
+        "--transform",
+        "none",
+        "--seed",
+        "42",
+        "--fcls-max-iter",
+        "1000",
+        "--fcls-tol",
+        "1e-9",
+        "--output-dir",
+        output.to_str().unwrap(),
     ]);
     assert!(
         status.status.success(),
@@ -194,7 +200,11 @@ fn unmix_recovers_planted_endmembers_and_satisfies_simplex_constraints() {
     // Endmembers TSV schema.
     let (header_em, rows_em) = parse_tsv(&output.join("endmembers.tsv"));
     for col in [
-        "endmember_id", "source_sample_id", "protein", "loading", "rank_in_endmember",
+        "endmember_id",
+        "source_sample_id",
+        "protein",
+        "loading",
+        "rank_in_endmember",
     ] {
         assert!(header_em.iter().any(|h| h == col), "missing {col}");
     }
@@ -205,17 +215,9 @@ fn unmix_recovers_planted_endmembers_and_satisfies_simplex_constraints() {
     let mut recovered = vec![vec![0.0_f64; 30]; 3];
     for r in &rows_em {
         let em: &str = r["endmember_id"].as_str();
-        let ei: usize = em
-            .trim_start_matches('E')
-            .parse::<usize>()
-            .unwrap()
-            - 1;
+        let ei: usize = em.trim_start_matches('E').parse::<usize>().unwrap() - 1;
         let prot: &str = r["protein"].as_str();
-        let pi: usize = prot
-            .trim_start_matches('G')
-            .parse::<usize>()
-            .unwrap()
-            - 1;
+        let pi: usize = prot.trim_start_matches('G').parse::<usize>().unwrap() - 1;
         recovered[ei][pi] = r["loading"].parse().unwrap();
     }
     let cos = best_permuted_cosine(&planted, &recovered);
@@ -236,11 +238,7 @@ fn unmix_recovers_planted_endmembers_and_satisfies_simplex_constraints() {
         let mut s = 0.0_f64;
         for col in &["E001", "E002", "E003"] {
             let v: f64 = r[*col].parse().unwrap();
-            assert!(
-                v >= -1e-9,
-                "negative abundance for {}: {v}",
-                r["sample_id"]
-            );
+            assert!(v >= -1e-9, "negative abundance for {}: {v}", r["sample_id"]);
             s += v;
         }
         assert!(
@@ -282,10 +280,14 @@ fn unmix_refuses_k_greater_than_half_samples() {
 
     // k = 40 > n/2 = 30.
     let out = run_atman(&[
-        "decompose", "unmix",
-        "--input-dir", input.to_str().unwrap(),
-        "--k", "40",
-        "--output-dir", output.to_str().unwrap(),
+        "decompose",
+        "unmix",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--k",
+        "40",
+        "--output-dir",
+        output.to_str().unwrap(),
     ]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -304,12 +306,18 @@ fn unmix_refuses_clr_plus_fcls_without_escape_hatch() {
     write_planted_cohort(&input, 2, &mut planted);
 
     let out = run_atman(&[
-        "decompose", "unmix",
-        "--input-dir", input.to_str().unwrap(),
-        "--k", "3",
-        "--transform", "clr",
-        "--abundance", "fcls",
-        "--output-dir", output.to_str().unwrap(),
+        "decompose",
+        "unmix",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--k",
+        "3",
+        "--transform",
+        "clr",
+        "--abundance",
+        "fcls",
+        "--output-dir",
+        output.to_str().unwrap(),
     ]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -328,17 +336,28 @@ fn unmix_k_auto_selects_planted_k_on_planted_3_fixture() {
     write_planted_cohort(&input, 20260420, &mut planted);
 
     let status = run_atman(&[
-        "decompose", "unmix",
-        "--input-dir", input.to_str().unwrap(),
-        "--k", "auto",
-        "--k-min", "2",
-        "--k-max", "6",
-        "--k-elbow-threshold", "0.10",
-        "--method", "vca",
-        "--abundance", "fcls",
-        "--transform", "none",
-        "--seed", "42",
-        "--output-dir", output.to_str().unwrap(),
+        "decompose",
+        "unmix",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--k",
+        "auto",
+        "--k-min",
+        "2",
+        "--k-max",
+        "6",
+        "--k-elbow-threshold",
+        "0.10",
+        "--method",
+        "vca",
+        "--abundance",
+        "fcls",
+        "--transform",
+        "none",
+        "--seed",
+        "42",
+        "--output-dir",
+        output.to_str().unwrap(),
     ]);
     assert!(
         status.status.success(),
@@ -346,15 +365,16 @@ fn unmix_k_auto_selects_planted_k_on_planted_3_fixture() {
         String::from_utf8_lossy(&status.stderr)
     );
     let k_path = output.join("k_selection.tsv");
-    assert!(k_path.exists(), "k_selection.tsv must be emitted under --k auto");
+    assert!(
+        k_path.exists(),
+        "k_selection.tsv must be emitted under --k auto"
+    );
     let (header, rows) = parse_tsv(&k_path);
     for col in ["k", "mean_residual_norm", "marginal_improvement", "chosen"] {
         assert!(header.iter().any(|h| h == col), "missing {col}");
     }
-    let chosen_rows: Vec<&HashMap<String, String>> = rows
-        .iter()
-        .filter(|r| r["chosen"] == "1")
-        .collect();
+    let chosen_rows: Vec<&HashMap<String, String>> =
+        rows.iter().filter(|r| r["chosen"] == "1").collect();
     assert_eq!(chosen_rows.len(), 1, "expected exactly one chosen k");
     let chosen_k: usize = chosen_rows[0]["k"].parse().unwrap();
     assert!(
@@ -377,12 +397,18 @@ fn unmix_n_boot_emits_ci_columns_with_finite_ordered_bounds() {
     write_planted_cohort(&input, 20260420, &mut planted);
 
     let status = run_atman(&[
-        "decompose", "unmix",
-        "--input-dir", input.to_str().unwrap(),
-        "--k", "3",
-        "--n-boot", "20",
-        "--seed", "42",
-        "--output-dir", output.to_str().unwrap(),
+        "decompose",
+        "unmix",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--k",
+        "3",
+        "--n-boot",
+        "20",
+        "--seed",
+        "42",
+        "--output-dir",
+        output.to_str().unwrap(),
     ]);
     assert!(
         status.status.success(),
@@ -392,7 +418,10 @@ fn unmix_n_boot_emits_ci_columns_with_finite_ordered_bounds() {
 
     let (header_em, rows_em) = parse_tsv(&output.join("endmembers.tsv"));
     for col in ["loading_ci_lower", "loading_ci_upper"] {
-        assert!(header_em.iter().any(|h| h == col), "missing {col} on endmembers.tsv");
+        assert!(
+            header_em.iter().any(|h| h == col),
+            "missing {col} on endmembers.tsv"
+        );
     }
     for r in &rows_em {
         let lo: f64 = r["loading_ci_lower"].parse().unwrap();
@@ -402,7 +431,10 @@ fn unmix_n_boot_emits_ci_columns_with_finite_ordered_bounds() {
     }
     let (header_ab, rows_ab) = parse_tsv(&output.join("abundances.tsv"));
     for col in ["E001_ci_lower", "E001_ci_upper"] {
-        assert!(header_ab.iter().any(|h| h == col), "missing {col} on abundances.tsv");
+        assert!(
+            header_ab.iter().any(|h| h == col),
+            "missing {col} on abundances.tsv"
+        );
     }
     for r in &rows_ab {
         let lo: f64 = r["E001_ci_lower"].parse().unwrap();
@@ -433,13 +465,20 @@ fn unmix_annotate_markers_emits_endmember_annotations_tsv() {
     std::fs::write(&markers_path, markers).unwrap();
 
     let status = run_atman(&[
-        "decompose", "unmix",
-        "--input-dir", input.to_str().unwrap(),
-        "--k", "3",
-        "--annotate-markers", markers_path.to_str().unwrap(),
-        "--annotate-top-n", "10",
-        "--seed", "42",
-        "--output-dir", output.to_str().unwrap(),
+        "decompose",
+        "unmix",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--k",
+        "3",
+        "--annotate-markers",
+        markers_path.to_str().unwrap(),
+        "--annotate-top-n",
+        "10",
+        "--seed",
+        "42",
+        "--output-dir",
+        output.to_str().unwrap(),
     ]);
     assert!(
         status.status.success(),
@@ -491,11 +530,16 @@ fn unmix_is_deterministic_under_fixed_seed() {
 
     for out in [&out1, &out2] {
         let status = run_atman(&[
-            "decompose", "unmix",
-            "--input-dir", input.to_str().unwrap(),
-            "--k", "3",
-            "--seed", "42",
-            "--output-dir", out.to_str().unwrap(),
+            "decompose",
+            "unmix",
+            "--input-dir",
+            input.to_str().unwrap(),
+            "--k",
+            "3",
+            "--seed",
+            "42",
+            "--output-dir",
+            out.to_str().unwrap(),
         ]);
         assert!(status.status.success());
     }

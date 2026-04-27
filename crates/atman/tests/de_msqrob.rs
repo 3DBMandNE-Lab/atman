@@ -47,7 +47,7 @@ fn write_peptide_fixture(dir: &Path) {
     let qc = "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
               abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
               detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n";
-    std::fs::write(dir.join("qc_measurements.tsv"), qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), qc).unwrap();
 
     // 4 peptides per protein, 12 peptides total.
@@ -88,7 +88,12 @@ fn write_peptide_fixture(dir: &Path) {
 fn parse_tsv(path: &Path) -> (Vec<String>, Vec<HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows: Vec<HashMap<String, String>> = lines
         .map(|line| {
             header
@@ -163,18 +168,24 @@ fn msqrob_recovers_injected_direction_and_columns() {
     }
     // Direction: UPREG has mean_b > mean_a, so A-B effect should be
     // strongly negative. DOWNREG is the opposite. STABLE is near zero.
-    let by_gene: HashMap<&str, &HashMap<String, String>> = ab
-        .iter()
-        .map(|r| (r["gene_symbol"].as_str(), *r))
-        .collect();
+    let by_gene: HashMap<&str, &HashMap<String, String>> =
+        ab.iter().map(|r| (r["gene_symbol"].as_str(), *r)).collect();
     let eff = |gene: &str| -> f64 {
         by_gene[gene]["mean_diff"]
             .parse()
             .unwrap_or_else(|_| panic!("parsing mean_diff for {gene}"))
     };
     assert!(eff("UPREG") < -1.0, "UPREG effect was {}", eff("UPREG"));
-    assert!(eff("DOWNREG") > 1.0, "DOWNREG effect was {}", eff("DOWNREG"));
-    assert!(eff("STABLE").abs() < 0.3, "STABLE effect was {}", eff("STABLE"));
+    assert!(
+        eff("DOWNREG") > 1.0,
+        "DOWNREG effect was {}",
+        eff("DOWNREG")
+    );
+    assert!(
+        eff("STABLE").abs() < 0.3,
+        "STABLE effect was {}",
+        eff("STABLE")
+    );
 
     // Sidecar shape.
     let sidecar = output.join("de_results.tsv.run.json");

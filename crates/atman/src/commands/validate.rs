@@ -8,8 +8,8 @@ use std::time::SystemTime;
 
 use super::parse_comparisons;
 use crate::io::{
-    atomic_write, hash_canonical_inputs, read_measurements_long, read_samples,
-    sidecar_path_for, write_run_sidecar,
+    atomic_write, hash_canonical_inputs, read_measurements_long, read_samples, sidecar_path_for,
+    write_run_sidecar,
 };
 
 #[derive(ClapArgs, Debug)]
@@ -120,7 +120,7 @@ pub fn run(args: Args) -> Result<()> {
         let inputs_sha256 = hash_canonical_inputs(
             &args.input_dir,
             &[
-                "qc_measurements.tsv",
+                "measurements.tsv",
                 "measurements.tsv",
                 "samples.tsv",
                 "proteins.tsv",
@@ -142,7 +142,7 @@ pub fn run(args: Args) -> Result<()> {
             started_at,
             finished_at,
             None,
-)?;
+        )?;
         eprintln!("validate: sidecar={}", sidecar.display());
     }
 
@@ -156,8 +156,8 @@ pub fn run(args: Args) -> Result<()> {
 fn validate_dir(args: &Args, findings: &mut Findings) -> Result<()> {
     let samples_path = args.input_dir.join("samples.tsv");
     let proteins_path = args.input_dir.join("proteins.tsv");
-    let measurements_path = if args.input_dir.join("qc_measurements.tsv").exists() {
-        args.input_dir.join("qc_measurements.tsv")
+    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
+        args.input_dir.join("measurements.tsv")
     } else {
         args.input_dir.join("measurements.tsv")
     };

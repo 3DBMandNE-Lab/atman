@@ -8,7 +8,8 @@ fn run_atman(args: &[&str]) -> Output {
 fn write_minimal_canonical(dir: &std::path::Path) {
     std::fs::create_dir_all(dir).unwrap();
     // Two groups, five subjects each, two features.
-    let samples = "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n".to_string()
+    let samples = "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n"
+        .to_string()
         + &(1..=10)
             .map(|i| {
                 let cond = if i <= 5 { "A" } else { "B" };
@@ -41,7 +42,7 @@ fn write_minimal_canonical(dir: &std::path::Path) {
         }
     }
     std::fs::write(dir.join("measurements.tsv"), &meas).unwrap();
-    std::fs::write(dir.join("qc_measurements.tsv"), &meas).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &meas).unwrap();
 }
 
 #[test]
@@ -128,7 +129,7 @@ fn copy_fixture_canonical(dst: &std::path::Path) {
             _ => unreachable!(),
         };
         std::fs::write(dst.join(dst_name), &s).unwrap();
-        std::fs::write(dst.join("qc_measurements.tsv"), &s).unwrap(); // mirror
+        std::fs::write(dst.join("measurements.tsv"), &s).unwrap(); // mirror
     }
 }
 
@@ -206,8 +207,10 @@ fn matches_r_limma_notrend_within_tolerance() {
             "assay={assay} p_value diverges"
         );
         assert!(
-            abs_diff(rust.get("s2_posterior").unwrap(), r.get("s2_posterior").unwrap())
-                < 1e-4,
+            abs_diff(
+                rust.get("s2_posterior").unwrap(),
+                r.get("s2_posterior").unwrap()
+            ) < 1e-4,
             "assay={assay} s2_posterior diverges"
         );
         assert!(
@@ -352,15 +355,12 @@ fn multi_group_f_test_populates_f_columns() {
     let n_per = 4;
     let total = 3 * n_per;
     let groups = ["A", "B", "C"];
-    let mut samples = String::from(
-        "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n",
-    );
+    let mut samples =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
     for (gi, group) in groups.iter().enumerate() {
         for si in 0..n_per {
             let i = gi * n_per + si + 1;
-            samples.push_str(&format!(
-                "S{i:02}\tS{i:02}\t{group}\t0\tplasma\t{i}\n",
-            ));
+            samples.push_str(&format!("S{i:02}\tS{i:02}\t{group}\t0\tplasma\t{i}\n",));
         }
     }
     std::fs::write(input.join("samples.tsv"), samples).unwrap();
@@ -389,7 +389,7 @@ fn multi_group_f_test_populates_f_columns() {
         }
     }
     std::fs::write(input.join("measurements.tsv"), &meas).unwrap();
-    std::fs::write(input.join("qc_measurements.tsv"), &meas).unwrap();
+    std::fs::write(input.join("measurements.tsv"), &meas).unwrap();
 
     let output = tmp.path().join("de_out");
     std::fs::create_dir_all(&output).unwrap();
@@ -410,16 +410,17 @@ fn multi_group_f_test_populates_f_columns() {
         "--robust",
         "false",
     ]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // Header presence: f_statistic, f_p_value, f_bh_q must exist.
     let text = std::fs::read_to_string(output.join("de_results.tsv")).unwrap();
     let header: Vec<&str> = text.lines().next().unwrap().split('\t').collect();
     for col in ["f_statistic", "f_p_value", "f_bh_q"] {
-        assert!(
-            header.contains(&col),
-            "header missing {col}: {header:?}"
-        );
+        assert!(header.contains(&col), "header missing {col}: {header:?}");
     }
 
     // Rows produced across both comparisons.

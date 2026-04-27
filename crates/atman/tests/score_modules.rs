@@ -44,7 +44,7 @@ spectronaut_report\tP00002\tP00002\tGENE2\tspectronaut\t\n",
             idx + 1
         ));
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), measurements).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), measurements).unwrap();
     let modules = dir.join("modules.tsv");
     std::fs::write(
         &modules,
@@ -88,7 +88,7 @@ fn score_modules_writes_coverage_and_canonical_de_inputs() {
     );
     let scores = std::fs::read_to_string(&out).unwrap();
     assert!(scores.contains("C1\tC1\tControl\theat\tmean\t11\t3\t2\t0.666"));
-    assert!(canonical.join("qc_measurements.tsv").exists());
+    assert!(canonical.join("measurements.tsv").exists());
 
     let de = run_atman(&[
         "de",

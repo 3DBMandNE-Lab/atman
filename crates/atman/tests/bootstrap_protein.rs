@@ -62,7 +62,7 @@ spectronaut_report\tP00001\tP00001\tGENE1\tspectronaut\t\n",
             "spectronaut_report\t{sample}\tP00001\tGENE1\tspectronaut\t{value}\t{value}\t{value}\tlog2_intensity\tPASS\tPASS\t\t0\t0\t\t\t{order}\n"
         ));
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), measurements).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), measurements).unwrap();
 }
 
 #[test]

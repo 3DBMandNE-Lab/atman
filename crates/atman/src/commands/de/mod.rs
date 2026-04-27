@@ -226,7 +226,7 @@ pub fn run(args: Args) -> Result<()> {
     let mut args = args;
     apply_per_subject_proxy(&mut args)?;
     preflight::check_below_lod_gate(
-        &args.input_dir.join("qc_measurements.tsv"),
+        &args.input_dir.join("measurements.tsv"),
         args.max_below_lod_fraction,
         args.allow_censored,
     )?;
@@ -473,7 +473,7 @@ pub fn run(args: Args) -> Result<()> {
     // non-control conditions are present.
 
     // Read inputs.
-    let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
+    let measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
     let comparisons = resolve_comparisons(
@@ -1021,7 +1021,7 @@ pub fn run(args: Args) -> Result<()> {
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
-            "qc_measurements.tsv",
+            "measurements.tsv",
             "measurements.tsv",
             "samples.tsv",
             "proteins.tsv",

@@ -174,8 +174,10 @@ fn run_influence(args: InfluenceArgs) -> Result<()> {
     }
 
     // Build feature universe + per-sample per-feature values.
-    let FeatureMatrix { features, per_sample } =
-        collect_feature_matrix(&records, &args.feature_col)?;
+    let FeatureMatrix {
+        features,
+        per_sample,
+    } = collect_feature_matrix(&records, &args.feature_col)?;
     if features.is_empty() {
         bail!("no features extracted from measurements");
     }
@@ -315,7 +317,7 @@ fn run_influence(args: InfluenceArgs) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("network influence: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -378,14 +380,13 @@ fn read_stratum(path: &Path, column: &str) -> Result<BTreeMap<String, String>> {
         .iter()
         .position(|h| h == "sample_id")
         .ok_or_else(|| anyhow::anyhow!("samples.tsv {:?} missing sample_id", path))?;
-    let stratum_col = headers
-        .iter()
-        .position(|h| h == column)
-        .ok_or_else(|| anyhow::anyhow!(
+    let stratum_col = headers.iter().position(|h| h == column).ok_or_else(|| {
+        anyhow::anyhow!(
             "samples.tsv {:?} missing stratification column {:?}",
             path,
             column
-        ))?;
+        )
+    })?;
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     for row in reader.records() {
         let row = row.with_context(|| format!("reading {:?}", path))?;
@@ -399,10 +400,7 @@ fn read_stratum(path: &Path, column: &str) -> Result<BTreeMap<String, String>> {
     Ok(out)
 }
 
-fn write_influence_tsv(
-    path: &Path,
-    rows: &[(String, InfluenceRow, usize)],
-) -> Result<()> {
+fn write_influence_tsv(path: &Path, rows: &[(String, InfluenceRow, usize)]) -> Result<()> {
     let mut buf = String::from(
         "feature_id\tstratum\teigenvector_centrality\tbetweenness_centrality\t\
          influence_score\tdegree\tn_subjects_used\n",

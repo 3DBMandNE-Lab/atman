@@ -18,7 +18,12 @@ fn run_atman(args: &[&str]) -> Output {
 fn parse_tsv(path: &Path) -> (Vec<String>, Vec<HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -62,16 +67,14 @@ fn write_synthetic(dir: &Path) {
             ("A003", "ST", 0.0),
         ] {
             order += 1;
-            let v = 10.0
-                + if is_b { effect } else { 0.0 }
-                + ((i * 7 + order) as f64).sin() * 0.05;
+            let v = 10.0 + if is_b { effect } else { 0.0 } + ((i * 7 + order) as f64).sin() * 0.05;
             qc.push_str(&format!(
                 "olink_explore_ngs\tS{i:02}\t{assay}\t{gene}\tP1\t{v:.6}\t\
                  {v:.6}\t{v:.6}\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n"
             ));
         }
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
@@ -128,8 +131,10 @@ fn ensemble_validates_known_effects_and_insufficients_null() {
         assert!(header.iter().any(|h| h == col), "missing column {col}");
     }
 
-    let by_gene: HashMap<&str, &HashMap<String, String>> =
-        rows.iter().map(|r| (r["gene_symbol"].as_str(), r)).collect();
+    let by_gene: HashMap<&str, &HashMap<String, String>> = rows
+        .iter()
+        .map(|r| (r["gene_symbol"].as_str(), r))
+        .collect();
 
     assert_eq!(
         by_gene["UP"]["grade"], "VALIDATED",
@@ -142,14 +147,26 @@ fn ensemble_validates_known_effects_and_insufficients_null() {
     // (positive injected effect), so atman reports negative majority_sign.
     let up_sign: f64 = by_gene["UP"]["majority_sign"].parse().unwrap();
     let dn_sign: f64 = by_gene["DN"]["majority_sign"].parse().unwrap();
-    assert!(up_sign < 0.0, "UP majority_sign should be negative (B > A), got {up_sign}");
-    assert!(dn_sign > 0.0, "DN majority_sign should be positive (A > B), got {dn_sign}");
+    assert!(
+        up_sign < 0.0,
+        "UP majority_sign should be negative (B > A), got {up_sign}"
+    );
+    assert!(
+        dn_sign > 0.0,
+        "DN majority_sign should be positive (A > B), got {dn_sign}"
+    );
 
     // methods_applied covers both requested methods on every row.
     for gene in ["UP", "DN", "ST"] {
         let methods = &by_gene[gene]["methods_applied"];
-        assert!(methods.contains("welch-t"), "missing welch-t for {gene}: {methods}");
-        assert!(methods.contains("limma"), "missing limma for {gene}: {methods}");
+        assert!(
+            methods.contains("welch-t"),
+            "missing welch-t for {gene}: {methods}"
+        );
+        assert!(
+            methods.contains("limma"),
+            "missing limma for {gene}: {methods}"
+        );
     }
 
     // Per-method rows in de_results.tsv: expect 3 proteins × 2 methods = 6.

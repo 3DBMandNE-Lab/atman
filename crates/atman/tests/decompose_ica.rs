@@ -19,7 +19,9 @@ fn build_synthetic_canonical(tmp: &std::path::Path) -> std::path::PathBuf {
     // Deterministic LCG for synthetic data (independent from atman's Xoshiro).
     let mut state: u64 = 1234567;
     let mut next = || {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((state >> 33) as f64) / (u32::MAX as f64)
     };
     for _ in 0..n_samples {
@@ -55,10 +57,11 @@ fn build_synthetic_canonical(tmp: &std::path::Path) -> std::path::PathBuf {
         }
     }
     std::fs::write(input_dir.join("measurements.tsv"), &measurements).unwrap();
-    std::fs::write(input_dir.join("qc_measurements.tsv"), &measurements).unwrap();
+    std::fs::write(input_dir.join("measurements.tsv"), &measurements).unwrap();
 
     // samples.tsv with subject_id == sample_id.
-    let mut samples = String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
+    let mut samples =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
     for i in 0..n_samples {
         samples.push_str(&format!("S{i:02}\tS{i:02}\tcase\t0\tcsf\t{}\n", i + 1));
     }
@@ -67,9 +70,7 @@ fn build_synthetic_canonical(tmp: &std::path::Path) -> std::path::PathBuf {
     // proteins.tsv (minimal).
     let mut proteins = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
     for j in 0..n_assays {
-        proteins.push_str(&format!(
-            "olink_explore_ngs\tA{j:03}\t\tGENE{j:03}\tP1\t\n",
-        ));
+        proteins.push_str(&format!("olink_explore_ngs\tA{j:03}\t\tGENE{j:03}\tP1\t\n",));
     }
     std::fs::write(input_dir.join("proteins.tsv"), proteins).unwrap();
 
@@ -123,9 +124,7 @@ fn decompose_ica_emits_loadings_activations_and_stability() {
     assert!(loading_rows.iter().any(|r| r.starts_with("program_02\t")));
 
     let activations_text = std::fs::read_to_string(&activations).unwrap();
-    assert!(
-        activations_text.starts_with("cohort\tsubject_id\tsample_id\tprogram\tactivation\n")
-    );
+    assert!(activations_text.starts_with("cohort\tsubject_id\tsample_id\tprogram\tactivation\n"));
     let activation_rows: Vec<&str> = activations_text.lines().skip(1).collect();
     // 2 programs * 30 samples = 60 rows.
     assert_eq!(activation_rows.len(), 60);
@@ -176,7 +175,10 @@ fn decompose_ica_emits_loadings_activations_and_stability() {
     }
     assert_eq!(sidecar["schema_version"], 1);
     assert!(sidecar["run_uuid"].as_str().unwrap().len() == 36);
-    assert!(sidecar["reinvoke"].as_str().unwrap().starts_with("atman decompose ica"));
+    assert!(sidecar["reinvoke"]
+        .as_str()
+        .unwrap()
+        .starts_with("atman decompose ica"));
     assert!(sidecar["build_env"]["rustc_version"].is_string());
     assert!(sidecar["build_env"]["cargo_lock_sha256"].is_string());
     assert!(sidecar["build_env"]["profile"].is_string());

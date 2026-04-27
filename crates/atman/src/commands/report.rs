@@ -53,8 +53,8 @@ fn run_qc(args: QcArgs) -> Result<()> {
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
-    let measurements_path = if args.input_dir.join("qc_measurements.tsv").exists() {
-        args.input_dir.join("qc_measurements.tsv")
+    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
+        args.input_dir.join("measurements.tsv")
     } else {
         args.input_dir.join("measurements.tsv")
     };
@@ -82,7 +82,7 @@ fn run_qc(args: QcArgs) -> Result<()> {
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
-            "qc_measurements.tsv",
+            "measurements.tsv",
             "measurements.tsv",
             "samples.tsv",
             "proteins.tsv",
@@ -108,7 +108,7 @@ fn run_qc(args: QcArgs) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("report qc: sidecar={}", sidecar.display());
     Ok(())
 }

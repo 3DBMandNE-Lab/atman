@@ -75,7 +75,16 @@ P00002\tGENE2\tms\t8\t\n",
     assert!(measurements.contains(
         "spectronaut_report\tS2\tP00002\tGENE2\tms\t\t\t\tlog2_intensity\tPASS\tPASS\t\t0\t1"
     ));
-    assert!(out.join("qc_measurements.tsv").exists());
+    // qc_measurements.tsv is no longer written; the dropped_by_qc flag
+    // inside measurements.tsv is the authoritative QC boundary.
+    assert!(
+        out.join("measurements.tsv").exists(),
+        "measurements.tsv must exist after ingest"
+    );
+    assert!(
+        !out.join("qc_measurements.tsv").exists(),
+        "qc_measurements.tsv should no longer be written by ingest"
+    );
 }
 
 #[test]
@@ -152,7 +161,9 @@ S2\t16\t4\n",
     );
 }
 
-fn parse_measurement_abundance_by_sample(contents: &str) -> std::collections::HashMap<String, Vec<f64>> {
+fn parse_measurement_abundance_by_sample(
+    contents: &str,
+) -> std::collections::HashMap<String, Vec<f64>> {
     let mut lines = contents.lines();
     let header = lines.next().expect("header");
     let cols: Vec<&str> = header.split('\t').collect();
@@ -165,7 +176,12 @@ fn parse_measurement_abundance_by_sample(contents: &str) -> std::collections::Ha
         if fields.get(dropped).copied() == Some("1") {
             continue;
         }
-        let Some(v) = fields.get(abund).and_then(|s| (!s.is_empty()).then(|| s.parse::<f64>().ok()).flatten()) else { continue; };
+        let Some(v) = fields
+            .get(abund)
+            .and_then(|s| (!s.is_empty()).then(|| s.parse::<f64>().ok()).flatten())
+        else {
+            continue;
+        };
         out.entry(fields[sid].to_string()).or_default().push(v);
     }
     out
@@ -174,7 +190,11 @@ fn parse_measurement_abundance_by_sample(contents: &str) -> std::collections::Ha
 fn sample_median(values: &mut [f64]) -> f64 {
     values.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let n = values.len();
-    if n % 2 == 1 { values[n / 2] } else { (values[n / 2 - 1] + values[n / 2]) / 2.0 }
+    if n % 2 == 1 {
+        values[n / 2]
+    } else {
+        (values[n / 2 - 1] + values[n / 2]) / 2.0
+    }
 }
 
 #[test]
@@ -201,14 +221,22 @@ A4\t20\t16\t18\n",
 
     let output = run_atman(&[
         "ingest-matrix",
-        "--matrix", input.join("matrix.tsv").to_str().unwrap(),
-        "--samples", input.join("samples.tsv").to_str().unwrap(),
-        "--output-dir", out.to_str().unwrap(),
-        "--platform", "diann_report",
-        "--abundance-unit", "log2_diann_pg_quantity",
-        "--condition-col", "condition",
-        "--assay-id-col", "assay",
-        "--normalize", "median",
+        "--matrix",
+        input.join("matrix.tsv").to_str().unwrap(),
+        "--samples",
+        input.join("samples.tsv").to_str().unwrap(),
+        "--output-dir",
+        out.to_str().unwrap(),
+        "--platform",
+        "diann_report",
+        "--abundance-unit",
+        "log2_diann_pg_quantity",
+        "--condition-col",
+        "condition",
+        "--assay-id-col",
+        "assay",
+        "--normalize",
+        "median",
     ]);
     assert!(
         output.status.success(),
@@ -249,14 +277,22 @@ A4\t4\t4\n",
 
     let output = run_atman(&[
         "ingest-matrix",
-        "--matrix", input.join("matrix.tsv").to_str().unwrap(),
-        "--samples", input.join("samples.tsv").to_str().unwrap(),
-        "--output-dir", out.to_str().unwrap(),
-        "--platform", "diann_report",
-        "--abundance-unit", "log2_diann_pg_quantity",
-        "--condition-col", "condition",
-        "--assay-id-col", "assay",
-        "--normalize", "quantile",
+        "--matrix",
+        input.join("matrix.tsv").to_str().unwrap(),
+        "--samples",
+        input.join("samples.tsv").to_str().unwrap(),
+        "--output-dir",
+        out.to_str().unwrap(),
+        "--platform",
+        "diann_report",
+        "--abundance-unit",
+        "log2_diann_pg_quantity",
+        "--condition-col",
+        "condition",
+        "--assay-id-col",
+        "assay",
+        "--normalize",
+        "quantile",
     ]);
     assert!(
         output.status.success(),
@@ -272,7 +308,10 @@ A4\t4\t4\n",
     s2.sort_by(|a, b| a.partial_cmp(b).unwrap());
     assert_eq!(s1.len(), s2.len());
     for (a, b) in s1.iter().zip(s2.iter()) {
-        assert!((a - b).abs() < 1e-9, "sorted distributions differ: {a} vs {b}");
+        assert!(
+            (a - b).abs() < 1e-9,
+            "sorted distributions differ: {a} vs {b}"
+        );
     }
 }
 
@@ -298,13 +337,20 @@ A3\t18\t14\n",
 
     let output = run_atman(&[
         "ingest-matrix",
-        "--matrix", input.join("matrix.tsv").to_str().unwrap(),
-        "--samples", input.join("samples.tsv").to_str().unwrap(),
-        "--output-dir", out.to_str().unwrap(),
-        "--platform", "diann_report",
-        "--abundance-unit", "log2_diann_pg_quantity",
-        "--condition-col", "condition",
-        "--assay-id-col", "assay",
+        "--matrix",
+        input.join("matrix.tsv").to_str().unwrap(),
+        "--samples",
+        input.join("samples.tsv").to_str().unwrap(),
+        "--output-dir",
+        out.to_str().unwrap(),
+        "--platform",
+        "diann_report",
+        "--abundance-unit",
+        "log2_diann_pg_quantity",
+        "--condition-col",
+        "condition",
+        "--assay-id-col",
+        "assay",
     ]);
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);

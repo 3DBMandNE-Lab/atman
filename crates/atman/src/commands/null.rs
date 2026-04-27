@@ -119,8 +119,8 @@ pub fn run(args: Args) -> Result<()> {
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
     validate_design(&samples, &comparisons, &args.test, args.min_pairs)?;
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
-    let measurements_path = if args.input_dir.join("qc_measurements.tsv").exists() {
-        args.input_dir.join("qc_measurements.tsv")
+    let measurements_path = if args.input_dir.join("measurements.tsv").exists() {
+        args.input_dir.join("measurements.tsv")
     } else {
         args.input_dir.join("measurements.tsv")
     };
@@ -237,7 +237,7 @@ pub fn run(args: Args) -> Result<()> {
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
-            "qc_measurements.tsv",
+            "measurements.tsv",
             "measurements.tsv",
             "samples.tsv",
             "proteins.tsv",
@@ -262,7 +262,7 @@ pub fn run(args: Args) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("null: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -636,7 +636,6 @@ fn push_opt(buf: &mut String, value: Option<f64>) {
         buf.push_str(&value.to_string());
     }
 }
-
 
 fn quantile_usize_sorted(values: &[usize], q: f64) -> usize {
     let idx = ((values.len() - 1) as f64 * q).round() as usize;

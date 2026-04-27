@@ -22,12 +22,15 @@ fn run_atman(args: &[&str]) -> Output {
     Command::new(bin).args(args).output().expect("run atman")
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -53,18 +56,14 @@ fn write_two_block_cohort(dir: &Path, seed: u64) {
     let block = 20usize;
     let noise = 40usize;
     let p = 2 * block + noise;
-    let mut samples = String::from(
-        "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n",
-    );
+    let mut samples =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
     for i in 1..=n {
-        samples.push_str(&format!(
-            "S{i:03}\tS{i:03}\tN/A\t0\tplasma\t{i}\n"
-        ));
+        samples.push_str(&format!("S{i:03}\tS{i:03}\tN/A\t0\tplasma\t{i}\n"));
     }
     std::fs::write(dir.join("samples.tsv"), samples).unwrap();
 
-    let mut proteins =
-        String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    let mut proteins = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
     for j in 1..=p {
         proteins.push_str(&format!(
             "olink_explore_ngs\tA{j:03}\tQ{j:05}\tG{j:03}\tP1\t\n"
@@ -105,7 +104,7 @@ fn write_two_block_cohort(dir: &Path, seed: u64) {
             ));
         }
     }
-    std::fs::write(dir.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), &qc).unwrap();
 }
 
@@ -117,16 +116,26 @@ fn modules_discover_recovers_two_planted_blocks() {
     write_two_block_cohort(&input, 20260420);
 
     let status = run_atman(&[
-        "modules", "discover",
-        "--input-dir", input.to_str().unwrap(),
-        "--method", "wgcna-soft",
-        "--soft-power", "auto",
-        "--r2-target", "0.8",
-        "--max-beta", "20",
-        "--n-bins", "10",
-        "--cut-height", "0.5",
-        "--min-module-size", "10",
-        "--output-dir", output.to_str().unwrap(),
+        "modules",
+        "discover",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--method",
+        "wgcna-soft",
+        "--soft-power",
+        "auto",
+        "--r2-target",
+        "0.8",
+        "--max-beta",
+        "20",
+        "--n-bins",
+        "10",
+        "--cut-height",
+        "0.5",
+        "--min-module-size",
+        "10",
+        "--output-dir",
+        output.to_str().unwrap(),
     ]);
     assert!(
         status.status.success(),
@@ -136,7 +145,10 @@ fn modules_discover_recovers_two_planted_blocks() {
 
     let modules_path = output.join("modules_discovered.tsv");
     let (header, rows) = parse_tsv(&modules_path);
-    assert_eq!(header, vec!["module".to_string(), "gene_symbol".to_string()]);
+    assert_eq!(
+        header,
+        vec!["module".to_string(), "gene_symbol".to_string()]
+    );
     assert!(!rows.is_empty());
 
     // Count members per module (ignoring grey).
@@ -206,7 +218,10 @@ fn modules_discover_recovers_two_planted_blocks() {
         "hub_feature",
         "eigenprotein_pc1_variance_explained",
     ] {
-        assert!(report_header.iter().any(|h| h == col), "missing {col} column");
+        assert!(
+            report_header.iter().any(|h| h == col),
+            "missing {col} column"
+        );
     }
     assert!(!report_rows.is_empty());
 
@@ -220,9 +235,12 @@ fn modules_discover_recovers_two_planted_blocks() {
     // Output is consumable by `score modules` / module-de: the set of
     // unique modules in the output file is small and each gene_symbol
     // appears exactly once.
-    let genes_in_output: HashSet<String> =
-        rows.iter().map(|r| r["gene_symbol"].clone()).collect();
-    assert_eq!(genes_in_output.len(), rows.len(), "each gene must appear once");
+    let genes_in_output: HashSet<String> = rows.iter().map(|r| r["gene_symbol"].clone()).collect();
+    assert_eq!(
+        genes_in_output.len(),
+        rows.len(),
+        "each gene must appear once"
+    );
 }
 
 #[test]
@@ -263,15 +281,20 @@ fn modules_discover_refuses_when_features_below_min_module_size() {
             ));
         }
     }
-    std::fs::write(input.join("qc_measurements.tsv"), &qc).unwrap();
+    std::fs::write(input.join("measurements.tsv"), &qc).unwrap();
     std::fs::write(input.join("measurements.tsv"), &qc).unwrap();
 
     let out = run_atman(&[
-        "modules", "discover",
-        "--input-dir", input.to_str().unwrap(),
-        "--method", "wgcna-soft",
-        "--min-module-size", "5",
-        "--output-dir", tmp.path().join("out").to_str().unwrap(),
+        "modules",
+        "discover",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--method",
+        "wgcna-soft",
+        "--min-module-size",
+        "5",
+        "--output-dir",
+        tmp.path().join("out").to_str().unwrap(),
     ]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);

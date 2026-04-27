@@ -35,7 +35,7 @@ pub fn run(args: Args) -> Result<()> {
         .map(|(a, b)| Comparison { a, b })
         .collect();
 
-    let measurements = read_measurements_long(&args.input_dir.join("qc_measurements.tsv"))?;
+    let measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
     let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
 
     use std::collections::HashMap;

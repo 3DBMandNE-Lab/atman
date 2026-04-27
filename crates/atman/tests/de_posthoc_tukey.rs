@@ -33,12 +33,15 @@ fn run_atman(args: &[&str]) -> Output {
     Command::new(bin).args(args).output().expect("run atman")
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -58,7 +61,7 @@ fn copy_fixture_to_canonical(tmp: &Path) -> std::path::PathBuf {
     for (src, dst) in [
         ("posthoc_sidak_samples.tsv", "samples.tsv"),
         ("posthoc_sidak_proteins.tsv", "proteins.tsv"),
-        ("posthoc_sidak_qc_measurements.tsv", "qc_measurements.tsv"),
+        ("posthoc_sidak_qc_measurements.tsv", "measurements.tsv"),
         ("posthoc_sidak_measurements.tsv", "measurements.tsv"),
     ] {
         std::fs::copy(fixtures.join(src), input.join(dst)).unwrap();
@@ -74,13 +77,20 @@ fn posthoc_tukey_adjustment_is_self_consistent_with_core_ptukey() {
 
     let out = run_atman(&[
         "de",
-        "--input-dir", input.to_str().unwrap(),
-        "--output-dir", output.to_str().unwrap(),
-        "--test", "ols",
-        "--design", "~ stage + age",
-        "--post-hoc", "tukey",
-        "--post-hoc-factor", "stage",
-        "--min-pairs", "4",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--test",
+        "ols",
+        "--design",
+        "~ stage + age",
+        "--post-hoc",
+        "tukey",
+        "--post-hoc-factor",
+        "stage",
+        "--min-pairs",
+        "4",
     ]);
     assert!(
         out.status.success(),
@@ -126,20 +136,31 @@ fn posthoc_tukey_magnitude_detects_planted_stage_effect() {
 
     let out = run_atman(&[
         "de",
-        "--input-dir", input.to_str().unwrap(),
-        "--output-dir", output.to_str().unwrap(),
-        "--test", "ols",
-        "--design", "~ stage + age",
-        "--post-hoc", "tukey",
-        "--post-hoc-factor", "stage",
-        "--min-pairs", "4",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--test",
+        "ols",
+        "--design",
+        "~ stage + age",
+        "--post-hoc",
+        "tukey",
+        "--post-hoc-factor",
+        "stage",
+        "--min-pairs",
+        "4",
     ]);
     assert!(out.status.success());
     let (_, rows) = parse_tsv(&output.join("de_results.tsv"));
 
     let responder_rows: Vec<&HashMap<String, String>> = rows
         .iter()
-        .filter(|r| r.get("gene_symbol").map(|g| g == "RESPONDER").unwrap_or(false))
+        .filter(|r| {
+            r.get("gene_symbol")
+                .map(|g| g == "RESPONDER")
+                .unwrap_or(false)
+        })
         .collect();
     let null_rows: Vec<&HashMap<String, String>> = rows
         .iter()
@@ -179,13 +200,20 @@ fn posthoc_tukey_matches_r_reference_if_available() {
     let output = tmp.path().join("tukey_parity");
     let out = run_atman(&[
         "de",
-        "--input-dir", input.to_str().unwrap(),
-        "--output-dir", output.to_str().unwrap(),
-        "--test", "ols",
-        "--design", "~ stage + age",
-        "--post-hoc", "tukey",
-        "--post-hoc-factor", "stage",
-        "--min-pairs", "4",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--test",
+        "ols",
+        "--design",
+        "~ stage + age",
+        "--post-hoc",
+        "tukey",
+        "--post-hoc-factor",
+        "stage",
+        "--min-pairs",
+        "4",
     ]);
     assert!(out.status.success());
     let (_, atman_rows) = parse_tsv(&output.join("de_results.tsv"));

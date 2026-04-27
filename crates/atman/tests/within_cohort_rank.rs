@@ -35,7 +35,7 @@ fn within_cohort_rank_writes_ranked_canonical_directory() {
         somascan\tS1\tA2\tG2\t\t5\t5\t5\traw\tPASS\tPASS\t\t0\t0\t\t\t5\n\
         somascan\tS2\tA2\tG2\t\t6\t6\t6\traw\tPASS\tPASS\t\t0\t1\t\t\t6\n";
     std::fs::write(input.join("measurements.tsv"), measurements).unwrap();
-    std::fs::write(input.join("qc_measurements.tsv"), measurements).unwrap();
+    std::fs::write(input.join("measurements.tsv"), measurements).unwrap();
 
     let output = run_atman(&[
         "within-cohort-rank",
@@ -57,5 +57,5 @@ fn within_cohort_rank_writes_ranked_canonical_directory() {
     assert!(ranked.contains("somascan\tS2\tA2\tG2\t\t6\t\t6\traw\tPASS\tPASS\t\t0\t1"));
     assert!(output_dir.join("samples.tsv").exists());
     assert!(output_dir.join("proteins.tsv").exists());
-    assert!(output_dir.join("qc_measurements.tsv").exists());
+    assert!(output_dir.join("measurements.tsv").exists());
 }

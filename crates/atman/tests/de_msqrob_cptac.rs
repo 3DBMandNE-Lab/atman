@@ -54,7 +54,12 @@ fn run_atman(args: &[&str]) -> Output {
 fn parse_tsv(path: &Path) -> (Vec<String>, Vec<HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows: Vec<HashMap<String, String>> = lines
         .map(|line| {
             header
@@ -166,7 +171,7 @@ fn write_cptac_canonical(dir: &Path) {
     let qc = "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
               abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
               detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n";
-    std::fs::write(dir.join("qc_measurements.tsv"), qc).unwrap();
+    std::fs::write(dir.join("measurements.tsv"), qc).unwrap();
     std::fs::write(dir.join("measurements.tsv"), qc).unwrap();
 
     // peptides.tsv — one row per (peptide_id, assay_id) pair.
@@ -183,9 +188,7 @@ fn write_cptac_canonical(dir: &Path) {
         }
         let assay_id = razor_to_assay_id(razor);
         let peptide_id = format!("P{idx:04}_{seq}");
-        peptides.push_str(&format!(
-            "{peptide_id}\t{assay_id}\t{seq}\t\t\t\n"
-        ));
+        peptides.push_str(&format!("{peptide_id}\t{assay_id}\t{seq}\t\t\t\n"));
         for (cond, cols) in [("A", &a_cols), ("B", &b_cols)] {
             for (i, col_idx) in cols.iter().enumerate() {
                 let sample_id = format!("{cond}{}", i + 1);
@@ -293,7 +296,11 @@ fn msqrob_recovers_ups1_spike_in_on_cptac_study_6() {
     let mut ups_neg_sign = 0usize;
     let mut ups_total = 0usize;
     for row in &ab {
-        if !row.get("skip_reason").map(|s| s.is_empty()).unwrap_or(false) {
+        if !row
+            .get("skip_reason")
+            .map(|s| s.is_empty())
+            .unwrap_or(false)
+        {
             continue;
         }
         let gene = row.get("gene_symbol").map(String::as_str).unwrap_or("");
@@ -336,7 +343,10 @@ fn msqrob_recovers_ups1_spike_in_on_cptac_study_6() {
         eprintln!("  max   {:>7.3}", sorted_yeast[n - 1]);
     }
 
-    assert!(ups_total >= 5, "need ≥5 UPS1 fits for a meaningful check, got {ups_total}");
+    assert!(
+        ups_total >= 5,
+        "need ≥5 UPS1 fits for a meaningful check, got {ups_total}"
+    );
     let sign_rate = ups_neg_sign as f64 / ups_total as f64;
     assert!(
         sign_rate >= 0.8,
@@ -372,13 +382,21 @@ fn msqrob_recovers_ups1_spike_in_on_cptac_study_6() {
         let (_, ref_rows) = parse_tsv(ref_path);
         let ref_by_id: HashMap<String, &HashMap<String, String>> = ref_rows
             .iter()
-            .filter(|r| r.get("logFC_B_minus_A").map(|s| s != "NA" && !s.is_empty()).unwrap_or(false))
+            .filter(|r| {
+                r.get("logFC_B_minus_A")
+                    .map(|s| s != "NA" && !s.is_empty())
+                    .unwrap_or(false)
+            })
             .map(|r| (r["assay_id"].clone(), r))
             .collect();
 
         let mut diffs: Vec<(String, f64, f64, f64)> = Vec::new(); // (id, atman, msqrob2, abs_diff)
         for row in &ab {
-            if row.get("skip_reason").map(|s| !s.is_empty()).unwrap_or(true) {
+            if row
+                .get("skip_reason")
+                .map(|s| !s.is_empty())
+                .unwrap_or(true)
+            {
                 continue;
             }
             let id = match row.get("assay_id") {
@@ -408,13 +426,14 @@ fn msqrob_recovers_ups1_spike_in_on_cptac_study_6() {
             diffs.len()
         );
 
-        eprintln!(
-            "\nPer-protein parity (atman mean_diff vs msqrob2 −logFC_B_minus_A):"
-        );
+        eprintln!("\nPer-protein parity (atman mean_diff vs msqrob2 −logFC_B_minus_A):");
         let mut sorted = diffs.clone();
         sorted.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap());
         for (id, a, r, d) in sorted.iter().take(10) {
-            eprintln!("  {:<40} atman={:+6.3}  msqrob2={:+6.3}  Δ={:5.3}", id, a, r, d);
+            eprintln!(
+                "  {:<40} atman={:+6.3}  msqrob2={:+6.3}  Δ={:5.3}",
+                id, a, r, d
+            );
         }
 
         // Sign agreement should be near-perfect on proteins with a
