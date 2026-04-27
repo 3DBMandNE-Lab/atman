@@ -21,12 +21,15 @@ fn run_atman(args: &[&str]) -> Output {
     Command::new(bin).args(args).output().expect("run atman")
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -50,34 +53,27 @@ fn decompose_null_runs_end_to_end_on_dube_cohort() {
     let canonical = tmp.path().join("canonical");
     let out = tmp.path().join("null_dube").join("archetype_null.tsv");
 
-    assert!(
-        run_atman(&[
-            "ingest",
-            "--platform",
-            "olink-explore-ngs",
-            "--parser",
-            "dube",
-            "--output-dir",
-            canonical.to_str().unwrap(),
-            raw1.to_str().unwrap(),
-            raw2.to_str().unwrap(),
-        ])
-        .status
-        .success()
-    );
-    assert!(
-        run_atman(&[
-            "qc",
-            "--input-dir",
-            canonical.to_str().unwrap(),
-            "--output-dir",
-            canonical.to_str().unwrap(),
-            "--rule",
-            "dube",
-        ])
-        .status
-        .success()
-    );
+    let stager = root.join("adapters/generic/olink_explore_to_atman.py");
+    let py_status = Command::new("python3")
+        .arg(&stager)
+        .arg("--output-dir")
+        .arg(&canonical)
+        .arg(&raw1)
+        .arg(&raw2)
+        .status()
+        .expect("run olink_explore_to_atman.py");
+    assert!(py_status.success(), "olink_explore_to_atman.py failed");
+    assert!(run_atman(&[
+        "qc",
+        "--input-dir",
+        canonical.to_str().unwrap(),
+        "--output-dir",
+        canonical.to_str().unwrap(),
+        "--rule",
+        "mask-warn-fail",
+    ])
+    .status
+    .success());
 
     let status = run_atman(&[
         "decompose",

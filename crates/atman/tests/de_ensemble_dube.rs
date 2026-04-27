@@ -56,17 +56,16 @@ fn ensemble_grades_dube_heat_shock_proteins_as_validated() {
     let canonical = tmp.path().join("canonical");
     let out = tmp.path().join("ensemble");
 
-    run_atman(&[
-        "ingest",
-        "--platform",
-        "olink-explore-ngs",
-        "--parser",
-        "dube",
-        "--output-dir",
-        canonical.to_str().unwrap(),
-        raw1.to_str().unwrap(),
-        raw2.to_str().unwrap(),
-    ]);
+    let stager = root.join("adapters/generic/olink_explore_to_atman.py");
+    let py_status = Command::new("python3")
+        .arg(&stager)
+        .arg("--output-dir")
+        .arg(&canonical)
+        .arg(&raw1)
+        .arg(&raw2)
+        .status()
+        .expect("run olink_explore_to_atman.py");
+    assert!(py_status.success(), "olink_explore_to_atman.py failed");
 
     run_atman(&[
         "qc",
@@ -75,7 +74,7 @@ fn ensemble_grades_dube_heat_shock_proteins_as_validated() {
         "--output-dir",
         canonical.to_str().unwrap(),
         "--rule",
-        "dube",
+        "mask-warn-fail",
     ]);
 
     run_atman(&[

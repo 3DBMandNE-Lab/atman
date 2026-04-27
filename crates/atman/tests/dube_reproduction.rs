@@ -55,18 +55,19 @@ fn dube_reproduction_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
     let tmp_path = tmp.path();
 
-    // Stage 1: ingest
-    run_atman(&[
-        "ingest",
-        "--platform",
-        "olink-explore-ngs",
-        "--parser",
-        "dube",
-        "--output-dir",
-        tmp_path.to_str().unwrap(),
-        raw1.to_str().unwrap(),
-        raw2.to_str().unwrap(),
-    ]);
+    // Stage 1: ingest via the Python adapter. Atman's Rust binary has no
+    // built-in proteomics ingest; upstream formats land on the canonical
+    // schema via adapters in `adapters/`.
+    let stager = root.join("adapters/generic/olink_explore_to_atman.py");
+    let py_status = Command::new("python3")
+        .arg(stager)
+        .arg("--output-dir")
+        .arg(tmp_path)
+        .arg(&raw1)
+        .arg(&raw2)
+        .status()
+        .expect("run olink_explore_to_atman.py");
+    assert!(py_status.success(), "olink_explore_to_atman.py failed");
 
     // Stage 2: qc
     run_atman(&[
@@ -76,7 +77,7 @@ fn dube_reproduction_end_to_end() {
         "--output-dir",
         tmp_path.to_str().unwrap(),
         "--rule",
-        "dube",
+        "mask-warn-fail",
     ]);
 
     // Stage 2 sanity: qc emits qc_report.tsv with the canonical header,

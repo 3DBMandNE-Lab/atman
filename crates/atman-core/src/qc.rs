@@ -1,12 +1,12 @@
-//! QC rules. The Dube rule marks `dropped_by_qc=true`
+//! QC rules. The `mask-warn-fail` rule marks `dropped_by_qc=true`
 //! when either `qc_sample` or `qc_assay` is not `Pass`. `abundance` and
 //! `abundance_raw` are never mutated in memory; downstream code uses
 //! `MeasurementRecord::effective_abundance()` which honors the flag.
 
 use crate::types::MeasurementRecord;
 
-/// Apply the Dube filter rule to a single record in-place. Idempotent.
-pub fn apply_dube_rule(record: &mut MeasurementRecord) {
+/// Apply the `mask-warn-fail` rule to a single record in-place. Idempotent.
+pub fn apply_mask_warn_fail(record: &mut MeasurementRecord) {
     let masked = !record.qc_sample.is_pass() || !record.qc_assay.is_pass();
     if masked {
         record.dropped_by_qc = true;
@@ -14,9 +14,9 @@ pub fn apply_dube_rule(record: &mut MeasurementRecord) {
 }
 
 /// Convenience: apply rule to all records in a slice.
-pub fn apply_dube_rule_all(records: &mut [MeasurementRecord]) {
+pub fn apply_mask_warn_fail_all(records: &mut [MeasurementRecord]) {
     for r in records.iter_mut() {
-        apply_dube_rule(r);
+        apply_mask_warn_fail(r);
     }
 }
 
@@ -48,7 +48,7 @@ mod tests {
             ingest_order: 0,
             panel: None,
         };
-        apply_dube_rule(&mut r);
+        apply_mask_warn_fail(&mut r);
         assert!(r.dropped_by_qc);
     }
 }

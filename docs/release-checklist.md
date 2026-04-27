@@ -41,15 +41,19 @@ checks above and by the Docker build below.
    docker build -t atman:1.0.0 .
    ```
 
-5. Run the bundled Dube reproduction path in the image:
+5. Run the bundled Dube reproduction path. Atman has no native NPX
+   ingest; the Olink Explore adapter is a Python script in `adapters/`.
+   Run it on the host (or in a Python container), then run Atman on the
+   resulting canonical TSVs:
 
    ```bash
+   python3 adapters/generic/olink_explore_to_atman.py \
+       --output-dir out \
+       example_data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
+       example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
+
    docker run --rm -v "$(pwd)/out:/out" atman:1.0.0 \
-     ingest \
-       --platform olink-explore-ngs --parser dube \
-       --output-dir /out \
-       /data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
-       /data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
+     qc --input-dir /out --output-dir /out --rule mask-warn-fail
    ```
 
 6. Tag the release commit:

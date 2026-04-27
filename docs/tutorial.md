@@ -31,9 +31,12 @@ Expected: all test binaries report `ok` with zero failures.
 
 ## 1. Ingest
 
+Atman has no built-in proteomics ingest; upstream formats land on the
+canonical TSV schema via Python adapters in `adapters/`. The Olink Explore
+NGS NPX adapter:
+
 ```bash
-atman ingest \
-    --platform olink-explore-ngs --parser dube \
+python3 adapters/generic/olink_explore_to_atman.py \
     --output-dir out \
     example_data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
     example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
@@ -49,10 +52,10 @@ Sanity check:
 wc -l out/measurements.tsv   # ≈122,136 including header
 ```
 
-## 2. QC (Dube rule)
+## 2. QC
 
 ```bash
-atman qc --input-dir out --output-dir out --rule dube
+atman qc --input-dir out --output-dir out --rule mask-warn-fail
 ```
 
 Masks rows where `QC_Warning` or `Assay_Warning` is not `PASS`. Raw values are

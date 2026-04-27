@@ -1,4 +1,4 @@
-use atman_core::qc::apply_dube_rule;
+use atman_core::qc::apply_mask_warn_fail;
 use atman_core::{Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, Platform, QcFlag};
 
 fn rec(qc_s: QcFlag, qc_a: QcFlag) -> MeasurementRecord {
@@ -28,7 +28,7 @@ fn rec(qc_s: QcFlag, qc_a: QcFlag) -> MeasurementRecord {
 #[test]
 fn pass_pass_unchanged() {
     let mut r = rec(QcFlag::Pass, QcFlag::Pass);
-    apply_dube_rule(&mut r);
+    apply_mask_warn_fail(&mut r);
     assert!(!r.dropped_by_qc);
     assert!(matches!(r.abundance, Abundance::Log2Npx(v) if (v - 0.5).abs() < 1e-12));
 }
@@ -36,7 +36,7 @@ fn pass_pass_unchanged() {
 #[test]
 fn warn_sample_masks_abundance() {
     let mut r = rec(QcFlag::Warn("".into()), QcFlag::Pass);
-    apply_dube_rule(&mut r);
+    apply_mask_warn_fail(&mut r);
     assert!(r.dropped_by_qc);
     // abundance_raw must remain intact
     assert!(matches!(r.abundance_raw, Abundance::Log2Npx(v) if (v - 0.5).abs() < 1e-12));
@@ -45,22 +45,22 @@ fn warn_sample_masks_abundance() {
 #[test]
 fn warn_assay_masks_abundance() {
     let mut r = rec(QcFlag::Pass, QcFlag::Warn("".into()));
-    apply_dube_rule(&mut r);
+    apply_mask_warn_fail(&mut r);
     assert!(r.dropped_by_qc);
 }
 
 #[test]
 fn warn_both_masks() {
     let mut r = rec(QcFlag::Warn("".into()), QcFlag::Warn("".into()));
-    apply_dube_rule(&mut r);
+    apply_mask_warn_fail(&mut r);
     assert!(r.dropped_by_qc);
 }
 
 #[test]
 fn idempotent() {
     let mut r = rec(QcFlag::Warn("".into()), QcFlag::Pass);
-    apply_dube_rule(&mut r);
+    apply_mask_warn_fail(&mut r);
     let snapshot = r.clone();
-    apply_dube_rule(&mut r);
+    apply_mask_warn_fail(&mut r);
     assert_eq!(r, snapshot);
 }

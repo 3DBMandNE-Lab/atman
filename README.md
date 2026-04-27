@@ -30,12 +30,13 @@ validation details, reference scripts, and the msqrob2 estimator note.
 
 ## Supported Platforms
 
-All platforms land on the same canonical TSV schema via `ingest-matrix`
-or `ingest`:
+All platforms land on the same canonical TSV schema. Use `ingest-matrix`
+for stock wide-format exports, or run a Python adapter from `adapters/`
+for vendor-specific long formats:
 
 | Platform | Ingest path | Notes |
 |---|---|---|
-| Olink Explore NGS | `ingest --platform olink-explore-ngs` | Native long-format NPX parser |
+| Olink Explore NGS | `python3 adapters/generic/olink_explore_to_atman.py` | Long-format NPX CSV adapter |
 | DIA-NN | `ingest-matrix --platform diann_report` | Protein-group matrix |
 | MaxQuant/LFQ | `ingest-matrix --platform maxquant_lfq` | proteinGroups.txt or LFQ matrix |
 | Spectronaut | `ingest-matrix --platform spectronaut_report` | Protein-group quantity table |
@@ -81,14 +82,13 @@ corrections, ensemble consensus, bootstrap, null calibration, and more.
 For the bundled Dube et al. 2023 fixture:
 
 ```bash
-atman ingest \
-    --platform olink-explore-ngs --parser dube \
+python3 adapters/generic/olink_explore_to_atman.py \
     --output-dir out \
     example_data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
     example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
 
 atman validate --input-dir out --groups "PT1-PR1,PR2-PR1" --min-pairs 5
-atman qc --input-dir out --output-dir out --rule dube
+atman qc --input-dir out --output-dir out --rule mask-warn-fail
 
 atman de \
     --input-dir out --output-dir out \
@@ -120,7 +120,6 @@ docker run --rm atman:1.0.0 --help
 
 ```text
 atman ingest-matrix      wide protein matrix + metadata → canonical TSVs
-atman ingest             platform-native parser (Olink Explore NPX)
 atman validate           check canonical TSV schema, keys, and sample support
 atman qc                 apply QC masking rules
 atman report qc          summarize QC, missingness, and condition support

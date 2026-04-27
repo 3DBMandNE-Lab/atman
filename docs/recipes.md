@@ -262,7 +262,7 @@ stages:
     inputs: [example_data/dube_heat_2023/*.csv]
     outputs: [out/samples.tsv, out/proteins.tsv, out/measurements.tsv]
     cmd: >
-      atman ingest --platform olink-explore-ngs --parser dube
+      python3 adapters/generic/olink_explore_to_atman.py
       --output-dir out example_data/dube_heat_2023/*.csv
   - name: de
     inputs: [out/measurements.tsv, out/samples.tsv]

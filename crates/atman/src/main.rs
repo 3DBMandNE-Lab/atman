@@ -1,7 +1,10 @@
 //! atman: deterministic proteomics analysis engine.
 //!
-//! Supported platforms: Olink Explore NGS, SomaScan, MaxQuant/LFQ, DIA-NN,
-//! Spectronaut, and any wide abundance matrix via `ingest-matrix`.
+//! Atman operates on the canonical Atman TSV schema. Upstream proteomics
+//! formats (Olink Explore NPX, SomaScan, MaxQuant/LFQ, DIA-NN, Spectronaut,
+//! and any wide abundance matrix) land on the schema via adapters in
+//! `adapters/`, or via the built-in `ingest-matrix` for stock wide-format
+//! exports.
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -21,11 +24,9 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Parse raw NPX files into canonical long TSV + catalog + sample sheet.
-    Ingest(commands::ingest::Args),
     /// Convert a wide proteomics matrix plus metadata into canonical Atman TSVs.
     IngestMatrix(Box<commands::ingest_matrix::Args>),
-    /// Apply QC rule (Dube: mask rows where QC_Warning or Assay_Warning ≠ PASS).
+    /// Apply QC rule (`mask-warn-fail`: mark dropped_by_qc when qc_sample or qc_assay ≠ Pass).
     Qc(commands::qc::Args),
     /// Pivot QC'd long TSV into per-panel Dube-wide CSVs.
     Matrix(commands::matrix::Args),
@@ -82,7 +83,6 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Ingest(args) => commands::ingest::run(args),
         Command::IngestMatrix(args) => commands::ingest_matrix::run(*args),
         Command::Qc(args) => commands::qc::run(args),
         Command::Matrix(args) => commands::matrix::run(args),

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use atman_core::qc::apply_dube_rule_all;
+use atman_core::qc::apply_mask_warn_fail_all;
 use atman_core::MeasurementRecord;
 use clap::Args as ClapArgs;
 use std::collections::BTreeMap;
@@ -21,13 +21,15 @@ pub struct Args {
     #[arg(long)]
     output_dir: PathBuf,
 
-    /// QC rule name. Supports `dube`.
-    #[arg(long, default_value = "dube")]
+    /// QC rule name. Supports `mask-warn-fail` (default): mark
+    /// `dropped_by_qc=true` when either `qc_sample` or `qc_assay` is not
+    /// `Pass`. This is the Olink-recommended default.
+    #[arg(long, default_value = "mask-warn-fail")]
     rule: String,
 }
 
 pub fn run(args: Args) -> Result<()> {
-    if args.rule != "dube" {
+    if args.rule != "mask-warn-fail" {
         anyhow::bail!("rule {:?} not supported", args.rule);
     }
     std::fs::create_dir_all(&args.output_dir)
@@ -36,7 +38,7 @@ pub fn run(args: Args) -> Result<()> {
     let in_path = args.input_dir.join("measurements.tsv");
     let mut records = read_measurements_long(&in_path)?;
     let before = records.iter().filter(|r| !r.dropped_by_qc).count();
-    apply_dube_rule_all(&mut records);
+    apply_mask_warn_fail_all(&mut records);
     let after = records.iter().filter(|r| !r.dropped_by_qc).count();
     let masked = before - after;
 

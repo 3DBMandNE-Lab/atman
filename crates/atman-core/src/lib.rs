@@ -1,8 +1,9 @@
 //! atman-core: platform-agnostic primitives and algorithms for proteomics data.
 //!
-//! The current package implements an Olink Explore NGS long-CSV adapter and
-//! the transformations required to reproduce the Dube et al. Scientific Data
-//! 2023 published filtered NPX + log2 fold-change files.
+//! The crate operates on the canonical Atman TSV schema. Upstream proteomics
+//! ingest is handled by adapters (see `adapters/` at the repo root); this
+//! crate provides the in-memory record types, statistical primitives, and
+//! analysis algorithms applied after ingest.
 
 pub mod align;
 pub mod align_bootstrap;
@@ -13,51 +14,45 @@ pub mod de;
 pub mod decompose_unmix;
 pub mod deqms;
 pub mod ensemble;
-pub mod errors;
 pub mod fold_change;
 pub mod ica;
 pub mod ica_null;
-pub mod network;
-pub mod ingest;
 pub mod limma;
 pub mod matrix;
 pub mod modules_discover;
 pub mod msqrob;
 pub mod multivariate_t;
+pub mod network;
 pub mod qc;
-pub mod sample_id;
 pub mod stats;
 pub mod studentized_range;
 pub mod types;
 pub mod variance_decomposition;
 
-pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};
-pub use align_bootstrap::{align_bootstrap, resample_rows, BootstrapParams, BootstrapRow, CohortMatrix};
-pub use compositional::{apply_transform, Transform};
-pub use deqms::{deqms_shrink, tricube_moving_average, DeqmsShrinkage};
-pub use ica_null::{
-    archetype_null, generate_null_matrix, ArchetypeNullRow, NullMode, NullParams,
+pub use align_bootstrap::{
+    align_bootstrap, resample_rows, BootstrapParams, BootstrapRow, CohortMatrix,
 };
+pub use compositional::{apply_transform, Transform};
+pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};
+pub use deqms::{deqms_shrink, tricube_moving_average, DeqmsShrinkage};
 pub use ensemble::{
     aggregate_per_protein, assign_grade, combine_stouffer, EnsembleGrade, EnsembleInput,
     EnsembleRow, GradeThresholds,
 };
+pub use fold_change::{
+    compute_log2_fc, Comparison, FoldChangeInput, FoldChangeOutput, FoldChangePanel,
+};
+pub use ica_null::{archetype_null, generate_null_matrix, ArchetypeNullRow, NullMode, NullParams};
+pub use matrix::{DubeWidePanel, DubeWideRow};
 pub use msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
 pub use network::{
     adjacency, betweenness_centrality, eigenvector_centrality, influence_scores,
     pairwise_similarity, AdjacencyPolicy, InfluenceRow, SimilarityMatrix, SimilarityMetric,
 };
-pub use variance_decomposition::{
-    decompose_archetype_variance, FactorRow, FixedFactor, VarianceRow,
-};
-pub use errors::IngestError;
-pub use fold_change::{
-    compute_log2_fc, Comparison, FoldChangeInput, FoldChangeOutput, FoldChangePanel,
-};
-pub use ingest::{IngestOutput, ProteomeIngest};
-pub use matrix::{DubeWidePanel, DubeWideRow};
-pub use sample_id::{DubeSampleIdParser, ParsedSampleId, SampleIdParser};
 pub use types::{
     Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, PeptideIdentity,
     PeptideMeasurementRecord, Platform, ProteinIdentity, QcFlag, Sample,
+};
+pub use variance_decomposition::{
+    decompose_archetype_variance, FactorRow, FixedFactor, VarianceRow,
 };

@@ -71,17 +71,16 @@ fn dube_de_heat_shock_sanity() {
     let tmp = tempfile::tempdir().unwrap();
     let tmp_path = tmp.path();
 
-    run_atman(&[
-        "ingest",
-        "--platform",
-        "olink-explore-ngs",
-        "--parser",
-        "dube",
-        "--output-dir",
-        tmp_path.to_str().unwrap(),
-        raw1.to_str().unwrap(),
-        raw2.to_str().unwrap(),
-    ]);
+    let stager = root.join("adapters/generic/olink_explore_to_atman.py");
+    let py_status = Command::new("python3")
+        .arg(&stager)
+        .arg("--output-dir")
+        .arg(tmp_path)
+        .arg(&raw1)
+        .arg(&raw2)
+        .status()
+        .expect("run olink_explore_to_atman.py");
+    assert!(py_status.success(), "olink_explore_to_atman.py failed");
 
     run_atman(&[
         "qc",
@@ -90,7 +89,7 @@ fn dube_de_heat_shock_sanity() {
         "--output-dir",
         tmp_path.to_str().unwrap(),
         "--rule",
-        "dube",
+        "mask-warn-fail",
     ]);
 
     run_atman(&[

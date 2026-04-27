@@ -130,6 +130,23 @@ For sample-by-protein matrices, provide `--orientation samples-rows` and a
 separate `--proteins` metadata table containing the assay ID and optional
 gene/UniProt columns.
 
+## Olink Explore NGS NPX Adapter
+
+Use `generic/olink_explore_to_atman.py` for Olink Explore NGS NPX CSV
+exports (the long-format file produced by Olink's analysis software):
+
+```bash
+python3 adapters/generic/olink_explore_to_atman.py \
+  --output-dir out \
+  path/to/file_one_NPX.csv path/to/file_two_NPX.csv
+```
+
+Sample IDs are parsed with the Dube et al. 2023 convention by default
+(`SSNA-<subject>-<PR1|PR2|PT1|PT2>` for biological samples,
+`CONTROL_SAMPLE_*` for technical controls). For datasets with a different
+sample-ID layout, pass `--sample-id-regex` (must define named groups
+`subject` and `condition`) and `--control-prefix`.
+
 ## Adapter Design Rules
 
 - Preserve one biological replicate per `sample_id`.

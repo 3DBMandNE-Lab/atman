@@ -13,11 +13,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-csv = { workspace = true }
-regex = { workspace = true }
 serde = { workspace = true }
 statrs = { workspace = true }
-thiserror = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
