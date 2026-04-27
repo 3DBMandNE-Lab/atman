@@ -88,7 +88,7 @@ fn ensemble_grades_dube_heat_shock_proteins_as_validated() {
         "--groups",
         "PT2-PR2",
         "--paired-by",
-        "participant",
+        "subject_id",
         "--min-pairs",
         "5",
         "--trend",

@@ -78,14 +78,14 @@ Atman has three input modes, all landing on the same canonical TSV schema:
   export) plus sample/protein metadata and writes Atman's canonical TSVs.
   Supports `--log2-transform` for linear-scale inputs and both
   `proteins-rows` / `samples-rows` orientations.
-- **Platform-native ingest:** `atman ingest --platform olink-explore-ngs`
-  reads raw long-format Olink Explore NPX CSV files. Additional native
-  parsers can be added per platform as needed.
-- **Canonical TSV adapters:** any script or converter can write
-  `samples.tsv`, `proteins.tsv`, `measurements.tsv`, and optionally
-  `qc_measurements.tsv`. Once those files exist, Atman's downstream commands
-  (`de`, `module-de`, `robustness`, and related summaries) run the same way
-  regardless of the original assay source.
+- **Canonical TSV adapters:** Atman has no built-in platform-native
+  ingest. Vendor long-formats land on the canonical schema via Python
+  adapters in `adapters/`. The bundled `adapters/generic/olink_explore_to_atman.py`
+  handles Olink Explore NGS NPX CSV exports. Other formats follow the
+  same pattern: read upstream, emit `samples.tsv`, `proteins.tsv`,
+  `measurements.tsv`. Once those exist, Atman's downstream commands
+  (`de`, `module-de`, `robustness`, etc.) run the same way regardless of
+  source.
 
 Adapters are intentionally thin: normalize source metadata, map samples and
 proteins, log-transform linear intensities when needed, and emit Atman's TSV

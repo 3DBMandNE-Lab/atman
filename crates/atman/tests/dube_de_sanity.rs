@@ -98,8 +98,6 @@ fn dube_de_heat_shock_sanity() {
         tmp_path.to_str().unwrap(),
         "--test",
         "paired-t",
-        "--paired-by",
-        "participant",
         "--groups",
         "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2",
     ]);

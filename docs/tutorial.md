@@ -3,10 +3,10 @@
 This walkthrough runs Atman's Dube et al. 2023 Olink Explore NGS reproduction
 path against the fixture data shipped under `example_data/dube_heat_2023/`.
 
-Atman's built-in direct ingest currently targets Olink Explore long CSV files.
-Other proteomics formats can be used by writing Atman's canonical TSV files
-(`samples.tsv`, `proteins.tsv`, and `measurements.tsv`) and then running the
-downstream analysis commands on that directory.
+Atman has no built-in proteomics ingest. Upstream formats land on the
+canonical TSV schema (`samples.tsv`, `proteins.tsv`, `measurements.tsv`)
+via adapters in `adapters/`, or via `atman ingest-matrix` for stock
+wide-format exports.
 
 ## 0. Install and verify
 
@@ -17,9 +17,9 @@ cargo install --path crates/atman
 atman --help
 ```
 
-Expected: help text listing `ingest`, `ingest-matrix`, `validate`, `qc`,
-`report`, `matrix`, `fold-change`, `de`, `bootstrap`, `asymmetry`,
-`robustness`, `module-trajectory`, and `module-de`.
+Expected: help text listing `ingest-matrix`, `validate`, `qc`, `report`,
+`matrix`, `fold-change`, `de`, `bootstrap`, `asymmetry`, `robustness`,
+`module-trajectory`, and `module-de`.
 
 Run the test suite to confirm the reproduction base is intact:
 
@@ -155,7 +155,7 @@ Paired Student's t-test at subject level:
 
 ```bash
 atman de --input-dir out --output-dir out \
-    --test paired-t --paired-by participant \
+    --test paired-t \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" --min-pairs 5
 ```
 
@@ -181,7 +181,7 @@ Expected hit counts at `q < 0.05`:
 Optional moderated variance-shrinkage alternative:
 ```bash
 atman de --input-dir out --output-dir out_mod \
-    --test moderated --moderation-prior-df 4 --paired-by participant \
+    --test moderated --moderation-prior-df 4 \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" --min-pairs 5
 ```
 

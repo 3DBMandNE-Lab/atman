@@ -3,8 +3,8 @@
 Atman's `de` command ships ten test paths. The README Quick Start covers
 `paired-t` end-to-end; this file is the cookbook for everything else.
 All recipes assume `out/` already contains the canonical TSVs produced
-by `atman ingest` or `atman ingest-matrix` plus the appropriate QC,
-validate, and report steps from the Quick Start.
+by `atman ingest-matrix` (or a Python adapter from `adapters/`) plus
+the appropriate QC, validate, and report steps from the Quick Start.
 
 ## Two-group paired and unpaired
 
@@ -12,7 +12,7 @@ validate, and report steps from the Quick Start.
 # Paired (already in the Quick Start; repeated here for context)
 atman de \
     --input-dir out --output-dir out \
-    --test paired-t --paired-by participant \
+    --test paired-t \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
     --min-pairs 5
 
@@ -96,7 +96,7 @@ atman de \
     --input-dir out --output-dir out_limma \
     --test limma \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
-    --paired-by participant \
+    \
     --trend true --robust true \
     --min-pairs 5
 
@@ -168,7 +168,7 @@ atman de \
     --peptide-measurements out/peptide_measurements.tsv \
     --peptide-metadata out/peptides.tsv \
     --groups "PT2-PR2" \
-    --paired-by participant \
+    \
     --min-pairs 5
 ```
 
@@ -269,7 +269,7 @@ stages:
     outputs: [out/de_results.tsv, out/de_report.tsv]
     cmd: >
       atman de --input-dir out --output-dir out
-      --test paired-t --paired-by participant
+      --test paired-t
       --groups "PT1-PR1,PR2-PR1" --min-pairs 5
 ```
 

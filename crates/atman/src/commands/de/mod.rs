@@ -250,11 +250,10 @@ pub fn run(args: Args) -> Result<()> {
         || args.test == "limma"
         || args.test == "msqrob"
         || args.test == "ensemble";
-    if !is_unpaired && !matches!(args.paired_by.as_str(), "subject_id" | "participant") {
+    if !is_unpaired && args.paired_by != "subject_id" {
         anyhow::bail!(
             "paired-by {:?} not supported for paired tests; pairing currently uses the \
-             canonical `subject_id` column from samples.tsv. Use `subject_id` (or the \
-             legacy alias `participant`).",
+             canonical `subject_id` column from samples.tsv.",
             args.paired_by
         );
     }

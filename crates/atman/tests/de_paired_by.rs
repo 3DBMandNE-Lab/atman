@@ -1,11 +1,6 @@
-//! Regression: `atman de --test paired-t` must accept both the new canonical
-//! `--paired-by subject_id` (default) and the legacy `--paired-by participant`
-//! alias, and reject other values with an informative error.
-//!
-//! Prior to the fix in this commit, the CLI hardcoded acceptance of only
-//! `participant`, even though the canonical sample schema's pairing field is
-//! `subject_id` and the actual pairing logic reads `subject_id` regardless of
-//! the flag's value. The check was disconnected from what the code did.
+//! `atman de --test paired-t` must accept the canonical
+//! `--paired-by subject_id` (default) and reject other values with an
+//! informative error pointing at the canonical name.
 
 use std::process::{Command, Output};
 
@@ -108,14 +103,19 @@ fn paired_t_works_with_explicit_subject_id() {
 }
 
 #[test]
-fn paired_t_accepts_legacy_participant_alias() {
+fn paired_t_rejects_legacy_participant_alias() {
     let tmp = tempfile::tempdir().unwrap();
     write_paired_fixture(tmp.path());
     let out = run_paired_t(tmp.path(), Some("participant"));
     assert!(
-        out.status.success(),
-        "--paired-by participant (legacy alias) must still succeed; stderr:\n{}",
+        !out.status.success(),
+        "--paired-by participant must be rejected; the legacy alias was removed. stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("subject_id"),
+        "rejection message should point at the canonical `subject_id`; stderr:\n{stderr}"
     );
 }
 

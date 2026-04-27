@@ -33,9 +33,7 @@ pub struct Args {
     test: String,
 
     /// Biological-replicate key. Currently fixed to the canonical
-    /// `subject_id` column from samples.tsv; the legacy alias
-    /// `participant` is also accepted for backward compatibility.
-    /// Ignored for welch-t.
+    /// `subject_id` column from samples.tsv. Ignored for welch-t.
     #[arg(long, default_value = "subject_id")]
     paired_by: String,
 
@@ -56,11 +54,10 @@ pub fn run(args: Args) -> Result<()> {
         );
     }
     let is_unpaired = args.test == "welch-t";
-    if !is_unpaired && !matches!(args.paired_by.as_str(), "subject_id" | "participant") {
+    if !is_unpaired && args.paired_by != "subject_id" {
         bail!(
             "paired-by {:?} not supported; pairing currently uses the canonical \
-             `subject_id` column from samples.tsv. Use `subject_id` (or the legacy \
-             alias `participant`).",
+             `subject_id` column from samples.tsv.",
             args.paired_by
         );
     }

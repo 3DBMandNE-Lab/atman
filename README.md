@@ -92,7 +92,7 @@ atman qc --input-dir out --output-dir out
 
 atman de \
     --input-dir out --output-dir out \
-    --test paired-t --paired-by participant \
+    --test paired-t \
     --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
     --min-pairs 5
 ```

@@ -484,7 +484,7 @@ atman de --input-dir out --output-dir out_ensemble \
   --ensemble-methods "paired-t,welch-t,limma,msqrob" \
   --peptide-measurements out/peptide_measurements.tsv \
   --peptide-metadata out/peptides.tsv \
-  --groups "PT2-PR2" --paired-by participant --min-pairs 5
+  --groups "PT2-PR2" --min-pairs 5
 ```
 
 Grading logic (post-BH):
