@@ -374,7 +374,9 @@ pub enum EndmemberMethod {
     /// candidate sample that most increases the Gram-matrix
     /// determinant of the simplex; repeats until a full pass produces
     /// no swap or `max_passes` is exhausted.
-    Nfindr { max_passes: usize },
+    Nfindr {
+        max_passes: usize,
+    },
 }
 
 /// |det(Gram matrix of pairwise differences)| of a set of `k` feature
@@ -584,11 +586,7 @@ pub struct UnmixConfig {
 
 /// End-to-end: endmember extraction (VCA or N-FINDR) → abundance
 /// estimation → per-sample reconstruction residual.
-pub fn unmix(
-    data: &[Vec<f64>],
-    k: usize,
-    cfg: UnmixConfig,
-) -> Result<UnmixResult, String> {
+pub fn unmix(data: &[Vec<f64>], k: usize, cfg: UnmixConfig) -> Result<UnmixResult, String> {
     let vca_result = match cfg.endmember_method {
         EndmemberMethod::Vca => vca(data, k, cfg.seed)?,
         EndmemberMethod::Nfindr { max_passes } => nfindr(data, k, cfg.seed, max_passes)?,
@@ -599,7 +597,12 @@ pub fn unmix(
     let mut residuals = Vec::with_capacity(n);
     for x in data {
         let alpha = match cfg.abundance_method {
-            AbundanceMethod::Fcls => fcls(&vca_result.endmember_loadings, x, cfg.fcls_max_iter, cfg.fcls_tol)?,
+            AbundanceMethod::Fcls => fcls(
+                &vca_result.endmember_loadings,
+                x,
+                cfg.fcls_max_iter,
+                cfg.fcls_tol,
+            )?,
             AbundanceMethod::Ucls => ucls(&vca_result.endmember_loadings, x)?,
         };
         // Reconstruction residual ||x - Eα||.
@@ -680,7 +683,11 @@ pub fn bootstrap_ci(
         return Ok((None, None));
     }
     let k = pe.endmember_loadings.len();
-    let p = if k > 0 { pe.endmember_loadings[0].len() } else { 0 };
+    let p = if k > 0 {
+        pe.endmember_loadings[0].len()
+    } else {
+        0
+    };
     let n = data.len();
     if n == 0 || k == 0 || p == 0 {
         return Ok((None, None));
@@ -695,7 +702,10 @@ pub fn bootstrap_ci(
         let mut rng = Xoshiro256pp::new(sub_seed);
         let idx = sample_indices_with_replacement(&mut rng, n);
         let resampled: Vec<Vec<f64>> = idx.iter().map(|&i| data[i].clone()).collect();
-        let sub_cfg = UnmixConfig { seed: sub_seed, ..cfg };
+        let sub_cfg = UnmixConfig {
+            seed: sub_seed,
+            ..cfg
+        };
         let boot = match unmix(&resampled, k, sub_cfg) {
             Ok(r) => r,
             Err(_) => {
@@ -803,8 +813,14 @@ pub fn bootstrap_ci(
         }
     }
     Ok((
-        Some(LoadingCi { lower: loading_lo, upper: loading_hi }),
-        Some(AbundanceCi { lower: abundance_lo, upper: abundance_hi }),
+        Some(LoadingCi {
+            lower: loading_lo,
+            upper: loading_hi,
+        }),
+        Some(AbundanceCi {
+            lower: abundance_lo,
+            upper: abundance_hi,
+        }),
     ))
 }
 
@@ -881,8 +897,7 @@ pub fn ora_enrichment(
             .map(|(i, v)| (i, v.abs()))
             .collect();
         ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let top_set: BTreeSet<usize> =
-            ranked.iter().take(top_n).map(|(i, _)| *i).collect();
+        let top_set: BTreeSet<usize> = ranked.iter().take(top_n).map(|(i, _)| *i).collect();
         for (set_name, set_members) in &intersected {
             let overlap = top_set.intersection(set_members).count();
             let p = hypergeometric_upper_tail(
@@ -1011,13 +1026,14 @@ mod tests {
                 data[si][f] = val;
             }
         }
-        PlantedFixture { data, endmembers, abundances }
+        PlantedFixture {
+            data,
+            endmembers,
+            abundances,
+        }
     }
 
-    fn best_matched_cosine(
-        planted: &[Vec<f64>],
-        recovered: &[Vec<f64>],
-    ) -> Vec<f64> {
+    fn best_matched_cosine(planted: &[Vec<f64>], recovered: &[Vec<f64>]) -> Vec<f64> {
         planted
             .iter()
             .map(|p| {
@@ -1040,8 +1056,11 @@ mod tests {
 
     #[test]
     fn vca_recovers_planted_endmembers_with_cosine_above_threshold() {
-        let PlantedFixture { data, endmembers: planted, .. } =
-            planted_unmix_fixture(100, 60, 3, 20260420);
+        let PlantedFixture {
+            data,
+            endmembers: planted,
+            ..
+        } = planted_unmix_fixture(100, 60, 3, 20260420);
         let vca_result = vca(&data, 3, 42).unwrap();
         let cos = best_matched_cosine(&planted, &vca_result.endmember_loadings);
         for (i, c) in cos.iter().enumerate() {
@@ -1059,15 +1078,9 @@ mod tests {
         let result = unmix(&data, 3, vca_fcls(42, 500, 1e-9)).unwrap();
         for (i, row) in result.abundances.iter().enumerate() {
             let sum: f64 = row.iter().sum();
-            assert!(
-                (sum - 1.0).abs() < 1e-6,
-                "sample {i} row-sum = {sum} ≠ 1",
-            );
+            assert!((sum - 1.0).abs() < 1e-6, "sample {i} row-sum = {sum} ≠ 1",);
             for (j, &a) in row.iter().enumerate() {
-                assert!(
-                    a >= -1e-9,
-                    "sample {i} endmember {j} abundance = {a} < 0",
-                );
+                assert!(a >= -1e-9, "sample {i} endmember {j} abundance = {a} < 0",);
             }
         }
     }
@@ -1195,7 +1208,9 @@ mod tests {
         assert!(
             chosen == 3 || chosen == 4,
             "expected k ≈ 3 on planted-3 fixture, got {chosen}; sweep={:?}",
-            rows.iter().map(|r| (r.k, r.mean_residual_norm)).collect::<Vec<_>>()
+            rows.iter()
+                .map(|r| (r.k, r.mean_residual_norm))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -1226,8 +1241,11 @@ mod tests {
 
     #[test]
     fn nfindr_recovers_planted_endmembers_at_least_as_well_as_vca() {
-        let PlantedFixture { data, endmembers: planted, .. } =
-            planted_unmix_fixture(80, 40, 3, 31);
+        let PlantedFixture {
+            data,
+            endmembers: planted,
+            ..
+        } = planted_unmix_fixture(80, 40, 3, 31);
         let vca_cos = best_matched_cosine(&planted, &vca(&data, 3, 99).unwrap().endmember_loadings);
         let nfindr_cos = best_matched_cosine(
             &planted,
@@ -1259,8 +1277,11 @@ mod tests {
 
     #[test]
     fn fcls_abundances_pearson_against_planted_is_high() {
-        let PlantedFixture { data, abundances: planted_ab, .. } =
-            planted_unmix_fixture(120, 60, 3, 30);
+        let PlantedFixture {
+            data,
+            abundances: planted_ab,
+            ..
+        } = planted_unmix_fixture(120, 60, 3, 30);
         let result = unmix(&data, 3, vca_fcls(42, 1000, 1e-9)).unwrap();
         // Match recovered columns to planted columns via best absolute
         // cosine between recovered endmember loadings and planted.
@@ -1280,7 +1301,11 @@ mod tests {
                     .zip(result.endmember_loadings[j].iter())
                     .map(|(a, b)| a * b)
                     .sum();
-                let np = planted_endmembers[i].iter().map(|v| v * v).sum::<f64>().sqrt();
+                let np = planted_endmembers[i]
+                    .iter()
+                    .map(|v| v * v)
+                    .sum::<f64>()
+                    .sqrt();
                 let nr = result.endmember_loadings[j]
                     .iter()
                     .map(|v| v * v)

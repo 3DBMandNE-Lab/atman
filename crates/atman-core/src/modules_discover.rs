@@ -120,7 +120,9 @@ pub fn soft_adjacency(abs_sim: &[Vec<f64>], beta: usize) -> Vec<Vec<f64>> {
 pub fn compute_tom(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let p = a.len();
     // k_i = row sum excluding diagonal.
-    let k: Vec<f64> = (0..p).map(|i| (0..p).map(|u| if u == i { 0.0 } else { a[i][u] }).sum()).collect();
+    let k: Vec<f64> = (0..p)
+        .map(|i| (0..p).map(|u| if u == i { 0.0 } else { a[i][u] }).sum())
+        .collect();
     let mut out = vec![vec![0.0_f64; p]; p];
     for i in 0..p {
         out[i][i] = 1.0;
@@ -160,7 +162,12 @@ pub fn scale_free_r_squared(a: &[Vec<f64>], n_bins: usize) -> (f64, f64, f64) {
         return (0.0, 0.0, mean_k);
     }
     // Uniform log-bins on (0, max_k].
-    let lo = (ks.iter().cloned().filter(|v| *v > 0.0).fold(f64::INFINITY, f64::min)).max(1e-6);
+    let lo = (ks
+        .iter()
+        .cloned()
+        .filter(|v| *v > 0.0)
+        .fold(f64::INFINITY, f64::min))
+    .max(1e-6);
     let hi = max_k;
     let log_lo = lo.ln();
     let log_hi = hi.ln();
@@ -182,11 +189,15 @@ pub fn scale_free_r_squared(a: &[Vec<f64>], n_bins: usize) -> (f64, f64, f64) {
         counts[idx] += 1;
     }
     // Fit log10 p vs log10 k on non-empty bins.
-    let xs: Vec<f64> = counts.iter().zip(bin_centers.iter())
+    let xs: Vec<f64> = counts
+        .iter()
+        .zip(bin_centers.iter())
         .filter(|(&c, _)| c > 0)
         .map(|(_, &k)| k.log10())
         .collect();
-    let ys: Vec<f64> = counts.iter().zip(bin_centers.iter())
+    let ys: Vec<f64> = counts
+        .iter()
+        .zip(bin_centers.iter())
         .filter(|(&c, _)| c > 0)
         .map(|(&c, _)| (c as f64 / p as f64).log10())
         .collect();
@@ -209,7 +220,11 @@ pub fn scale_free_r_squared(a: &[Vec<f64>], n_bins: usize) -> (f64, f64, f64) {
         return (0.0, 0.0, mean_k);
     }
     let slope = sxy / sxx;
-    let r2 = if syy > 0.0 { (sxy * sxy) / (sxx * syy) } else { 0.0 };
+    let r2 = if syy > 0.0 {
+        (sxy * sxy) / (sxx * syy)
+    } else {
+        0.0
+    };
     (r2, slope, mean_k)
 }
 
@@ -312,7 +327,11 @@ pub fn upgma(dissim: &[Vec<f64>]) -> Vec<(usize, usize, f64, usize)> {
 /// Cut an UPGMA tree at a fixed `height`: any merge with height ≤
 /// `height` joins its two sub-clusters. Returns a feature → cluster-id
 /// mapping for each of the `p` leaves.
-pub fn cut_tree_by_height(merges: &[(usize, usize, f64, usize)], p: usize, height: f64) -> Vec<usize> {
+pub fn cut_tree_by_height(
+    merges: &[(usize, usize, f64, usize)],
+    p: usize,
+    height: f64,
+) -> Vec<usize> {
     let mut parent: Vec<usize> = (0..p + merges.len()).collect();
     fn find(parent: &mut [usize], x: usize) -> usize {
         if parent[x] == x {
@@ -353,7 +372,12 @@ pub fn discover(
     let abs_sim = pairwise_abs_similarity(data, sim);
 
     let (adjacency, sweep, chosen_beta) = match method {
-        DiscoveryMethod::WgcnaSoft { beta: None, r2_target, n_bins, max_beta } => {
+        DiscoveryMethod::WgcnaSoft {
+            beta: None,
+            r2_target,
+            n_bins,
+            max_beta,
+        } => {
             let (picked, rows) = auto_soft_power(&abs_sim, max_beta, r2_target, n_bins);
             (soft_adjacency(&abs_sim, picked), rows, picked)
         }
@@ -377,7 +401,11 @@ pub fn discover(
     let mut dissim = vec![vec![0.0_f64; p]; p];
     for i in 0..p {
         for j in 0..p {
-            dissim[i][j] = if i == j { 0.0 } else { (1.0 - tom[i][j]).max(0.0) };
+            dissim[i][j] = if i == j {
+                0.0
+            } else {
+                (1.0 - tom[i][j]).max(0.0)
+            };
         }
     }
     let merges = upgma(&dissim);
@@ -432,7 +460,11 @@ pub fn discover(
                         c += 1;
                     }
                 }
-                if c > 0 { s / c as f64 } else { 0.0 }
+                if c > 0 {
+                    s / c as f64
+                } else {
+                    0.0
+                }
             }
         };
         // Hub = member with highest sum of adjacency to other module members.
@@ -447,7 +479,11 @@ pub fn discover(
                 (i, k)
             })
             .fold((members[0], f64::NEG_INFINITY), |acc, x| {
-                if x.1 > acc.1 { x } else { acc }
+                if x.1 > acc.1 {
+                    x
+                } else {
+                    acc
+                }
             })
             .0;
         let pc1_var_explained = eigenprotein_pc1_variance_explained(data, members);
@@ -486,7 +522,10 @@ fn eigenprotein_pc1_variance_explained(data: &[Vec<f64>], members: &[usize]) -> 
         }
     }
     // Total variance = trace(XᵀX) / (n − 1).
-    let total: f64 = x.iter().map(|row| row.iter().map(|v| v * v).sum::<f64>()).sum();
+    let total: f64 = x
+        .iter()
+        .map(|row| row.iter().map(|v| v * v).sum::<f64>())
+        .sum();
     if total <= 0.0 {
         return 0.0;
     }
@@ -510,11 +549,7 @@ fn eigenprotein_pc1_variance_explained(data: &[Vec<f64>], members: &[usize]) -> 
         for vj in &mut v_new {
             *vj /= norm;
         }
-        let delta: f64 = v
-            .iter()
-            .zip(v_new.iter())
-            .map(|(a, b)| (a - b).abs())
-            .sum();
+        let delta: f64 = v.iter().zip(v_new.iter()).map(|(a, b)| (a - b).abs()).sum();
         v = v_new;
         if delta < 1e-10 {
             break;
@@ -623,7 +658,10 @@ mod tests {
             big_modules >= 2,
             "expected ≥2 modules of size ≥ 15, got {}: {:?}",
             big_modules,
-            non_grey.iter().map(|r| (&r.module, r.size)).collect::<Vec<_>>()
+            non_grey
+                .iter()
+                .map(|r| (&r.module, r.size))
+                .collect::<Vec<_>>()
         );
     }
 

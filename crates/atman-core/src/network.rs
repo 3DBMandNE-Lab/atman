@@ -251,10 +251,7 @@ pub fn betweenness_centrality(adjacency: &[Vec<f64>]) -> Vec<f64> {
         let mut dist = vec![f64::INFINITY; n];
         dist[s] = 0.0;
         let mut heap: BinaryHeap<State> = BinaryHeap::new();
-        heap.push(State {
-            dist: 0.0,
-            node: s,
-        });
+        heap.push(State { dist: 0.0, node: s });
         let mut visited = vec![false; n];
         while let Some(State { dist: d, node: v }) = heap.pop() {
             if visited[v] {

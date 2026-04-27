@@ -291,17 +291,41 @@ pub fn read_samples(path: &Path) -> Result<Vec<Sample>> {
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .has_headers(true)
-        .from_path(path)?;
+        .from_path(path)
+        .with_context(|| format!("opening {:?}", path))?;
+    let headers = reader
+        .headers()
+        .with_context(|| format!("reading headers from {:?}", path))?
+        .clone();
+    let col: HashMap<String, usize> = headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.to_string(), i))
+        .collect();
+    let need = |name: &str| -> Result<usize> {
+        col.get(name)
+            .copied()
+            .ok_or_else(|| anyhow!("missing column {:?} in {:?}", name, path))
+    };
+    let c_sample = need("sample_id")?;
+    let c_subject = need("subject_id")?;
+    let c_condition = need("condition")?;
+    let c_control = need("is_control")?;
+    let c_type = need("sample_type")?;
+    let c_order = need("ingest_order")?;
     let mut out = Vec::new();
     for row in reader.records() {
-        let row = row?;
+        let row = row.with_context(|| format!("reading record from {:?}", path))?;
         out.push(Sample {
-            sample_id: row[0].to_string(),
-            subject_id: empty_to_none(&row[1]),
-            condition: empty_to_none(&row[2]),
-            is_control: row[3].parse::<u8>()? != 0,
-            sample_type: empty_to_none(&row[4]),
-            ingest_order: row[5].parse().unwrap_or(0),
+            sample_id: row[c_sample].to_string(),
+            subject_id: empty_to_none(&row[c_subject]),
+            condition: empty_to_none(&row[c_condition]),
+            is_control: row[c_control]
+                .parse::<u8>()
+                .with_context(|| format!("is_control parse in {:?}", path))?
+                != 0,
+            sample_type: empty_to_none(&row[c_type]),
+            ingest_order: row[c_order].parse().unwrap_or(0),
         });
     }
     Ok(out)
@@ -494,10 +518,7 @@ pub fn read_peptide_measurements(path: &Path) -> Result<Vec<PeptideMeasurementRe
 }
 
 /// peptide_measurements.tsv writer.
-pub fn write_peptide_measurements(
-    path: &Path,
-    records: &[PeptideMeasurementRecord],
-) -> Result<()> {
+pub fn write_peptide_measurements(path: &Path, records: &[PeptideMeasurementRecord]) -> Result<()> {
     let mut buf = String::from(
         "sample_id\tpeptide_id\tabundance\tabundance_unit\tdropped_by_qc\tbelow_lod\n",
     );

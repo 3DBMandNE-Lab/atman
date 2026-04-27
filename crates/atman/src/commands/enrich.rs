@@ -231,7 +231,6 @@ fn read_universe(path: &Path) -> Result<BTreeSet<String>> {
     }
 }
 
-
 fn fisher_upper_tail(overlap: usize, hits: usize, set_size: usize, universe: usize) -> f64 {
     let max_k = hits.min(set_size);
     (overlap..=max_k)

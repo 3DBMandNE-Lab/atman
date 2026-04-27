@@ -25,7 +25,8 @@ pub fn digamma(x: f64) -> f64 {
     let inv = 1.0 / x;
     let inv2 = inv * inv;
     // ψ(x) = ln x - 1/(2x) - 1/(12x²) + 1/(120x⁴) - 1/(252x⁶) + 1/(240x⁸) - …
-    x.ln() - 0.5 * inv
+    x.ln()
+        - 0.5 * inv
         - inv2 * (1.0 / 12.0 - inv2 * (1.0 / 120.0 - inv2 * (1.0 / 252.0 - inv2 / 240.0)))
 }
 
@@ -41,8 +42,7 @@ pub fn trigamma(x: f64) -> f64 {
     let inv2 = inv * inv;
     let inv3 = inv2 * inv;
     // ψ'(x) = 1/x + 1/(2x²) + 1/(6x³) - 1/(30x⁵) + 1/(42x⁷) - 1/(30x⁹) + …
-    inv + 0.5 * inv2
-        + inv3 * (1.0 / 6.0 - inv2 * (1.0 / 30.0 - inv2 * (1.0 / 42.0 - inv2 / 30.0)))
+    inv + 0.5 * inv2 + inv3 * (1.0 / 6.0 - inv2 * (1.0 / 30.0 - inv2 * (1.0 / 42.0 - inv2 / 30.0)))
 }
 
 /// Tetragamma ψ''(x) = d/dx ψ'(x). Used by `trigamma_inverse` Newton step.
@@ -153,8 +153,8 @@ pub fn fit_f_dist(s2: &[f64], df_res: f64) -> Option<(f64, f64)> {
     }
     // mean = digamma(df_res/2) - digamma(df_prior/2) + log(df_prior · s²_prior / df_res)
     // ⇒ log(s²_prior) = mean - digamma(df_res/2) + digamma(df_prior/2) + log(df_res / df_prior)
-    let log_s2_prior = mean - digamma(df_res / 2.0) + digamma(df_prior / 2.0)
-        + (df_res / df_prior).ln();
+    let log_s2_prior =
+        mean - digamma(df_res / 2.0) + digamma(df_prior / 2.0) + (df_res / df_prior).ln();
     let s2_prior = log_s2_prior.exp();
     if !s2_prior.is_finite() || s2_prior <= 0.0 {
         return None;
@@ -178,11 +178,7 @@ pub struct SqueezeVarOutput {
 ///   `s²_post = (df_prior · s²_prior + df_res · s²) / (df_prior + df_res)`.
 /// - If `prior` is `None`, returns `s²_post = s²` unchanged, `df_prior = ∞`,
 ///   `s²_prior = NaN`. This is the fallback for `fit_f_dist` failure.
-pub fn squeeze_var(
-    s2: &[f64],
-    df_res: f64,
-    prior: Option<(f64, f64)>,
-) -> SqueezeVarOutput {
+pub fn squeeze_var(s2: &[f64], df_res: f64, prior: Option<(f64, f64)>) -> SqueezeVarOutput {
     match prior {
         Some((df_prior, s2_prior)) => {
             let denom = df_prior + df_res;
@@ -240,8 +236,8 @@ pub fn fit_f_dist_robust(s2: &[f64], df_res: f64) -> Option<FitFDistOutput> {
     let lower_tail = 0.05_f64;
     let upper_tail = 0.10_f64;
     let lower_idx = ((lower_tail * n as f64).floor() as usize).min(n - 1);
-    let upper_idx = (n.saturating_sub(1))
-        .saturating_sub(((upper_tail * n as f64).floor()) as usize);
+    let upper_idx =
+        (n.saturating_sub(1)).saturating_sub(((upper_tail * n as f64).floor()) as usize);
     if upper_idx <= lower_idx {
         return None;
     }
@@ -276,8 +272,8 @@ pub fn fit_f_dist_robust(s2: &[f64], df_res: f64) -> Option<FitFDistOutput> {
     if !df_prior.is_finite() || df_prior <= 0.0 {
         return None;
     }
-    let log_s2_prior = mean - digamma(df_res / 2.0) + digamma(df_prior / 2.0)
-        + (df_res / df_prior).ln();
+    let log_s2_prior =
+        mean - digamma(df_res / 2.0) + digamma(df_prior / 2.0) + (df_res / df_prior).ln();
     let s2_prior = log_s2_prior.exp();
     if !s2_prior.is_finite() || s2_prior <= 0.0 {
         return None;
@@ -576,8 +572,7 @@ pub fn moderated_f(
 /// of `t` (a test statistic of `+t` and `−t` yield identical p-values),
 /// as required for a two-sided test.
 pub fn treat_p_value(t: f64, se: f64, df_total: f64, lfc_threshold: f64) -> f64 {
-    if !t.is_finite() || !se.is_finite() || se <= 0.0 || !df_total.is_finite() || df_total <= 0.0
-    {
+    if !t.is_finite() || !se.is_finite() || se <= 0.0 || !df_total.is_finite() || df_total <= 0.0 {
         return f64::NAN;
     }
     let dist = match StudentsT::new(0.0, 1.0, df_total) {
@@ -757,12 +752,7 @@ pub fn limma_fit(
             if counts.len() != y.len() {
                 return None;
             }
-            let deqms = crate::deqms::deqms_shrink(
-                &s2_sample,
-                counts,
-                df_res,
-                0.5,
-            );
+            let deqms = crate::deqms::deqms_shrink(&s2_sample, counts, df_res, 0.5);
             if deqms.trend_fallback_used {
                 trend_fallback_used = true;
             }
@@ -813,11 +803,7 @@ pub fn limma_fit(
     // trigamma(df_res/2)) is NOT a trend fallback — the trend was applied,
     // there's just nothing to shrink against. Let squeeze_var degrade
     // gracefully to pass-through in that case.
-    let squeeze = squeeze_var(
-        &ratios,
-        df_res,
-        prior,
-    );
+    let squeeze = squeeze_var(&ratios, df_res, prior);
     let df_prior = squeeze.df_prior;
     let s2_prior = squeeze.s2_prior;
     let df_total = if df_prior.is_finite() {
@@ -838,7 +824,13 @@ pub fn limma_fit(
                 f_statistic: None,
                 f_p_value: None,
                 s2_sample: f64::NAN,
-                s2_trend: s2_trend.as_ref().and_then(|t| if t[i].is_finite() { Some(t[i]) } else { None }),
+                s2_trend: s2_trend.as_ref().and_then(|t| {
+                    if t[i].is_finite() {
+                        Some(t[i])
+                    } else {
+                        None
+                    }
+                }),
                 s2_posterior: f64::NAN,
                 mean_abundance: f64::NAN,
                 skipped: true,
@@ -880,7 +872,9 @@ pub fn limma_fit(
             f_statistic: f_stat,
             f_p_value: f_p,
             s2_sample: s2_sample[i],
-            s2_trend: s2_trend.as_ref().and_then(|t| if t[i].is_finite() { Some(t[i]) } else { None }),
+            s2_trend: s2_trend
+                .as_ref()
+                .and_then(|t| if t[i].is_finite() { Some(t[i]) } else { None }),
             s2_posterior: s2_post_feature,
             mean_abundance: means[i],
             skipped: false,
@@ -962,8 +956,7 @@ mod tests {
         let s2_prior_true = 4.0;
         let mean_target = super::digamma(df_res / 2.0) - super::digamma(df_prior_true / 2.0)
             + (df_prior_true * s2_prior_true / df_res).ln();
-        let var_target =
-            super::trigamma(df_res / 2.0) + super::trigamma(df_prior_true / 2.0);
+        let var_target = super::trigamma(df_res / 2.0) + super::trigamma(df_prior_true / 2.0);
         // Build a 2-point sample that hits (mean_target, var_target) exactly.
         let n = 5000_f64;
         let spread = var_target.sqrt();
@@ -1020,8 +1013,7 @@ mod tests {
         let s2_prior_true = 1.0;
         let mean_target = super::digamma(df_res / 2.0) - super::digamma(df_prior_true / 2.0)
             + (df_prior_true * s2_prior_true / df_res).ln();
-        let var_target =
-            super::trigamma(df_res / 2.0) + super::trigamma(df_prior_true / 2.0);
+        let var_target = super::trigamma(df_res / 2.0) + super::trigamma(df_prior_true / 2.0);
         let spread = var_target.sqrt();
         let mut s2 = Vec::with_capacity(100);
         for i in 0..100 {
@@ -1050,8 +1042,12 @@ mod tests {
         let treat_p = super::treat_p_value(t, se, df, 0.0);
         // Standard two-sided t-test p:
         let dist = statrs::distribution::StudentsT::new(0.0, 1.0, df).unwrap();
-        let standard_p =
-            2.0 * (1.0 - <statrs::distribution::StudentsT as statrs::distribution::ContinuousCDF<f64, f64>>::cdf(&dist, t.abs()));
+        let standard_p = 2.0
+            * (1.0
+                - <statrs::distribution::StudentsT as statrs::distribution::ContinuousCDF<
+                    f64,
+                    f64,
+                >>::cdf(&dist, t.abs()));
         assert!((treat_p - standard_p).abs() < 1e-12);
     }
 
@@ -1070,7 +1066,11 @@ mod tests {
         // TREAT tests |δ|; by symmetry p(+t) must equal p(−t) for any
         // (se, df, lfc_threshold). Regression guard for a sign bug in an
         // earlier draft where negative `t` silently returned 1.0.
-        for &(se, df, lfc) in &[(1.0_f64, 15.0_f64, 0.0_f64), (0.5, 15.0, 0.5), (2.0, 30.0, 0.2)] {
+        for &(se, df, lfc) in &[
+            (1.0_f64, 15.0_f64, 0.0_f64),
+            (0.5, 15.0, 0.5),
+            (2.0, 30.0, 0.2),
+        ] {
             let p_pos = super::treat_p_value(2.5, se, df, lfc);
             let p_neg = super::treat_p_value(-2.5, se, df, lfc);
             assert!(
@@ -1090,13 +1090,7 @@ mod tests {
         let df_total = 10.0;
         let f_out = super::moderated_f(&beta, &contrast_matrix, &xtx_l, s2_posterior, df_total)
             .expect("ok");
-        let t_out = super::moderated_t(
-            &beta,
-            &[1.0_f64, -1.0],
-            &xtx_l,
-            s2_posterior,
-            df_total,
-        );
+        let t_out = super::moderated_t(&beta, &[1.0_f64, -1.0], &xtx_l, s2_posterior, df_total);
         assert!((f_out.f - t_out.t * t_out.t).abs() < 1e-10);
     }
 
@@ -1104,11 +1098,7 @@ mod tests {
     fn moderated_f_populates_two_contrast_case() {
         let beta = vec![1.0, 2.0, 3.0];
         // Two contrasts: (β₁ - β₂), (β₂ - β₃).
-        let contrast_matrix = vec![
-            vec![1.0, 0.0],
-            vec![-1.0, 1.0],
-            vec![0.0, -1.0],
-        ];
+        let contrast_matrix = vec![vec![1.0, 0.0], vec![-1.0, 1.0], vec![0.0, -1.0]];
         let xtx_l = vec![
             vec![1.0, 0.0, 0.0],
             vec![0.0, 1.0, 0.0],
@@ -1126,7 +1116,10 @@ mod tests {
         let beta = vec![2.0];
         let contrast = vec![1.0];
         let xtx_l = vec![vec![1.0]]; // X'X = I, L = I ⇒ c' (X'X)⁻¹ c = 1
-        let out = super::moderated_t(&beta, &contrast, &xtx_l, 4.0 /* s²_post */, 9.0 /* df */);
+        let out = super::moderated_t(
+            &beta, &contrast, &xtx_l, 4.0, /* s²_post */
+            9.0, /* df */
+        );
         // t = 2.0 / sqrt(4.0 * 1.0) = 1.0; p-value = 2 · (1 - T_9(1))
         assert!((out.t - 1.0).abs() < 1e-12);
         assert!(out.p_value > 0.0 && out.p_value < 1.0);
@@ -1160,7 +1153,13 @@ mod tests {
         // 20 features: half have a planted effect, half are null.
         let n = 10;
         let design: Vec<Vec<f64>> = (0..n)
-            .map(|i| if i < 5 { vec![1.0, 0.0] } else { vec![1.0, 1.0] })
+            .map(|i| {
+                if i < 5 {
+                    vec![1.0, 0.0]
+                } else {
+                    vec![1.0, 1.0]
+                }
+            })
             .collect();
         let mut y: Vec<Vec<f64>> = Vec::new();
         for f in 0..20 {

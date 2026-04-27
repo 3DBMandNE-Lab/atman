@@ -195,24 +195,15 @@ pub fn decompose_archetype_variance(
         let per_factor: Vec<FactorRow> = fixed_factors
             .iter()
             .map(|f| {
-                let (max_abs_t, min_p) = summarize_factor_coefficients(
-                    &fit.t,
-                    &fit.p_value,
-                    f.columns.clone(),
-                );
+                let (max_abs_t, min_p) =
+                    summarize_factor_coefficients(&fit.t, &fit.p_value, f.columns.clone());
                 let cols: Vec<usize> = f.columns.clone().collect();
                 // Type III Wald F via the OLS Hessian. For mixed
                 // fits this is NOT correct (would need the GLS
                 // Hessian), so we emit NaN and keep the per-coef
                 // summary as the only factor-level signal.
                 let (ss_type3, f_stat, df_num, df_den, p_value) = if is_mixed {
-                    (
-                        f64::NAN,
-                        f64::NAN,
-                        cols.len(),
-                        fit.df,
-                        f64::NAN,
-                    )
+                    (f64::NAN, f64::NAN, cols.len(), fit.df, f64::NAN)
                 } else {
                     match omnibus_f_test(design, &fit.beta, &cols, fit.sigma2, fit.df) {
                         Some(om) => {
@@ -275,7 +266,11 @@ fn summarize_factor_coefficients(
             min_p = pc;
         }
     }
-    let max_abs_t = if max_abs_t.is_finite() { max_abs_t } else { f64::NAN };
+    let max_abs_t = if max_abs_t.is_finite() {
+        max_abs_t
+    } else {
+        f64::NAN
+    };
     let min_p = if min_p.is_finite() { min_p } else { f64::NAN };
     (max_abs_t, min_p)
 }
@@ -308,15 +303,7 @@ mod tests {
             columns: 1..2,
         }];
         let ids = vec!["archetype_01".into()];
-        let rows = decompose_archetype_variance(
-            &ids,
-            &[y],
-            &design,
-            &factors,
-            None,
-            2,
-        )
-        .unwrap();
+        let rows = decompose_archetype_variance(&ids, &[y], &design, &factors, None, 2).unwrap();
         let r = &rows[0].per_factor[0];
         assert_eq!(r.df_num, 1);
         // F = t²: the omnibus on a single column must reproduce the
@@ -361,25 +348,13 @@ mod tests {
             },
         ];
         let ids = vec!["archetype_01".into()];
-        let rows = decompose_archetype_variance(
-            &ids,
-            &[y],
-            &design,
-            &factors,
-            None,
-            2,
-        )
-        .unwrap();
+        let rows = decompose_archetype_variance(&ids, &[y], &design, &factors, None, 2).unwrap();
         assert_eq!(rows.len(), 1);
         let r = &rows[0];
         assert!(!r.skipped);
         assert!(r.var_random.is_none());
         assert!(r.icc_random.is_none());
-        let cond_factor = r
-            .per_factor
-            .iter()
-            .find(|f| f.name == "condition")
-            .unwrap();
+        let cond_factor = r.per_factor.iter().find(|f| f.name == "condition").unwrap();
         // On 10 near-noise-free samples of y = 1[i≥5] + tiny, the
         // condition coefficient is near 1 so Type III F is huge
         // and the Type III SS dominates the residual variance.
@@ -420,22 +395,19 @@ mod tests {
             columns: 0..1,
         }];
         let ids = vec!["archetype_01".into()];
-        let rows = decompose_archetype_variance(
-            &ids,
-            &[y.clone()],
-            &design,
-            &factors,
-            Some(&groups),
-            2,
-        )
-        .unwrap();
+        let rows =
+            decompose_archetype_variance(&ids, &[y.clone()], &design, &factors, Some(&groups), 2)
+                .unwrap();
         assert_eq!(rows.len(), 1);
         let r = &rows[0];
         assert!(!r.skipped, "skip reason: {:?}", r.skip_reason);
         let var_r = r.var_random.expect("mixed fit should populate var_random");
         let icc = r.icc_random.expect("icc");
         assert!(var_r > 0.1, "random var should be substantial: {var_r}");
-        assert!(icc > 0.5, "ICC should exceed 0.5 on group-dominated data: {icc}");
+        assert!(
+            icc > 0.5,
+            "ICC should exceed 0.5 on group-dominated data: {icc}"
+        );
     }
 
     #[test]
@@ -459,15 +431,17 @@ mod tests {
             .map(|i| vec![1.0, if i < 4 { 0.0 } else { 1.0 }])
             .collect();
         let y: Vec<Vec<f64>> = (0..3)
-            .map(|k| {
-                (0..8)
-                    .map(|i| (i + k) as f64 * 0.3)
-                    .collect()
-            })
+            .map(|k| (0..8).map(|i| (i + k) as f64 * 0.3).collect())
             .collect();
         let factors = vec![
-            FixedFactor { name: "intercept".into(), columns: 0..1 },
-            FixedFactor { name: "condition".into(), columns: 1..2 },
+            FixedFactor {
+                name: "intercept".into(),
+                columns: 0..1,
+            },
+            FixedFactor {
+                name: "condition".into(),
+                columns: 1..2,
+            },
         ];
         let ids: Vec<String> = (1..=3).map(|i| format!("archetype_{i:02}")).collect();
         let a = decompose_archetype_variance(&ids, &y, &design, &factors, None, 2).unwrap();

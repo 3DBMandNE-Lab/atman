@@ -35,14 +35,18 @@ pub enum Transform {
     None,
     Clr,
     /// Additive log-ratio against the protein at `reference_index`.
-    Alr { reference_index: usize },
+    Alr {
+        reference_index: usize,
+    },
     /// Isometric log-ratio via the Helmert orthonormal basis.
     Ilr,
     /// Per-sample ratio-against-anchor, same math as [`Transform::Alr`]
     /// on log-scale input but preserved as a distinct tag because
     /// users may reach for one term or the other depending on
     /// domain convention.
-    RatioAnchor { reference_index: usize },
+    RatioAnchor {
+        reference_index: usize,
+    },
 }
 
 impl Transform {
@@ -72,10 +76,7 @@ impl Transform {
 ///
 /// Returns `Err` when the transform is malformed (e.g. ALR reference
 /// out of bounds) or when the input is rectangularly invalid.
-pub fn apply_transform(
-    data: &[Vec<f64>],
-    transform: Transform,
-) -> Result<Vec<Vec<f64>>, String> {
+pub fn apply_transform(data: &[Vec<f64>], transform: Transform) -> Result<Vec<Vec<f64>>, String> {
     if data.is_empty() {
         return Ok(Vec::new());
     }
@@ -86,8 +87,7 @@ pub fn apply_transform(
     match transform {
         Transform::None => Ok(data.to_vec()),
         Transform::Clr => Ok(clr(data)),
-        Transform::Alr { reference_index }
-        | Transform::RatioAnchor { reference_index } => {
+        Transform::Alr { reference_index } | Transform::RatioAnchor { reference_index } => {
             if reference_index >= p {
                 return Err(format!(
                     "alr reference_index {reference_index} out of bounds (p={p})"
@@ -170,7 +170,11 @@ mod tests {
 
     #[test]
     fn clr_rows_sum_to_zero() {
-        let data = vec![vec![1.0, 3.0, 5.0], vec![-2.0, 0.0, 2.0], vec![10.0, 10.0, 10.0]];
+        let data = vec![
+            vec![1.0, 3.0, 5.0],
+            vec![-2.0, 0.0, 2.0],
+            vec![10.0, 10.0, 10.0],
+        ];
         let out = apply_transform(&data, Transform::Clr).unwrap();
         for row in &out {
             let s: f64 = row.iter().sum();
@@ -193,8 +197,8 @@ mod tests {
         // to zero on every row. (This is the spec's "invariance
         // check" for compositional data.)
         let data = vec![
-            vec![1.0, 2.0, 3.0], // mean 2.0 → col 1 at mean
-            vec![0.0, 5.0, 10.0], // mean 5.0 → col 1 at mean
+            vec![1.0, 2.0, 3.0],   // mean 2.0 → col 1 at mean
+            vec![0.0, 5.0, 10.0],  // mean 5.0 → col 1 at mean
             vec![-4.0, -1.0, 2.0], // mean -1.0 → col 1 at mean
         ];
         let out = apply_transform(&data, Transform::Clr).unwrap();

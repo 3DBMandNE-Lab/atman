@@ -378,8 +378,11 @@ mod tests {
         .unwrap();
         for si in 0..subject_ids.len() {
             let ls_norm: f64 = ls.activations[si].iter().map(|v| v * v).sum::<f64>().sqrt();
-            let ridge_norm: f64 =
-                ridged.activations[si].iter().map(|v| v * v).sum::<f64>().sqrt();
+            let ridge_norm: f64 = ridged.activations[si]
+                .iter()
+                .map(|v| v * v)
+                .sum::<f64>()
+                .sqrt();
             assert!(
                 ridge_norm <= ls_norm + 1e-12,
                 "ridge L2 norm should not exceed LS L2 norm: {ridge_norm} vs {ls_norm}"
@@ -422,8 +425,14 @@ mod tests {
             n_members: vec![],
             n_cohorts: vec![],
         };
-        let err = project(&atlas, &[], &["S01".into()], &[vec![]], ProjectionMethod::Ridge(0.01))
-            .unwrap_err();
+        let err = project(
+            &atlas,
+            &[],
+            &["S01".into()],
+            &[vec![]],
+            ProjectionMethod::Ridge(0.01),
+        )
+        .unwrap_err();
         assert!(err.contains("empty protein universe"), "got: {err}");
     }
 

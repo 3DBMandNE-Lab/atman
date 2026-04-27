@@ -115,7 +115,11 @@ pub fn squeeze_variance(fits: &mut [MsqrobFit]) -> Option<(f64, f64)> {
             }
             let se = (s2_post * inv).sqrt();
             fit.se[j] = se;
-            let t = if se == 0.0 { f64::NAN } else { fit.beta[j] / se };
+            let t = if se == 0.0 {
+                f64::NAN
+            } else {
+                fit.beta[j] / se
+            };
             fit.t[j] = t;
             fit.p_value[j] = if t.is_finite() {
                 2.0 * (1.0 - t_dist.cdf(t.abs()))
@@ -237,8 +241,7 @@ pub fn fit_msqrob(
     }
     let tau = ((left + right) / 2.0).exp();
 
-    let Some(mut fit) = penalized_gls_fit(tau, design, y, &peptide_index, ridge_lambda)
-    else {
+    let Some(mut fit) = penalized_gls_fit(tau, design, y, &peptide_index, ridge_lambda) else {
         return MsqrobOutcome::Skipped {
             reason: SkipReason::ZeroVariance,
             n,
@@ -650,11 +653,7 @@ mod tests {
                     fit.peptide_variance_ratio
                 );
                 // Condition effect still recovered cleanly.
-                assert!(
-                    approx(fit.beta[1], 1.5, 1e-4),
-                    "beta[1] = {}",
-                    fit.beta[1]
-                );
+                assert!(approx(fit.beta[1], 1.5, 1e-4), "beta[1] = {}", fit.beta[1]);
             }
             _ => panic!("expected Computed"),
         }
@@ -728,7 +727,12 @@ mod tests {
     /// Fewer peptides than `min_peptides` → skipped.
     #[test]
     fn refuses_below_min_peptides() {
-        let design = vec![vec![1.0, 0.0], vec![1.0, 1.0], vec![1.0, 0.0], vec![1.0, 1.0]];
+        let design = vec![
+            vec![1.0, 0.0],
+            vec![1.0, 1.0],
+            vec![1.0, 0.0],
+            vec![1.0, 1.0],
+        ];
         let y = vec![1.0, 2.0, 1.1, 2.1];
         let peptide = vec![0, 0, 0, 0];
         let out = fit_msqrob(&design, &y, &peptide, 0.0, 2, 4, false);
@@ -770,7 +774,8 @@ mod tests {
                 let cond = if sample < 3 { 0.0 } else { 1.0 };
                 design.push(vec![1.0, cond]);
                 y.push(
-                    10.0 + (pep as f64) * 0.3 + if sample < 3 { 0.0 } else { 1.2 }
+                    10.0 + (pep as f64) * 0.3
+                        + if sample < 3 { 0.0 } else { 1.2 }
                         + ((sample + pep) as f64).sin() * 0.05,
                 );
                 peptide.push(pep);
@@ -795,7 +800,9 @@ mod tests {
             for sample in 0..8usize {
                 let cond = if sample < 4 { 0.0 } else { 1.0 };
                 design.push(vec![1.0, cond]);
-                y_clean.push(10.0 + off + true_effect * cond + ((sample + pep) as f64 * 0.13).sin() * 0.05);
+                y_clean.push(
+                    10.0 + off + true_effect * cond + ((sample + pep) as f64 * 0.13).sin() * 0.05,
+                );
                 peptide.push(pep);
             }
         }

@@ -173,11 +173,7 @@ fn align_canonicals(
     }
     let _ = protein_labels; // kept for a future labelled-output path
     let labels = build_archetypes(
-        &programs,
-        metric,
-        top_n,
-        cosine_tau,
-        false, // reciprocal_best
+        &programs, metric, top_n, cosine_tau, false, // reciprocal_best
         false, // category_constraint
     );
     (programs, labels)
@@ -202,8 +198,10 @@ fn group_archetypes(
             continue;
         }
         let cohorts: Vec<String> = {
-            let mut s: Vec<String> =
-                members.iter().map(|&i| programs[i].cohort.clone()).collect();
+            let mut s: Vec<String> = members
+                .iter()
+                .map(|&i| programs[i].cohort.clone())
+                .collect();
             s.sort();
             s.dedup();
             s
@@ -235,7 +233,11 @@ fn match_pe_archetype(
             best_n = Some(bs_cohorts.len());
         }
     }
-    if best_sim >= match_tau { best_n } else { None }
+    if best_sim >= match_tau {
+        best_n
+    } else {
+        None
+    }
 }
 
 /// Shannon entropy (in bits) of the empirical histogram of a
@@ -266,12 +268,7 @@ fn shannon_entropy_bits(values: &[f64]) -> f64 {
 /// `1 - alpha`. `bootstrap` is the B-vector of resampled θ values;
 /// `jackknife` is the leave-one-subject-out vector; `theta_hat` is
 /// the point estimate. Returns `(lower, upper, fallback_to_percentile)`.
-fn bca_ci(
-    bootstrap: &[f64],
-    jackknife: &[f64],
-    theta_hat: f64,
-    alpha: f64,
-) -> (f64, f64, bool) {
+fn bca_ci(bootstrap: &[f64], jackknife: &[f64], theta_hat: f64, alpha: f64) -> (f64, f64, bool) {
     let b = bootstrap.len();
     if b == 0 {
         return (theta_hat, theta_hat, true);
@@ -288,10 +285,8 @@ fn bca_ci(
 
     // z0: bias correction from the fraction of bootstrap < θ̂.
     let below = bootstrap.iter().filter(|&&v| v < theta_hat).count();
-    let prop = (below as f64 / b as f64).clamp(
-        1.0 / (b as f64 + 1.0),
-        1.0 - 1.0 / (b as f64 + 1.0),
-    );
+    let prop =
+        (below as f64 / b as f64).clamp(1.0 / (b as f64 + 1.0), 1.0 - 1.0 / (b as f64 + 1.0));
     let z0 = normal.inverse_cdf(prop);
 
     // Acceleration via jackknife. Needs ≥ 2 jackknife values and
@@ -339,18 +334,18 @@ fn point_estimate_match_counts(
     let canons: Vec<(String, CanonicalIca)> = cohorts
         .iter()
         .map(|c| {
-            let canon = fit_and_canonicalize(
-                &c.data,
-                params.k,
-                params.seed,
-                params.max_iter,
-                params.tol,
-            );
+            let canon =
+                fit_and_canonicalize(&c.data, params.k, params.seed, params.max_iter, params.tol);
             (c.label.clone(), canon)
         })
         .collect();
-    let (progs, labels) =
-        align_canonicals(&canons, universe, params.top_n, params.cosine_tau, params.metric);
+    let (progs, labels) = align_canonicals(
+        &canons,
+        universe,
+        params.top_n,
+        params.cosine_tau,
+        params.metric,
+    );
     let archetypes = group_archetypes(&progs, &labels);
     pe_archetypes
         .iter()
@@ -461,18 +456,18 @@ pub fn align_bootstrap(
     let pe_canons: Vec<(String, CanonicalIca)> = cohorts
         .iter()
         .map(|c| {
-            let canon = fit_and_canonicalize(
-                &c.data,
-                params.k,
-                params.seed,
-                params.max_iter,
-                params.tol,
-            );
+            let canon =
+                fit_and_canonicalize(&c.data, params.k, params.seed, params.max_iter, params.tol);
             (c.label.clone(), canon)
         })
         .collect();
-    let (pe_programs, pe_labels) =
-        align_canonicals(&pe_canons, universe, params.top_n, params.cosine_tau, params.metric);
+    let (pe_programs, pe_labels) = align_canonicals(
+        &pe_canons,
+        universe,
+        params.top_n,
+        params.cosine_tau,
+        params.metric,
+    );
     let pe_archetypes = group_archetypes(&pe_programs, &pe_labels);
     if pe_archetypes.is_empty() {
         return Ok(Vec::new());
@@ -506,8 +501,13 @@ pub fn align_bootstrap(
                 (c.label.clone(), canon)
             })
             .collect();
-        let (bs_programs, bs_labels) =
-            align_canonicals(&bs_canons, universe, params.top_n, params.cosine_tau, params.metric);
+        let (bs_programs, bs_labels) = align_canonicals(
+            &bs_canons,
+            universe,
+            params.top_n,
+            params.cosine_tau,
+            params.metric,
+        );
         let bs_archetypes = group_archetypes(&bs_programs, &bs_labels);
 
         // Match every PE archetype to at most one bootstrap archetype
@@ -583,8 +583,7 @@ impl BootstrapAcc {
             0.0
         } else {
             let total_cohorts = observed_cohorts.len().max(1);
-            sorted.iter().filter(|&&n| n >= total_cohorts).count() as f64
-                / self.n_boot as f64
+            sorted.iter().filter(|&&n| n >= total_cohorts).count() as f64 / self.n_boot as f64
         };
         let prob_multi = if self.n_boot == 0 {
             0.0

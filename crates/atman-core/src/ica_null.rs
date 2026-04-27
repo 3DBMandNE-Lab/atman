@@ -88,8 +88,7 @@ pub struct ArchetypeNullRow {
 /// Uses SplitMix64 so near-identical inputs produce well-separated
 /// outputs without pulling in a cryptographic hash dependency.
 fn derive_sub_seed(seed: u64, iter: usize) -> u64 {
-    let mut z = seed
-        .wrapping_add(0x9E3779B97F4A7C15_u64.wrapping_mul(iter as u64 + 1));
+    let mut z = seed.wrapping_add(0x9E3779B97F4A7C15_u64.wrapping_mul(iter as u64 + 1));
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
     z ^ (z >> 31)
@@ -235,7 +234,10 @@ fn stability_for_matrix(
 /// Determinism: fully reproducible under fixed `params.seed`. Each null
 /// iteration uses a sub-seed derived from (seed, iter), and within an
 /// iteration the FastICA runs use sub-seed + 0..n_seeds.
-pub fn archetype_null(x: &[Vec<f64>], params: &NullParams) -> Result<Vec<ArchetypeNullRow>, String> {
+pub fn archetype_null(
+    x: &[Vec<f64>],
+    params: &NullParams,
+) -> Result<Vec<ArchetypeNullRow>, String> {
     if x.is_empty() {
         return Err("empty input matrix".to_string());
     }
@@ -372,7 +374,13 @@ mod tests {
         let p = 3;
         let mut rng = Xoshiro256pp::new(5);
         let x: Vec<Vec<f64>> = (0..n)
-            .map(|_| vec![rng.next_normal() + 1.0, 2.0 * rng.next_normal() - 3.0, 0.5 * rng.next_normal()])
+            .map(|_| {
+                vec![
+                    rng.next_normal() + 1.0,
+                    2.0 * rng.next_normal() - 3.0,
+                    0.5 * rng.next_normal(),
+                ]
+            })
             .collect();
         let mut null_rng = Xoshiro256pp::new(11);
         let null = generate_null_matrix(&x, NullMode::GaussianMatched, &mut null_rng);
@@ -432,7 +440,10 @@ mod tests {
         let b = archetype_null(&x, &params).unwrap();
         for (x, y) in a.iter().zip(b.iter()) {
             assert_eq!(x.program, y.program);
-            assert_eq!(x.observed_stability.to_bits(), y.observed_stability.to_bits());
+            assert_eq!(
+                x.observed_stability.to_bits(),
+                y.observed_stability.to_bits()
+            );
             assert_eq!(x.null_p.to_bits(), y.null_p.to_bits());
             assert_eq!(
                 x.null_stability_mean.to_bits(),

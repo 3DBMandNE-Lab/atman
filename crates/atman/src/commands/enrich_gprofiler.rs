@@ -18,8 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::io::{
-    atomic_write, escape_tsv, hash_labeled_inputs, sha256_hex, sidecar_path_for,
-    write_run_sidecar,
+    atomic_write, escape_tsv, hash_labeled_inputs, sha256_hex, sidecar_path_for, write_run_sidecar,
 };
 
 const DEFAULT_ENDPOINT: &str = "https://biit.cs.ut.ee/gprofiler/api/gost/profile/";
@@ -140,7 +139,12 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
 
     let mut all_rows: Vec<GprofilerRow> = Vec::new();
     for (query_name, genes) in queries {
-        let genes_sorted: Vec<String> = genes.iter().cloned().collect::<BTreeSet<_>>().into_iter().collect();
+        let genes_sorted: Vec<String> = genes
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let background_sorted: Vec<String> = background.iter().cloned().collect();
         let canonical = CanonicalRequest {
             organism: args.organism.clone(),
@@ -190,8 +194,7 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let mut input_entries: Vec<(&str, &Path)> =
-        vec![("background", args.background.as_path())];
+    let mut input_entries: Vec<(&str, &Path)> = vec![("background", args.background.as_path())];
     if let Some(p) = args.de_results.as_ref() {
         input_entries.push(("de-results", p.as_path()));
     }
@@ -223,7 +226,7 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("enrich gprofiler: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -279,14 +282,22 @@ fn cache_key(req: &CanonicalRequest) -> String {
     );
     map.insert(
         "sources",
-        Value::Array(req.sources.iter().map(|g| Value::String(g.clone())).collect()),
+        Value::Array(
+            req.sources
+                .iter()
+                .map(|g| Value::String(g.clone()))
+                .collect(),
+        ),
     );
     map.insert(
         "threshold_method",
         Value::String(req.threshold_method.clone()),
     );
     // Encode f64 with to_string for stable representation.
-    map.insert("user_threshold", Value::String(req.user_threshold.to_string()));
+    map.insert(
+        "user_threshold",
+        Value::String(req.user_threshold.to_string()),
+    );
     map.insert(
         "ontology_version",
         Value::String(req.ontology_version.clone()),
@@ -430,18 +441,21 @@ fn parse_response(query_name: &str, root: &Value) -> Result<Vec<GprofilerRow>> {
             .get("query")
             .and_then(|v| v.as_str())
             .unwrap_or(query_name);
-        let source = entry
-            .get("source")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let source = entry.get("source").and_then(|v| v.as_str()).unwrap_or("");
         let native = entry.get("native").and_then(|v| v.as_str()).unwrap_or("");
         let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let p_value = entry.get("p_value").and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+        let p_value = entry
+            .get("p_value")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::NAN);
         let intersection_size = entry
             .get("intersection_size")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        let query_size = entry.get("query_size").and_then(|v| v.as_i64()).unwrap_or(0);
+        let query_size = entry
+            .get("query_size")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         let term_size = entry.get("term_size").and_then(|v| v.as_i64()).unwrap_or(0);
         let effective_domain_size = entry
             .get("effective_domain_size")

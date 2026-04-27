@@ -119,7 +119,14 @@ fn residuals_wide_uses_sample_id_not_subject_id() {
     let cols: Vec<&str> = header.split('\t').collect();
     assert_eq!(
         cols,
-        vec!["assay_id", "gene_symbol", "run_001", "run_002", "run_003", "run_004"],
+        vec![
+            "assay_id",
+            "gene_symbol",
+            "run_001",
+            "run_002",
+            "run_003",
+            "run_004"
+        ],
         "wide output must use sample_id columns, not subject_id"
     );
 }

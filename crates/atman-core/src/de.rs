@@ -990,10 +990,7 @@ pub fn omnibus_f_test(
         return None;
     }
     let p = beta.len();
-    if design[0].len() != p
-        || !sigma2.is_finite()
-        || sigma2 <= 0.0
-        || !(df.is_finite() && df > 0.0)
+    if design[0].len() != p || !sigma2.is_finite() || sigma2 <= 0.0 || !(df.is_finite() && df > 0.0)
     {
         return None;
     }
@@ -1243,7 +1240,11 @@ mod tests {
         let omni = omnibus_f_test(&design, &fit.beta, &[1, 2], fit.sigma2, fit.df).unwrap();
         assert_eq!(omni.df_num, 2);
         assert_eq!(omni.df_den, 27.0); // n - p = 30 - 3
-        assert!(omni.p_value > 0.05, "expected null F p>0.05, got {}", omni.p_value);
+        assert!(
+            omni.p_value > 0.05,
+            "expected null F p>0.05, got {}",
+            omni.p_value
+        );
     }
 
     #[test]
@@ -1270,8 +1271,16 @@ mod tests {
             _ => panic!(),
         };
         let omni = omnibus_f_test(&design, &fit.beta, &[1, 2], fit.sigma2, fit.df).unwrap();
-        assert!(omni.f_statistic > 10.0, "expected F>10, got {}", omni.f_statistic);
-        assert!(omni.p_value < 0.001, "expected p<0.001, got {}", omni.p_value);
+        assert!(
+            omni.f_statistic > 10.0,
+            "expected F>10, got {}",
+            omni.f_statistic
+        );
+        assert!(
+            omni.p_value < 0.001,
+            "expected p<0.001, got {}",
+            omni.p_value
+        );
     }
 
     #[test]

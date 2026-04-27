@@ -121,7 +121,14 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
     let mut rows: Vec<ToolRunResult> = Vec::new();
     for tool in &tools {
         let result = if tool == "atman" {
-            run_atman_native(&abundance, k, args.seed, args.max_iter, args.tol, &protein_labels)
+            run_atman_native(
+                &abundance,
+                k,
+                args.seed,
+                args.max_iter,
+                args.tol,
+                &protein_labels,
+            )
         } else {
             let adapters_dir = match &args.adapters_dir {
                 Some(d) => d.clone(),
@@ -207,8 +214,7 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
     }
 
     if let Some(parent) = args.output.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {:?}", parent))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("creating {:?}", parent))?;
     }
     write_bench_results(&args.output, &result_rows)?;
     eprintln!(
@@ -246,7 +252,7 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("bench decompose: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -353,8 +359,8 @@ fn run_external_adapter(
 
 fn read_planted_loadings(fixture: &Path) -> Result<(Vec<String>, Vec<Vec<f64>>)> {
     let path = fixture.join("planted_loadings.tsv");
-    let (proteins, loadings) = read_recovered_loadings(&path)
-        .with_context(|| format!("reading {:?}", path))?;
+    let (proteins, loadings) =
+        read_recovered_loadings(&path).with_context(|| format!("reading {:?}", path))?;
     if loadings.is_empty() {
         bail!("planted_loadings.tsv has no archetypes");
     }
@@ -476,7 +482,13 @@ fn write_bench_results(path: &Path, rows: &[BenchRow]) -> Result<()> {
          tool_not_available\tunavailable_reason\n",
     );
     for r in rows {
-        let fmt_f = |v: f64| if v.is_finite() { format!("{v:.6}") } else { "NA".into() };
+        let fmt_f = |v: f64| {
+            if v.is_finite() {
+                format!("{v:.6}")
+            } else {
+                "NA".into()
+            }
+        };
         buf.push_str(&format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             r.tool,

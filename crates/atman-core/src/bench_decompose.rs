@@ -53,14 +53,15 @@ pub fn score_against_planted(
     let mut sim = vec![vec![0.0_f64; k_recovered]; k_planted];
     for i in 0..k_planted {
         for j in 0..k_recovered {
-            let c = stats::cosine(&planted[i], &recovered[j]).unwrap_or(0.0).abs();
+            let c = stats::cosine(&planted[i], &recovered[j])
+                .unwrap_or(0.0)
+                .abs();
             sim[i][j] = c;
         }
     }
     // Reciprocal-best: for each planted i, best j maximizes sim[i][.];
     // valid if that j's own argmax over i also returns i.
-    let best_for_planted: Vec<Option<usize>> =
-        (0..k_planted).map(|i| argmax(&sim[i])).collect();
+    let best_for_planted: Vec<Option<usize>> = (0..k_planted).map(|i| argmax(&sim[i])).collect();
     let best_for_recovered: Vec<Option<usize>> = (0..k_recovered)
         .map(|j| argmax_col(&sim, j, k_planted))
         .collect();
@@ -147,11 +148,7 @@ fn top_n_abs_set(values: &[f64], top_n: usize) -> std::collections::BTreeSet<usi
         .map(|(i, v)| (i, v.abs()))
         .collect();
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-    ranked
-        .into_iter()
-        .take(top_n)
-        .map(|(i, _)| i)
-        .collect()
+    ranked.into_iter().take(top_n).map(|(i, _)| i).collect()
 }
 
 #[cfg(test)]

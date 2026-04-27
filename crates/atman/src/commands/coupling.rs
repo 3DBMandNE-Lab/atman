@@ -8,9 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::io::{
-    atomic_write, hash_labeled_inputs, need_col, sidecar_path_for, write_run_sidecar,
-};
+use crate::io::{atomic_write, hash_labeled_inputs, need_col, sidecar_path_for, write_run_sidecar};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -134,7 +132,7 @@ pub fn run(args: Args) -> Result<()> {
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("coupling: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -373,4 +371,3 @@ impl Sign {
         }
     }
 }
-

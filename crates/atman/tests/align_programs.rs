@@ -102,14 +102,10 @@ fn align_programs_builds_multi_cohort_archetypes() {
         .skip(1)
         .map(|l| l.split('\t').collect())
         .collect();
-    let universal_rows: Vec<_> = data_rows
-        .iter()
-        .filter(|row| row[5] == "3")
-        .collect();
+    let universal_rows: Vec<_> = data_rows.iter().filter(|row| row[5] == "3").collect();
     // The three astro programs must land in one archetype spanning all 3 cohorts.
     assert_eq!(universal_rows.len(), 3);
-    let cohorts: std::collections::BTreeSet<&str> =
-        universal_rows.iter().map(|r| r[1]).collect();
+    let cohorts: std::collections::BTreeSet<&str> = universal_rows.iter().map(|r| r[1]).collect();
     assert_eq!(cohorts.len(), 3);
 }
 
@@ -159,11 +155,7 @@ fn align_programs_sweep_produces_grid() {
             cohort_b.to_str().unwrap()
         ),
         "--annotations",
-        &format!(
-            "{},{}",
-            ann_a.to_str().unwrap(),
-            ann_b.to_str().unwrap()
-        ),
+        &format!("{},{}", ann_a.to_str().unwrap(), ann_b.to_str().unwrap()),
         "--cohorts",
         "A,B",
         "--sweep",

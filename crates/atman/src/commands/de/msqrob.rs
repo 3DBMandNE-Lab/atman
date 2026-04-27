@@ -12,9 +12,7 @@ use atman_core::Sample;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::Args;
-use crate::io::{
-    read_peptide_measurements, read_peptides, DeReportRow, DeResultRow,
-};
+use crate::io::{read_peptide_measurements, read_peptides, DeReportRow, DeResultRow};
 
 /// Dispatch for `--test msqrob`. One ridge-regularized linear mixed
 /// model per protein, fit over its peptide-level observations in the
@@ -416,7 +414,15 @@ fn msqrob_raw_group_means(y: &[f64], design: &[Vec<f64>]) -> (f64, f64) {
             n_b += 1;
         }
     }
-    let mean_a = if n_a > 0 { sum_a / n_a as f64 } else { f64::NAN };
-    let mean_b = if n_b > 0 { sum_b / n_b as f64 } else { f64::NAN };
+    let mean_a = if n_a > 0 {
+        sum_a / n_a as f64
+    } else {
+        f64::NAN
+    };
+    let mean_b = if n_b > 0 {
+        sum_b / n_b as f64
+    } else {
+        f64::NAN
+    };
     (mean_a, mean_b)
 }

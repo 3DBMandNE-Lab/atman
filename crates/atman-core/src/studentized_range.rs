@@ -136,9 +136,8 @@ fn sqrt_chi_density(s: f64, df: f64) -> f64 {
     // log f_S(s) = log 2 + (df/2) log(df/2) − lnΓ(df/2) + (df−1) log s
     //             − (df · s² / 2)
     let half = 0.5 * df;
-    let log_density = 2.0_f64.ln() + half * half.ln() - ln_gamma(half)
-        + (df - 1.0) * s.ln()
-        - half * s * s;
+    let log_density =
+        2.0_f64.ln() + half * half.ln() - ln_gamma(half) + (df - 1.0) * s.ln() - half * s * s;
     log_density.exp()
 }
 
@@ -232,7 +231,9 @@ mod tests {
         // Gauss-Legendre of order n exactly integrates polynomials
         // of degree up to 2n-1. Check: ∫_{-1}^{1} x^4 dx = 2/5.
         let (nodes, weights) = gauss_legendre(8);
-        let integral: f64 = nodes.iter().zip(weights.iter())
+        let integral: f64 = nodes
+            .iter()
+            .zip(weights.iter())
             .map(|(x, w)| x.powi(4) * w)
             .sum();
         assert!((integral - 2.0 / 5.0).abs() < 1e-12);

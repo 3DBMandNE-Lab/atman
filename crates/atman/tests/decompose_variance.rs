@@ -20,12 +20,15 @@ fn run_atman(args: &[&str]) -> Output {
     Command::new(bin).args(args).output().expect("run atman")
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<std::collections::HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -96,9 +99,7 @@ fn write_variance_fixture(dir: &Path) {
                 }
                 _ => 0.0,
             };
-            act.push_str(&format!(
-                "bench\t{sid}\t{sid}\t{program}\t{value:.6}\n"
-            ));
+            act.push_str(&format!("bench\t{sid}\t{sid}\t{program}\t{value:.6}\n"));
         }
     }
     std::fs::write(dir.join("activations.tsv"), act).unwrap();
@@ -165,7 +166,10 @@ fn decompose_variance_attributes_variance_to_planted_factor() {
         f_cohort > f_condition,
         "cohort_confounded: F_cohort={f_cohort}, F_condition={f_condition}"
     );
-    assert!(p_cohort < 0.01, "cohort_confounded p_cohort {p_cohort} ≥ 0.01");
+    assert!(
+        p_cohort < 0.01,
+        "cohort_confounded p_cohort {p_cohort} ≥ 0.01"
+    );
     assert!(
         p_condition > 0.05,
         "cohort_confounded p_condition {p_condition} < 0.05"

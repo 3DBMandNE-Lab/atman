@@ -150,10 +150,7 @@ pub fn combine_stouffer(p_values: &[f64]) -> Option<f64> {
 /// `n_significant` is the count of methods whose per-method BH-q was
 /// below `thresholds.q_threshold`. It is informational only, not a
 /// grade determinant in the current design.
-pub fn aggregate_per_protein(
-    inputs: &[EnsembleInput],
-    thresholds: GradeThresholds,
-) -> EnsembleRow {
+pub fn aggregate_per_protein(inputs: &[EnsembleInput], thresholds: GradeThresholds) -> EnsembleRow {
     let mut applied_p: Vec<f64> = Vec::new();
     let mut applied_signs: Vec<f64> = Vec::new();
     let mut applied_methods: Vec<String> = Vec::new();
@@ -187,11 +184,7 @@ pub fn aggregate_per_protein(
     }
     let pos = applied_signs.iter().filter(|s| **s > 0.0).count();
     let neg = applied_signs.iter().filter(|s| **s < 0.0).count();
-    let (majority_sign, n_sign_consistent) = if pos >= neg {
-        (1.0, pos)
-    } else {
-        (-1.0, neg)
-    };
+    let (majority_sign, n_sign_consistent) = if pos >= neg { (1.0, pos) } else { (-1.0, neg) };
     let ensemble_p = combine_stouffer(&applied_p);
     EnsembleRow {
         n_applied,
@@ -292,10 +285,7 @@ mod tests {
     #[test]
     fn assign_grade_validated_requires_significant_ensemble_q_and_full_sign() {
         let t = GradeThresholds::default();
-        assert_eq!(
-            assign_grade(Some(1e-4), 4, 4, t),
-            EnsembleGrade::Validated
-        );
+        assert_eq!(assign_grade(Some(1e-4), 4, 4, t), EnsembleGrade::Validated);
     }
 
     #[test]
@@ -318,10 +308,7 @@ mod tests {
             EnsembleGrade::Insufficient
         );
         // Missing ensemble_q.
-        assert_eq!(
-            assign_grade(None, 4, 4, t),
-            EnsembleGrade::Insufficient
-        );
+        assert_eq!(assign_grade(None, 4, 4, t), EnsembleGrade::Insufficient);
         // No applicable methods.
         assert_eq!(
             assign_grade(Some(1e-4), 0, 0, t),

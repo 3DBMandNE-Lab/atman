@@ -214,8 +214,12 @@ fn reinvoke_string(command: &str, args: &Value) -> String {
             match v {
                 Value::Null => continue,
                 Value::Bool(b) => {
-                    parts.push(flag);
-                    parts.push(b.to_string());
+                    if bool_arg_requires_value(command, k) {
+                        parts.push(flag);
+                        parts.push(b.to_string());
+                    } else if *b {
+                        parts.push(flag);
+                    }
                 }
                 Value::Number(n) => {
                     parts.push(flag);
@@ -233,6 +237,10 @@ fn reinvoke_string(command: &str, args: &Value) -> String {
         }
     }
     parts.join(" ")
+}
+
+fn bool_arg_requires_value(command: &str, key: &str) -> bool {
+    matches!((command, key), ("de", "trend") | ("de", "robust"))
 }
 
 /// POSIX single-quote escaping sufficient for pasting into sh / bash / zsh.
@@ -378,7 +386,8 @@ mod tests {
         assert!(reinvoke.starts_with("atman decompose ica"));
         assert!(reinvoke.contains("--k 2"));
         assert!(reinvoke.contains("--seed 20260418"));
-        assert!(reinvoke.contains("--robust true"));
+        assert!(reinvoke.contains("--robust"));
+        assert!(!reinvoke.contains("--robust true"));
         // `tol` was null — should be skipped in reinvoke
         assert!(!reinvoke.contains("--tol"));
 
@@ -456,5 +465,31 @@ mod tests {
         // Values with commas/dashes that don't need quoting stay bare
         assert!(s.contains("--groups A-B,C-D"));
         assert!(s.contains("--min-pairs 5"));
+    }
+
+    #[test]
+    fn reinvoke_uses_presence_flags_for_standard_bool_args() {
+        let s = reinvoke_string(
+            "enrich gprofiler",
+            &json!({
+                "offline": true,
+                "cache-dir": "/tmp/cache",
+            }),
+        );
+        assert!(s.contains("--offline"));
+        assert!(!s.contains("--offline true"));
+    }
+
+    #[test]
+    fn reinvoke_preserves_explicit_bool_values_for_set_args() {
+        let s = reinvoke_string(
+            "de",
+            &json!({
+                "trend": false,
+                "robust": true,
+            }),
+        );
+        assert!(s.contains("--trend false"));
+        assert!(s.contains("--robust true"));
     }
 }

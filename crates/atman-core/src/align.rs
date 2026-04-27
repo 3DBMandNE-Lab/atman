@@ -91,12 +91,8 @@ pub fn pairwise_edges(
             sim[i][j] = similarity(&a.values, &b.values, metric, top_n);
         }
     }
-    let best_a: Vec<Option<usize>> = (0..a_programs.len())
-        .map(|i| argmax(&sim[i]))
-        .collect();
-    let best_b: Vec<Option<usize>> = (0..b_programs.len())
-        .map(|j| argmax_col(&sim, j))
-        .collect();
+    let best_a: Vec<Option<usize>> = (0..a_programs.len()).map(|i| argmax(&sim[i])).collect();
+    let best_b: Vec<Option<usize>> = (0..b_programs.len()).map(|j| argmax_col(&sim, j)).collect();
     let mut edges = Vec::new();
     for i in 0..a_programs.len() {
         if let Some(j) = best_a[i] {
@@ -207,10 +203,7 @@ pub fn build_archetypes(
                 category_constraint,
             );
             for e in edges {
-                edges_global.push((
-                    indices_a[e.program_a_index],
-                    indices_b[e.program_b_index],
-                ));
+                edges_global.push((indices_a[e.program_a_index], indices_b[e.program_b_index]));
             }
         }
     }
@@ -311,10 +304,26 @@ mod tests {
         let a_refs = vec![&a1, &a2];
         let b_refs = vec![&b1];
         // Without reciprocal-best, both p1 and p2 match q1 (their best).
-        let loose = pairwise_edges(&a_refs, &b_refs, AlignMetric::Cosine, labels, 0.0, false, false);
+        let loose = pairwise_edges(
+            &a_refs,
+            &b_refs,
+            AlignMetric::Cosine,
+            labels,
+            0.0,
+            false,
+            false,
+        );
         assert_eq!(loose.len(), 2);
         // With reciprocal-best, only p1 (q1's best) is kept.
-        let strict = pairwise_edges(&a_refs, &b_refs, AlignMetric::Cosine, labels, 0.0, true, false);
+        let strict = pairwise_edges(
+            &a_refs,
+            &b_refs,
+            AlignMetric::Cosine,
+            labels,
+            0.0,
+            true,
+            false,
+        );
         assert_eq!(strict.len(), 1);
         assert_eq!(strict[0].program_a_index, 0);
     }

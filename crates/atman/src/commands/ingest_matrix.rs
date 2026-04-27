@@ -150,7 +150,6 @@ pub struct Args {
     /// `--normalize none` appears to be applied to un-normalized data.
     #[arg(long, default_value_t = false)]
     skip_normalization_check: bool,
-
 }
 
 #[derive(Debug)]

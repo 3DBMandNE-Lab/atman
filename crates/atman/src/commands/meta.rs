@@ -8,9 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::io::{
-    atomic_write, hash_labeled_inputs, need_col, sidecar_path_for, write_run_sidecar,
-};
+use crate::io::{atomic_write, hash_labeled_inputs, need_col, sidecar_path_for, write_run_sidecar};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -183,7 +181,7 @@ fn write_meta_sidecar(
         started_at,
         finished_at,
         None,
-)?;
+    )?;
     eprintln!("meta: sidecar={}", sidecar.display());
     Ok(())
 }
@@ -510,7 +508,6 @@ fn parse_f64(input: &str) -> Option<f64> {
     let value = input.parse::<f64>().ok()?;
     value.is_finite().then_some(value)
 }
-
 
 fn write_rows(path: &Path, rows: &[MetaRow]) -> Result<()> {
     let mut out = String::from(

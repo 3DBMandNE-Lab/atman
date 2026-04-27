@@ -20,12 +20,15 @@ fn run_atman(args: &[&str]) -> Output {
     Command::new(bin).args(args).output().expect("run atman")
 }
 
-fn parse_tsv(
-    path: &Path,
-) -> (Vec<String>, Vec<HashMap<String, String>>) {
+fn parse_tsv(path: &Path) -> (Vec<String>, Vec<HashMap<String, String>>) {
     let text = std::fs::read_to_string(path).unwrap();
     let mut lines = text.lines();
-    let header: Vec<String> = lines.next().unwrap().split('\t').map(String::from).collect();
+    let header: Vec<String> = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .map(String::from)
+        .collect();
     let rows = lines
         .map(|line| {
             header
@@ -125,12 +128,18 @@ fn bench_decompose_atman_recovers_planted_archetypes() {
     write_fixture(&fixture);
 
     let status = run_atman(&[
-        "bench", "decompose",
-        "--fixture", fixture.to_str().unwrap(),
-        "--tools", "atman",
-        "--seed", "20260420",
-        "--top-n", "10",
-        "--output", output.to_str().unwrap(),
+        "bench",
+        "decompose",
+        "--fixture",
+        fixture.to_str().unwrap(),
+        "--tools",
+        "atman",
+        "--seed",
+        "20260420",
+        "--top-n",
+        "10",
+        "--output",
+        output.to_str().unwrap(),
     ]);
     assert!(
         status.status.success(),
@@ -153,7 +162,11 @@ fn bench_decompose_atman_recovers_planted_archetypes() {
         .iter()
         .filter(|r| r.get("tool").map(|t| t == "atman").unwrap_or(false))
         .collect();
-    assert_eq!(atman_rows.len(), 2, "expected one row per planted archetype");
+    assert_eq!(
+        atman_rows.len(),
+        2,
+        "expected one row per planted archetype"
+    );
     for r in &atman_rows {
         let corr: f64 = r["archetype_correlation"].parse().unwrap();
         let jacc: f64 = r["recovery_jaccard"].parse().unwrap();
@@ -166,7 +179,6 @@ fn bench_decompose_atman_recovers_planted_archetypes() {
         assert!(
             jacc >= 0.6,
             "atman top-10 jaccard should be ≥ 0.6; got {jacc}",
-
         );
         assert!(
             (det - 1.0).abs() < 1e-12,
@@ -183,12 +195,18 @@ fn bench_decompose_missing_adapter_emits_tool_not_available() {
     write_fixture(&fixture);
 
     let status = run_atman(&[
-        "bench", "decompose",
-        "--fixture", fixture.to_str().unwrap(),
-        "--tools", "atman,nonexistent-tool",
-        "--seed", "20260420",
-        "--top-n", "10",
-        "--output", output.to_str().unwrap(),
+        "bench",
+        "decompose",
+        "--fixture",
+        fixture.to_str().unwrap(),
+        "--tools",
+        "atman,nonexistent-tool",
+        "--seed",
+        "20260420",
+        "--top-n",
+        "10",
+        "--output",
+        output.to_str().unwrap(),
     ]);
     assert!(status.status.success());
     let (_, rows) = parse_tsv(&output);
@@ -200,7 +218,11 @@ fn bench_decompose_missing_adapter_emits_tool_not_available() {
                 .unwrap_or(false)
         })
         .collect();
-    assert_eq!(nonexistent.len(), 1, "expected one row for the missing tool");
+    assert_eq!(
+        nonexistent.len(),
+        1,
+        "expected one row for the missing tool"
+    );
     let flag: u8 = nonexistent[0]["tool_not_available"].parse().unwrap();
     assert_eq!(flag, 1);
     assert!(!nonexistent[0]["unavailable_reason"].is_empty());

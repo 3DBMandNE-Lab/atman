@@ -87,21 +87,14 @@ fn sqrt_chi_density(s: f64, df: f64) -> f64 {
         return 0.0;
     }
     let half = 0.5 * df;
-    let log_density = 2.0_f64.ln() + half * half.ln() - ln_gamma(half)
-        + (df - 1.0) * s.ln()
-        - half * s * s;
+    let log_density =
+        2.0_f64.ln() + half * half.ln() - ln_gamma(half) + (df - 1.0) * s.ln() - half * s * s;
     log_density.exp()
 }
 
 /// Inner integrand over `w` given `q·s`. Maps `w ∈ R` onto the unit
 /// interval via `w = Φ⁻¹(u)` so the integration domain is finite.
-fn inner_h_m_two_sided(
-    qs: f64,
-    m: usize,
-    rho: f64,
-    nodes: &[f64],
-    weights: &[f64],
-) -> f64 {
+fn inner_h_m_two_sided(qs: f64, m: usize, rho: f64, nodes: &[f64], weights: &[f64]) -> f64 {
     if m == 0 {
         return 1.0;
     }
@@ -148,8 +141,7 @@ pub fn pdunnett(q: f64, m: usize, df: f64, rho: f64) -> f64 {
     }
     let (inner_nodes, inner_weights) = gauss_legendre(N_NODES_INNER);
     if !df.is_finite() || df >= 1e8 {
-        return inner_h_m_two_sided(q, m, rho, &inner_nodes, &inner_weights)
-            .clamp(0.0, 1.0);
+        return inner_h_m_two_sided(q, m, rho, &inner_nodes, &inner_weights).clamp(0.0, 1.0);
     }
     if df <= 0.0 {
         return f64::NAN;
@@ -210,7 +202,11 @@ impl McRng {
         McRng(out[0], out[1], out[2], out[3])
     }
     fn next_u64(&mut self) -> u64 {
-        let result = self.0.wrapping_add(self.3).rotate_left(23).wrapping_add(self.0);
+        let result = self
+            .0
+            .wrapping_add(self.3)
+            .rotate_left(23)
+            .wrapping_add(self.0);
         let t = self.1 << 17;
         self.2 ^= self.0;
         self.3 ^= self.1;
@@ -246,13 +242,7 @@ impl McRng {
 /// 50 000 is a typical default. `df` accepts fractional values but
 /// the chi² sampler uses `⌈df⌉` standard-normal-squared draws — fine
 /// for the small-to-moderate df regime Dunnett-Hsu targets.
-pub fn pdunnett_hsu(
-    q: f64,
-    df: f64,
-    correlation: &[Vec<f64>],
-    n_mc: usize,
-    seed: u64,
-) -> f64 {
+pub fn pdunnett_hsu(q: f64, df: f64, correlation: &[Vec<f64>], n_mc: usize, seed: u64) -> f64 {
     let m = correlation.len();
     if m == 0 || n_mc == 0 {
         return 1.0;
@@ -302,10 +292,7 @@ pub fn pdunnett_hsu(
 /// `ρ_{ij} = sqrt(n_i n_j / ((n_0 + n_i)(n_0 + n_j)))` for `i ≠ j`.
 /// `n_control` is the size of the reference group; `n_treatments`
 /// are the sizes of the `m` non-control groups in display order.
-pub fn dunnett_hsu_correlation_matrix(
-    n_control: usize,
-    n_treatments: &[usize],
-) -> Vec<Vec<f64>> {
+pub fn dunnett_hsu_correlation_matrix(n_control: usize, n_treatments: &[usize]) -> Vec<Vec<f64>> {
     let m = n_treatments.len();
     let mut r = vec![vec![0.0_f64; m]; m];
     for i in 0..m {
@@ -475,7 +462,8 @@ mod tests {
         assert!(
             (mc - eq).abs() > 1e-3,
             "strongly unbalanced Hsu should drift from equicorrelated; got {} vs {}",
-            mc, eq
+            mc,
+            eq
         );
     }
 

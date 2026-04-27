@@ -370,13 +370,7 @@ pub fn fast_ica(x: &[Vec<f64>], k: usize, seed: u64, max_iter: usize, tol: f64) 
         .map(|uw_row| {
             weights
                 .iter()
-                .map(|w_row| {
-                    uw_row
-                        .iter()
-                        .zip(w_row.iter())
-                        .map(|(&u, &v)| u * v)
-                        .sum()
-                })
+                .map(|w_row| uw_row.iter().zip(w_row.iter()).map(|(&u, &v)| u * v).sum())
                 .collect()
         })
         .collect();
@@ -533,12 +527,8 @@ pub fn canonicalize_ica(result: &IcaResult) -> CanonicalIca {
         .collect();
     let mut order: Vec<usize> = (0..k).collect();
     order.sort_by(|&a, &b| {
-        let ma = loadings[a]
-            .iter()
-            .fold(0.0_f64, |acc, v| acc.max(v.abs()));
-        let mb = loadings[b]
-            .iter()
-            .fold(0.0_f64, |acc, v| acc.max(v.abs()));
+        let ma = loadings[a].iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
+        let mb = loadings[b].iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
         mb.partial_cmp(&ma).unwrap_or(std::cmp::Ordering::Equal)
     });
     let ordered_loadings: Vec<Vec<f64>> = order.iter().map(|&i| loadings[i].clone()).collect();

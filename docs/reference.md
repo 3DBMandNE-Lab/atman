@@ -146,6 +146,10 @@ the adapter target for any proteomics source:
 Downstream commands operate on these files, so each stage can be inspected,
 rerun, or replaced independently.
 
+Canonical TSV readers are header-indexed rather than position-indexed.
+Required columns must be present, but column order may vary and extra
+columns may be appended without changing downstream behavior.
+
 ## Run Sidecars
 
 Every analysis subcommand that writes output files also writes a
@@ -155,12 +159,17 @@ following fields:
 
 | Field | Type | Meaning |
 |---|---|---|
+| `schema_version` | integer | Sidecar schema version. Current value is `1`. |
+| `run_uuid` | string | Per-invocation UUID. |
 | `command` | string | The atman subcommand that was run (e.g. `"decompose ica"`, `"de"`). |
+| `reinvoke` | string | Best-effort paste-and-run reconstruction of the CLI invocation. |
 | `args` | object | Fully-resolved argument dict, defaults included, kebab-case keys matching the CLI flag names. |
 | `atman_version` | string | `CARGO_PKG_VERSION` at build time. |
 | `atman_git_sha` | string | Git SHA at build time (set via `build.rs`; empty when built outside a git checkout). |
+| `build_env` | object | Build-time `rustc` version, `Cargo.lock` hash, profile, and target triple. |
+| `cwd_at_start` | string | Working directory at invocation start. |
 | `os_arch` | string | Build-time Rust target triple (e.g. `aarch64-apple-darwin`). |
-| `input_dir_sha256` | string | SHA-256 over a sorted `basename\tsha256(contents)` roll-up of the canonical input TSVs the command actually read. Missing files are skipped. See note below on the planned per-file replacement. |
+| `inputs_sha256` | object | Per-input SHA-256 dict: `{<label>: "sha256:<hex>"}`. Missing optional inputs are omitted, not hashed as sentinel values. |
 | `output_files` | object | `{<output_path>: "sha256:<hex>"}` for every artifact written, excluding the sidecar itself. |
 | `started_at` | string | ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`) at the start of the invocation. |
 | `finished_at` | string | Same, at end of invocation. |
@@ -172,6 +181,12 @@ Commands that write a sidecar: `ingest-matrix`, `validate` (when
 `null`, `enrich gprofiler`, `de`, `bootstrap protein`,
 `bootstrap module`, `bootstrap program`, `meta`, and `ratio`. The
 plan-level `atman run` manifest covers its own provenance independently.
+
+`reinvoke` is a convenience field, not the source of truth. The canonical
+replay data is the `args` object. Standard presence flags are rendered as
+bare flags such as `--offline`, while explicit bool-valued options that take
+a value are rendered with `true` or `false`, for example
+`de --trend false --robust true`.
 
 ### Reproducing a single seed
 

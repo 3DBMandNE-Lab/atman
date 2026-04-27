@@ -72,9 +72,8 @@ pub fn run(args: Args) -> Result<()> {
         bail!("plan {:?} has no stages", args.plan);
     }
     let plan_hash = sha256_hex(plan_text.as_bytes());
-    std::fs::create_dir_all(&args.output_dir).with_context(|| {
-        format!("creating output dir {:?}", args.output_dir)
-    })?;
+    std::fs::create_dir_all(&args.output_dir)
+        .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
     let manifest_path = args.output_dir.join("plan_manifest.tsv");
     if manifest_path.exists() && !args.allow_drift {
@@ -108,7 +107,10 @@ pub fn run(args: Args) -> Result<()> {
         manifest_path.display()
     );
     if aborted {
-        bail!("one or more stages failed; manifest written to {:?}", manifest_path);
+        bail!(
+            "one or more stages failed; manifest written to {:?}",
+            manifest_path
+        );
     }
     Ok(())
 }
@@ -119,13 +121,14 @@ fn parse_plan(text: &str, path: &Path) -> Result<Plan> {
         .and_then(|os| os.to_str())
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
-    let plan: Plan = match ext.as_str() {
-        "json" => serde_json::from_str(text)
-            .with_context(|| format!("parsing JSON plan {:?}", path))?,
-        "yaml" | "yml" | "" => serde_yaml::from_str(text)
-            .with_context(|| format!("parsing YAML plan {:?}", path))?,
-        other => bail!("unsupported plan extension {:?}", other),
-    };
+    let plan: Plan =
+        match ext.as_str() {
+            "json" => serde_json::from_str(text)
+                .with_context(|| format!("parsing JSON plan {:?}", path))?,
+            "yaml" | "yml" | "" => serde_yaml::from_str(text)
+                .with_context(|| format!("parsing YAML plan {:?}", path))?,
+            other => bail!("unsupported plan extension {:?}", other),
+        };
     let mut seen = std::collections::BTreeSet::new();
     for stage in &plan.stages {
         if !seen.insert(stage.id.clone()) {
@@ -151,12 +154,7 @@ struct ManifestRow {
     started_at_unix_s: u64,
 }
 
-fn execute_stage(
-    stage: &Stage,
-    cwd: &Path,
-    plan: &Plan,
-    plan_hash: &str,
-) -> Result<ManifestRow> {
+fn execute_stage(stage: &Stage, cwd: &Path, plan: &Plan, plan_hash: &str) -> Result<ManifestRow> {
     let input_hash = hash_paths(cwd, &stage.inputs);
     let start = Instant::now();
     let started_at = std::time::SystemTime::now()
@@ -229,7 +227,11 @@ fn hash_file_or_missing(path: &Path) -> String {
     }
 }
 
-fn check_manifest_consistency(manifest_path: &Path, new_plan_hash: &str, plan: &Plan) -> Result<()> {
+fn check_manifest_consistency(
+    manifest_path: &Path,
+    new_plan_hash: &str,
+    plan: &Plan,
+) -> Result<()> {
     let existing = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("reading existing manifest {:?}", manifest_path))?;
     let mut previous: Option<(String, String)> = None;
@@ -280,7 +282,6 @@ fn write_manifest(path: &Path, rows: &[ManifestRow]) -> Result<()> {
     atomic_write(path, out.as_bytes())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,14 +328,8 @@ stages:
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a"), "one").unwrap();
         std::fs::write(tmp.path().join("b"), "two").unwrap();
-        let h1 = hash_paths(
-            tmp.path(),
-            &["a".to_string(), "b".to_string()],
-        );
-        let h2 = hash_paths(
-            tmp.path(),
-            &["b".to_string(), "a".to_string()],
-        );
+        let h1 = hash_paths(tmp.path(), &["a".to_string(), "b".to_string()]);
+        let h2 = hash_paths(tmp.path(), &["b".to_string(), "a".to_string()]);
         assert_eq!(h1, h2);
     }
 }

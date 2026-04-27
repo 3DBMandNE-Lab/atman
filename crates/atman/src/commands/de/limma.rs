@@ -122,8 +122,7 @@ pub(super) fn run_limma(
         let mut features: Vec<(String, String, String, Vec<String>)> = Vec::new();
         for (panel, gene) in &measured_features {
             let has_any = sample_ids.iter().any(|sid| {
-                cells_by_sample
-                    .contains_key(&(panel.clone(), gene.clone(), sid.clone()))
+                cells_by_sample.contains_key(&(panel.clone(), gene.clone(), sid.clone()))
             });
             if !has_any {
                 continue;
@@ -182,7 +181,8 @@ pub(super) fn run_limma(
         // 1)` (DEqMS, Zhu et al. 2020). The peptide→parent mapping
         // comes from the ingested `peptides.tsv`; features without
         // peptide records get count 0.
-        let peptide_counts: Option<Vec<u32>> = if let Some(counts_map) = peptides_per_assay.as_ref() {
+        let peptide_counts: Option<Vec<u32>> = if let Some(counts_map) = peptides_per_assay.as_ref()
+        {
             let mut per_feature = Vec::with_capacity(features.len());
             for (_, _, assay_id, _) in &features {
                 let c = counts_map.get(assay_id).copied().unwrap_or(0);
@@ -287,8 +287,7 @@ pub(super) fn run_limma(
         // vectors plus back-index so we can splice adjusted q-values
         // back onto each feature's row.
         let n_features = features.len();
-        let panel_by_feature: Vec<String> =
-            features.iter().map(|(p, _, _, _)| p.clone()).collect();
+        let panel_by_feature: Vec<String> = features.iter().map(|(p, _, _, _)| p.clone()).collect();
         let mut p_by_panel: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
         let mut panel_positions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (i, panel) in panel_by_feature.iter().enumerate() {
@@ -364,9 +363,7 @@ pub(super) fn run_limma(
                 let e = row.effects[0];
                 let s = row.ses[0];
                 let (cl, ch) = match t_crit {
-                    Some(c) if s.is_finite() && c.is_finite() => {
-                        (Some(e - c * s), Some(e + c * s))
-                    }
+                    Some(c) if s.is_finite() && c.is_finite() => (Some(e - c * s), Some(e + c * s)),
                     _ => (None, None),
                 };
                 (Some(e), cl, ch)
