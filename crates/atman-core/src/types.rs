@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 /// A proteomics platform identifier. The current CLI adapter supports
 /// `OlinkExploreNgs`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Platform {
     OlinkExploreNgs,
@@ -15,10 +15,21 @@ pub enum Platform {
     MaxQuantTmt,
     DiannReport,
     SpectronautReport,
+    /// Any platform identifier not in atman's well-known list. Adapters
+    /// declare their own platform string (e.g. `"cptac_tmt_proteome"`,
+    /// `"thermo_proteome_discoverer"`); atman accepts and round-trips it
+    /// without requiring a recompile to add the platform. The well-known
+    /// variants exist only because some platforms (Olink NPX QC, MaxQuant
+    /// LFQ matrix shape, etc.) have platform-specific code paths
+    /// elsewhere; everything else is `Custom`.
+    Custom(String),
 }
 
 impl Platform {
-    pub fn as_str(&self) -> &'static str {
+    /// Render the platform as it appears in the canonical TSV `platform`
+    /// column. Returns an owned string because `Custom(String)` cannot be
+    /// borrowed as `&'static str`.
+    pub fn as_str(&self) -> &str {
         match self {
             Self::OlinkExploreNgs => "olink_explore_ngs",
             Self::OlinkTargetQpcr => "olink_target_qpcr",
@@ -27,6 +38,7 @@ impl Platform {
             Self::MaxQuantTmt => "maxquant_tmt",
             Self::DiannReport => "diann_report",
             Self::SpectronautReport => "spectronaut_report",
+            Self::Custom(s) => s.as_str(),
         }
     }
 }
@@ -35,7 +47,11 @@ impl FromStr for Platform {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_ascii_lowercase().as_str() {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err("empty platform string".to_string());
+        }
+        match trimmed.to_ascii_lowercase().as_str() {
             "olink_explore_ngs" | "olink-explore-ngs" => Ok(Self::OlinkExploreNgs),
             "olink_target_qpcr" | "olink-target-qpcr" => Ok(Self::OlinkTargetQpcr),
             "somascan" | "soma_scan" => Ok(Self::SomaScan),
@@ -47,7 +63,10 @@ impl FromStr for Platform {
             "spectronaut_report" | "spectronaut-report" | "spectronaut_dia" => {
                 Ok(Self::SpectronautReport)
             }
-            other => Err(format!("unsupported platform {other:?}")),
+            // Anything else is accepted as a custom platform; the canonical
+            // form preserves the operator's exact lowercased string so
+            // round-trips through `as_str()` are stable.
+            _ => Ok(Self::Custom(trimmed.to_ascii_lowercase())),
         }
     }
 }
@@ -226,11 +245,37 @@ mod tests {
             Platform::MaxQuantTmt,
             Platform::DiannReport,
             Platform::SpectronautReport,
+            Platform::Custom("cptac_tmt_proteome".to_string()),
+            Platform::Custom("thermo_proteome_discoverer".to_string()),
         ] {
-            let s = variant.as_str();
+            let s = variant.as_str().to_string();
             let parsed: Platform = s.parse().expect("canonical string parses back");
             assert_eq!(variant, parsed, "round-trip for {s}");
         }
+    }
+
+    #[test]
+    fn unknown_platform_lands_in_custom_variant_without_recompile() {
+        // Adapters declare their own platform string; atman accepts any
+        // non-empty identifier without requiring it to be in the well-known
+        // list. This is the extensibility seam — no recompile to add a
+        // new platform.
+        let parsed: Platform = "totally_made_up_platform".parse().unwrap();
+        assert_eq!(
+            parsed,
+            Platform::Custom("totally_made_up_platform".to_string())
+        );
+        assert_eq!(parsed.as_str(), "totally_made_up_platform");
+    }
+
+    #[test]
+    fn empty_platform_string_still_errors() {
+        // The one rejection: an empty platform field is a schema error,
+        // not a custom platform. Adapters must declare *something*.
+        let err = "".parse::<Platform>().unwrap_err();
+        assert!(err.contains("empty"), "got error: {err}");
+        let err2 = "   ".parse::<Platform>().unwrap_err();
+        assert!(err2.contains("empty"), "got error: {err2}");
     }
 
     #[test]

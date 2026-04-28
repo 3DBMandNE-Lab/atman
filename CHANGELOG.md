@@ -8,6 +8,23 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **CPTAC TMT proteome adapter
+  (`adapters/cptac/cptac_tmt_proteome_to_atman.py`).** Converts CPTAC's
+  protein-level TMT proteome wide TSVs (the `<TUMOR>_proteome.tsv`
+  files distributed by the CPTAC Data Coordination Center) to the
+  canonical samples / proteins / measurements TSV triple. Skips the
+  leading `Mean` / `Median` / `StdDev` summary rows; discriminates
+  `Log Ratio` (kept) from `Unshared Log Ratio` (dropped); filters
+  non-biological columns (`TumorOnlyIR`, `NormalOnlyIR`, `QC*`,
+  `Pool*`, `Reference`, `RefMix*`); promotes NCBIGeneID into
+  `assay_id`. For cohorts whose sample IDs encode condition inline
+  (e.g. CPTAC HCC `T<N>` / `P<N>`), pass `--sample-id-regex` plus
+  `--condition-key-map 'T=tumor,P=paired_non_tumor'` to recover the
+  condition labels at ingest. Validated end-to-end on a real 4-gene ×
+  4-sample HCC subset by `crates/atman/tests/cptac_tmt_adapter.rs`,
+  including a downstream `atman validate` for the recovered
+  `tumor` / `paired_non_tumor` contrast.
+
 - **`atman score signatures` — per-sample gene-set signature scoring
   (singscore).** Sibling to `atman score modules` with the same
   canonical input directory (`samples.tsv` + `measurements.tsv`) and
@@ -42,6 +59,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Emits a `*.run.json` SHA-256 sidecar with all CLI parameters.
 
 ### Changed
+
+- **`Platform` accepts custom identifiers without recompile.** The
+  canonical `platform` field in `samples.tsv` / `proteins.tsv` /
+  `measurements.tsv` previously required one of a closed list of
+  well-known values (`olink_explore_ngs`, `maxquant_lfq`,
+  `diann_report`, ...); any other identifier was rejected at validate-
+  time. New `Platform::Custom(String)` variant accepts any non-empty
+  identifier and round-trips byte-stably through the canonical schema.
+  Adapters for new platforms (e.g. `cptac_tmt_proteome`,
+  `bruker_timstof_diapasef`) can now declare their own platform string
+  without modifying atman-core, restoring the adapter-as-extensibility-
+  seam intent. Well-known variants are unchanged and still receive
+  platform-specific code paths where they exist (Olink NPX QC, etc.).
+  Empty platform strings remain a schema error.
 
 - **Audit silent `0.0` fallbacks in similarity computations
   (`network.rs`, `modules_discover.rs`, `align.rs`).** Previously a

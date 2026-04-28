@@ -181,7 +181,7 @@ pub fn run(args: Args) -> Result<()> {
         Orientation::ProteinsRows => {
             let proteins = protein_rows_from_table(&args, &matrix)?;
             let measurements =
-                measurements_from_proteins_rows(&args, platform, &matrix, &sample_ids)?;
+                measurements_from_proteins_rows(&args, &platform, &matrix, &sample_ids)?;
             (proteins, measurements)
         }
         Orientation::SamplesRows => {
@@ -191,7 +191,7 @@ pub fn run(args: Args) -> Result<()> {
                 .context("--orientation samples-rows requires --proteins")?;
             let protein_meta = read_table(protein_path)?;
             let proteins = protein_rows_from_table(&args, &protein_meta)?;
-            let measurements = measurements_from_samples_rows(&args, platform, &matrix, &proteins)?;
+            let measurements = measurements_from_samples_rows(&args, &platform, &matrix, &proteins)?;
             (proteins, measurements)
         }
     };
@@ -201,7 +201,7 @@ pub fn run(args: Args) -> Result<()> {
     }
     apply_normalization(&mut measurements, args.normalize)?;
 
-    write_proteins(&args.output_dir.join("proteins.tsv"), platform, &proteins)?;
+    write_proteins(&args.output_dir.join("proteins.tsv"), &platform, &proteins)?;
     write_measurements(
         &args.output_dir.join("measurements.tsv"),
         &measurements,
@@ -423,7 +423,7 @@ fn protein_rows_from_table(args: &Args, table: &Table) -> Result<Vec<ProteinRow>
 
 fn measurements_from_proteins_rows(
     args: &Args,
-    platform: Platform,
+    platform: &Platform,
     matrix: &Table,
     sample_ids: &[String],
 ) -> Result<Vec<MeasurementRow>> {
@@ -471,7 +471,7 @@ fn measurements_from_proteins_rows(
 
 fn measurements_from_samples_rows(
     args: &Args,
-    platform: Platform,
+    platform: &Platform,
     matrix: &Table,
     proteins: &[ProteinRow],
 ) -> Result<Vec<MeasurementRow>> {
@@ -521,7 +521,7 @@ struct MeasurementRow {
 }
 
 fn measurement_row(
-    platform: Platform,
+    platform: &Platform,
     sample_id: &str,
     protein: &ProteinRow,
     source: &str,
@@ -530,7 +530,7 @@ fn measurement_row(
 ) -> Result<MeasurementRow> {
     let abundance = parse_abundance(source, log2_transform)?;
     Ok(MeasurementRow {
-        platform,
+        platform: platform.clone(),
         sample_id: sample_id.to_string(),
         assay_id: protein.assay_id.clone(),
         gene_symbol: protein.gene_symbol.clone(),
@@ -562,7 +562,7 @@ fn parse_abundance(raw: &str, log2_transform: bool) -> Result<Option<f64>> {
     Ok(Some(value))
 }
 
-fn write_proteins(path: &Path, platform: Platform, proteins: &[ProteinRow]) -> Result<()> {
+fn write_proteins(path: &Path, platform: &Platform, proteins: &[ProteinRow]) -> Result<()> {
     let mut buf = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
     for p in proteins {
         buf.push_str(platform.as_str());

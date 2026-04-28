@@ -80,7 +80,7 @@ fn rank_records(mut records: Vec<MeasurementRecord>) -> Vec<MeasurementRecord> {
     for (idx, record) in records.iter().enumerate() {
         if record.effective_abundance().is_some_and(f64::is_finite) {
             by_assay
-                .entry(assay_key(record.platform, &record.assay_id))
+                .entry(assay_key(&record.platform, &record.assay_id))
                 .or_default()
                 .push(idx);
         }
@@ -103,6 +103,6 @@ fn rank_records(mut records: Vec<MeasurementRecord>) -> Vec<MeasurementRecord> {
     records
 }
 
-fn assay_key(platform: Platform, assay_id: &AssayId) -> (String, String) {
+fn assay_key(platform: &Platform, assay_id: &AssayId) -> (String, String) {
     (platform.as_str().to_string(), assay_id.0.clone())
 }

@@ -36,13 +36,24 @@ platform    assay_id    uniprot    gene_symbol    panel    panel_lot
 platform    sample_id    assay_id    gene_symbol    panel    npx_source_str    abundance    abundance_raw    abundance_unit    qc_sample    qc_assay    detection_limit    below_lod    dropped_by_qc    plate_id    panel_lot    ingest_order
 ```
 
-Supported platform values include:
+Well-known platform values (these have platform-specific code paths
+elsewhere in atman, e.g. Olink NPX QC, MaxQuant LFQ matrix shape):
 
 - `olink_explore_ngs`
+- `olink_target_qpcr`
 - `somascan`
 - `maxquant_lfq`
+- `maxquant_tmt`
 - `diann_report`
 - `spectronaut_report`
+
+**Custom platforms.** Any non-empty platform string is accepted by the
+canonical reader. Adapters for new platforms (e.g. `cptac_tmt_proteome`,
+`bruker_timstof_diapasef`, `thermo_proteome_discoverer`) can declare
+their own platform identifier without recompiling atman; the canonical
+analytical paths (DE, decomposition, alignment, enrichment, signature
+scoring) operate on the canonical TSV regardless of platform. Only the
+well-known names get platform-specific dispatch.
 
 Supported abundance units include:
 
@@ -129,6 +140,47 @@ atman de --input-dir out_ms --output-dir out_ms \
 For sample-by-protein matrices, provide `--orientation samples-rows` and a
 separate `--proteins` metadata table containing the assay ID and optional
 gene/UniProt columns.
+
+## CPTAC TMT Proteome Adapter
+
+Use `cptac/cptac_tmt_proteome_to_atman.py` for CPTAC's protein-level TMT
+proteome TSVs (the wide `<TUMOR>_proteome.tsv` files distributed by the
+CPTAC Data Coordination Center). The adapter handles:
+
+- Skipping the leading `Mean` / `Median` / `StdDev` summary rows.
+- Discriminating `Log Ratio` (kept) from `Unshared Log Ratio` (dropped).
+- Filtering non-biological columns (`TumorOnlyIR`, `NormalOnlyIR`,
+  `QC*`, `Pool*`, `Reference`, `RefMix*`).
+- Promoting NCBIGeneID into `assay_id` so cross-cohort joins are stable
+  on the gene primary key, with `gene_symbol` carried as metadata.
+- Recovering condition labels from sample-ID prefixes when the cohort
+  encodes them inline (CPTAC HCC uses `T<N>` for tumor, `P<N>` for the
+  paired non-tumor sample from the same subject).
+
+Examples:
+
+```bash
+# CPTAC HCC: T<N> / P<N> condition recovery from sample-ID prefixes.
+python3 adapters/cptac/cptac_tmt_proteome_to_atman.py \
+  --proteome HCC_proteome.tsv \
+  --tumor-tag HCC \
+  --output-dir out/HCC \
+  --sample-id-regex '^(?P<condition_key>[TP])(?P<subject>\d+)$' \
+  --condition-key-map 'T=tumor,P=paired_non_tumor'
+
+atman validate --input-dir out/HCC --groups tumor-paired_non_tumor --min-pairs 5
+atman de --input-dir out/HCC --output-dir out/HCC \
+  --test welch-t --groups tumor-paired_non_tumor --min-pairs 5
+
+# CPTAC GBM / BRCA / COAD / HNSCC: opaque IDs, single-condition cohort.
+python3 adapters/cptac/cptac_tmt_proteome_to_atman.py \
+  --proteome GBM_proteome.tsv \
+  --tumor-tag GBM \
+  --output-dir out/GBM
+```
+
+The platform column is set to `cptac_tmt_proteome` and the abundance
+unit to `log2_tmt_ratio`. Both are accepted by `atman validate`.
 
 ## Olink Explore NGS NPX Adapter
 
