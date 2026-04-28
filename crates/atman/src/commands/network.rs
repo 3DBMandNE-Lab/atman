@@ -200,6 +200,8 @@ fn run_influence(args: InfluenceArgs) -> Result<()> {
     let mut all_rows: Vec<(String, InfluenceRow, usize)> = Vec::new(); // (stratum, row, n_subjects)
     let mut all_edges: Vec<EdgeRow> = Vec::new();
     let mut strata_summary: Vec<(String, usize, usize)> = Vec::new(); // (stratum, n_subjects, n_features)
+    let mut audit_total = atman_core::network::SimilarityAudit::default();
+    let mut per_stratum_audit: Vec<(String, atman_core::network::SimilarityAudit)> = Vec::new();
 
     for (stratum, sample_ids) in &samples_by_stratum {
         if sample_ids.len() < args.min_subjects {
@@ -225,13 +227,30 @@ fn run_influence(args: InfluenceArgs) -> Result<()> {
             }
             data.push(row);
         }
-        let Some(similarity) = pairwise_similarity(&features, &data, args.method.to_core()) else {
+        let Some((similarity, audit)) =
+            pairwise_similarity(&features, &data, args.method.to_core())
+        else {
             eprintln!(
                 "network influence: stratum {:?} produced no similarity matrix (insufficient data)",
                 stratum
             );
             continue;
         };
+        if audit.n_pairs_insufficient_overlap > 0 || audit.n_pairs_undefined_metric > 0 {
+            eprintln!(
+                "network influence: stratum {:?} similarity audit: {}/{} pairs fell back to 0.0 \
+                 ({} insufficient overlap, {} undefined metric)",
+                stratum,
+                audit.n_pairs_insufficient_overlap + audit.n_pairs_undefined_metric,
+                audit.n_pairs_total,
+                audit.n_pairs_insufficient_overlap,
+                audit.n_pairs_undefined_metric,
+            );
+        }
+        audit_total.n_pairs_total += audit.n_pairs_total;
+        audit_total.n_pairs_insufficient_overlap += audit.n_pairs_insufficient_overlap;
+        audit_total.n_pairs_undefined_metric += audit.n_pairs_undefined_metric;
+        per_stratum_audit.push((stratum.clone(), audit));
         let adj = adjacency(&similarity, policy);
         let rows = influence_scores(&features, &adj, args.eigen_max_iter, args.eigen_tol);
         let n_nontrivial = rows.iter().filter(|r| r.degree > 0).count();
@@ -311,6 +330,22 @@ fn run_influence(args: InfluenceArgs) -> Result<()> {
             "eigen-tol": args.eigen_tol,
             "emit-edges": args.emit_edges,
             "output": args.output.display().to_string(),
+            "similarity_audit": {
+                "n_pairs_total": audit_total.n_pairs_total,
+                "n_pairs_insufficient_overlap": audit_total.n_pairs_insufficient_overlap,
+                "n_pairs_undefined_metric": audit_total.n_pairs_undefined_metric,
+                "per_stratum": per_stratum_audit
+                    .iter()
+                    .map(|(s, a)| {
+                        json!({
+                            "stratum": s,
+                            "n_pairs_total": a.n_pairs_total,
+                            "n_pairs_insufficient_overlap": a.n_pairs_insufficient_overlap,
+                            "n_pairs_undefined_metric": a.n_pairs_undefined_metric,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            },
         }),
         &inputs_sha256,
         &outputs,

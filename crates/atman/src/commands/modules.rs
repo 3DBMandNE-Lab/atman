@@ -255,6 +255,12 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
         result.soft_power_chosen,
         args.method,
     );
+    if result.similarity_audit.n_pairs_undefined_metric > 0 {
+        eprintln!(
+            "modules discover: similarity audit: {}/{} pairs fell back to 0.0 (undefined metric)",
+            result.similarity_audit.n_pairs_undefined_metric, result.similarity_audit.n_pairs_total,
+        );
+    }
 
     let finished_at = SystemTime::now();
     let inputs_sha256 = hash_canonical_inputs(
@@ -283,6 +289,10 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
             "cut-height": args.cut_height,
             "chosen-beta": result.soft_power_chosen,
             "n-features-retained": kept_features.len(),
+            "similarity_audit": {
+                "n_pairs_total": result.similarity_audit.n_pairs_total,
+                "n_pairs_undefined_metric": result.similarity_audit.n_pairs_undefined_metric,
+            },
         }),
         &inputs_sha256,
         &outputs,

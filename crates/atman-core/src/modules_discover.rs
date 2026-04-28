@@ -60,14 +60,35 @@ pub struct DiscoveryResult {
     pub soft_power_sweep: Vec<SoftPowerSweepRow>,
     /// Chosen β (0 for `hard-threshold`).
     pub soft_power_chosen: usize,
+    /// Audit counts for the |similarity| matrix construction.
+    pub similarity_audit: SimilarityAudit,
+}
+
+/// Audit counts produced by [`pairwise_abs_similarity`]. Pairs whose
+/// metric is undefined (e.g. zero-variance Pearson/Spearman input)
+/// fall back to `0.0` in the matrix; this struct records how many.
+/// The caller is expected to surface non-zero values in the run
+/// sidecar so a silent zero is never confused with a true uncorrelated
+/// pair.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct SimilarityAudit {
+    /// Total off-diagonal feature pairs evaluated
+    /// (`p * (p - 1) / 2`).
+    pub n_pairs_total: usize,
+    /// Pairs where Pearson/Spearman returned `None`.
+    pub n_pairs_undefined_metric: usize,
 }
 
 /// Pairwise |similarity| over subjects. `data` is subject-major:
 /// `data[i][j]` is subject i's value at feature j. Returns a
-/// `p × p` matrix with 1.0 on the diagonal.
-pub fn pairwise_abs_similarity(data: &[Vec<f64>], sim: Similarity) -> Vec<Vec<f64>> {
+/// `p × p` matrix with 1.0 on the diagonal alongside an audit of
+/// fallback occurrences.
+pub fn pairwise_abs_similarity(
+    data: &[Vec<f64>],
+    sim: Similarity,
+) -> (Vec<Vec<f64>>, SimilarityAudit) {
     if data.is_empty() {
-        return Vec::new();
+        return (Vec::new(), SimilarityAudit::default());
     }
     let p = data[0].len();
     // Transpose to column-major: `col[j][i]` = subject i at feature j.
@@ -78,19 +99,27 @@ pub fn pairwise_abs_similarity(data: &[Vec<f64>], sim: Similarity) -> Vec<Vec<f6
         }
     }
     let mut out = vec![vec![0.0_f64; p]; p];
+    let mut audit = SimilarityAudit::default();
     for i in 0..p {
         out[i][i] = 1.0;
         for j in (i + 1)..p {
+            audit.n_pairs_total += 1;
             let r = match sim {
                 Similarity::Pearson => stats::pearson(&col[i], &col[j]),
                 Similarity::Spearman => stats::spearman(&col[i], &col[j]),
             };
-            let v = r.unwrap_or(0.0).abs();
+            let v = match r {
+                Some(value) => value.abs(),
+                None => {
+                    audit.n_pairs_undefined_metric += 1;
+                    0.0
+                }
+            };
             out[i][j] = v;
             out[j][i] = v;
         }
     }
-    out
+    (out, audit)
 }
 
 /// Soft-threshold: `a_ij = |r_ij|^β` element-wise. Diagonal stays at 1.
@@ -369,7 +398,7 @@ pub fn discover(
     if data.iter().any(|row| row.len() != p) {
         return Err("non-rectangular input matrix".into());
     }
-    let abs_sim = pairwise_abs_similarity(data, sim);
+    let (abs_sim, similarity_audit) = pairwise_abs_similarity(data, sim);
 
     let (adjacency, sweep, chosen_beta) = match method {
         DiscoveryMethod::WgcnaSoft {
@@ -501,6 +530,7 @@ pub fn discover(
         report,
         soft_power_sweep: sweep,
         soft_power_chosen: chosen_beta,
+        similarity_audit,
     })
 }
 

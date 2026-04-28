@@ -8,6 +8,23 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Audit silent `0.0` fallbacks in similarity computations
+  (`network.rs`, `modules_discover.rs`, `align.rs`).** Previously a
+  pair whose metric was undefined (e.g. zero-variance Pearson input)
+  or had fewer than 2 finite observations after the complete-case
+  filter was silently treated as zero similarity, indistinguishable
+  from a real uncorrelated pair. `pairwise_similarity` and
+  `pairwise_abs_similarity` now return a `SimilarityAudit` alongside
+  the matrix, recording `n_pairs_total`,
+  `n_pairs_insufficient_overlap` (network only), and
+  `n_pairs_undefined_metric`. The `network influence` and
+  `modules discover` commands log the audit to their run sidecars
+  (per-stratum where applicable) and warn on stderr when any pair
+  fell back. `align::similarity` now returns `NaN` instead of `0.0`
+  on undefined metrics; the downstream `pairwise_edges` filter
+  already discards non-finite similarities, so behavior is unchanged
+  while a failed compute is distinguishable from a true zero at the
+  value level.
 - **Expose CI alpha as a CLI flag on `atman align bootstrap`
   (`--ci-alpha`).** The percentile and BCa CIs over the bootstrap
   `n_cohorts` distribution were both hardcoded to a two-sided 95%

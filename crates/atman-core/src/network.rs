@@ -67,17 +67,45 @@ pub struct SimilarityMatrix {
     pub values: Vec<Vec<f64>>,
 }
 
+/// Audit counts produced alongside a similarity matrix. Pairs with
+/// fewer than 2 finite observations or an undefined-correlation
+/// outcome (e.g. zero-variance input to Pearson/Spearman) get
+/// `0.0` in the matrix; this struct records how many such pairs
+/// there were so callers can surface them in run metadata instead of
+/// silently treating "couldn't compute" as "uncorrelated".
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct SimilarityAudit {
+    /// Total number of off-diagonal feature pairs evaluated
+    /// (`n_features * (n_features - 1) / 2`).
+    pub n_pairs_total: usize,
+    /// Pairs with fewer than 2 finite observations after the
+    /// complete-case filter.
+    pub n_pairs_insufficient_overlap: usize,
+    /// Pairs where the metric returned no value (Pearson/Spearman
+    /// stddev = 0). Counted only for metrics that can return `None`.
+    pub n_pairs_undefined_metric: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PairOutcome {
+    Ok(f64),
+    InsufficientOverlap,
+    UndefinedMetric,
+}
+
 /// Compute the pairwise similarity matrix over a feature × subject
 /// layout. `data[i][s]` is feature `i`'s value for subject `s`.
 ///
 /// Subjects with non-finite values in either feature are dropped
 /// pairwise (complete-case per pair). Returns `None` if fewer than
-/// two features or two subjects are supplied.
+/// two features or two subjects are supplied. The accompanying
+/// [`SimilarityAudit`] reports how many pairs fell back to `0.0` and
+/// why.
 pub fn pairwise_similarity(
     feature_labels: &[String],
     data: &[Vec<f64>],
     metric: SimilarityMetric,
-) -> Option<SimilarityMatrix> {
+) -> Option<(SimilarityMatrix, SimilarityAudit)> {
     if feature_labels.len() != data.len() || data.len() < 2 {
         return None;
     }
@@ -89,20 +117,35 @@ pub fn pairwise_similarity(
     for (i, row) in values.iter_mut().enumerate() {
         row[i] = 1.0;
     }
+    let mut audit = SimilarityAudit::default();
     for i in 0..n_features {
         for j in (i + 1)..n_features {
-            let sim = pairwise(&data[i], &data[j], metric);
+            audit.n_pairs_total += 1;
+            let sim = match pairwise(&data[i], &data[j], metric) {
+                PairOutcome::Ok(s) => s,
+                PairOutcome::InsufficientOverlap => {
+                    audit.n_pairs_insufficient_overlap += 1;
+                    0.0
+                }
+                PairOutcome::UndefinedMetric => {
+                    audit.n_pairs_undefined_metric += 1;
+                    0.0
+                }
+            };
             values[i][j] = sim;
             values[j][i] = sim;
         }
     }
-    Some(SimilarityMatrix {
-        features: feature_labels.to_vec(),
-        values,
-    })
+    Some((
+        SimilarityMatrix {
+            features: feature_labels.to_vec(),
+            values,
+        },
+        audit,
+    ))
 }
 
-fn pairwise(x: &[f64], y: &[f64], metric: SimilarityMetric) -> f64 {
+fn pairwise(x: &[f64], y: &[f64], metric: SimilarityMetric) -> PairOutcome {
     // Complete-case pairwise filter on NaNs.
     let pairs: Vec<(f64, f64)> = x
         .iter()
@@ -111,13 +154,19 @@ fn pairwise(x: &[f64], y: &[f64], metric: SimilarityMetric) -> f64 {
         .map(|(a, b)| (*a, *b))
         .collect();
     if pairs.len() < 2 {
-        return 0.0;
+        return PairOutcome::InsufficientOverlap;
     }
     let xs: Vec<f64> = pairs.iter().map(|(a, _)| *a).collect();
     let ys: Vec<f64> = pairs.iter().map(|(_, b)| *b).collect();
     match metric {
-        SimilarityMetric::Pearson => pearson(&xs, &ys).unwrap_or(0.0).abs(),
-        SimilarityMetric::Spearman => spearman(&xs, &ys).unwrap_or(0.0).abs(),
+        SimilarityMetric::Pearson => match pearson(&xs, &ys) {
+            Some(r) => PairOutcome::Ok(r.abs()),
+            None => PairOutcome::UndefinedMetric,
+        },
+        SimilarityMetric::Spearman => match spearman(&xs, &ys) {
+            Some(r) => PairOutcome::Ok(r.abs()),
+            None => PairOutcome::UndefinedMetric,
+        },
         SimilarityMetric::Covariance => {
             let mx = mean(&xs);
             let my = mean(&ys);
@@ -127,7 +176,7 @@ fn pairwise(x: &[f64], y: &[f64], metric: SimilarityMetric) -> f64 {
                 .map(|(a, b)| (a - mx) * (b - my))
                 .sum::<f64>()
                 / (xs.len() - 1) as f64;
-            cov.abs()
+            PairOutcome::Ok(cov.abs())
         }
     }
 }
@@ -380,11 +429,33 @@ mod tests {
         let x3 = vec![5.0, -1.0, 2.0, 8.0, -3.0, 4.0, 0.0, 6.0];
         let data = vec![x1, x2, x3];
         let labels = vec!["f1".into(), "f2".into(), "f3".into()];
-        let sim = pairwise_similarity(&labels, &data, SimilarityMetric::Pearson).unwrap();
+        let (sim, audit) = pairwise_similarity(&labels, &data, SimilarityMetric::Pearson).unwrap();
         // f1 ~ f2 should be close to 1.0.
         assert!(sim.values[0][1] > 0.99, "got {}", sim.values[0][1]);
         // f1 ~ f3 should be weakly correlated.
         assert!(sim.values[0][2].abs() < 0.95);
+        // Clean inputs: every pair computes; no fallbacks.
+        assert_eq!(audit.n_pairs_total, 3);
+        assert_eq!(audit.n_pairs_insufficient_overlap, 0);
+        assert_eq!(audit.n_pairs_undefined_metric, 0);
+    }
+
+    #[test]
+    fn similarity_audit_counts_insufficient_overlap_and_undefined_metric() {
+        // f1 has all-NaN; every pair with f1 hits insufficient overlap.
+        let f1 = vec![f64::NAN; 5];
+        // f2 is constant; pearson against any non-NaN partner is undefined.
+        let f2 = vec![1.0; 5];
+        let f3 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let data = vec![f1, f2, f3];
+        let labels = vec!["f1".into(), "f2".into(), "f3".into()];
+        let (_, audit) = pairwise_similarity(&labels, &data, SimilarityMetric::Pearson).unwrap();
+        assert_eq!(audit.n_pairs_total, 3);
+        // (f1,f2) and (f1,f3) both fail on overlap (f1 is all-NaN).
+        assert_eq!(audit.n_pairs_insufficient_overlap, 2);
+        // (f2,f3) succeeds at the overlap step but pearson is undefined
+        // because f2 is constant.
+        assert_eq!(audit.n_pairs_undefined_metric, 1);
     }
 
     #[test]

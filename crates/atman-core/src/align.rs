@@ -50,12 +50,16 @@ pub struct AlignedProgram {
 
 /// Compute pairwise-cohort similarity between two program vectors. Cosine and
 /// Spearman return the *absolute* correlation so sign-ambiguous ICA programs
-/// match regardless of signing.
+/// match regardless of signing. When the underlying metric is undefined
+/// (e.g. zero-norm vector for cosine, constant input for Spearman) the
+/// returned value is `NaN` rather than a silent `0.0` — downstream
+/// alignment filters drop non-finite similarities, so a failed compute is
+/// distinguishable from a true zero similarity at the value level.
 pub fn similarity(a: &[f64], b: &[f64], metric: AlignMetric, top_n: usize) -> f64 {
     match metric {
         AlignMetric::Jaccard => stats::jaccard_top_n(a, b, top_n),
-        AlignMetric::Cosine => stats::cosine(a, b).unwrap_or(0.0).abs(),
-        AlignMetric::Spearman => stats::spearman(a, b).unwrap_or(0.0).abs(),
+        AlignMetric::Cosine => stats::cosine(a, b).map(f64::abs).unwrap_or(f64::NAN),
+        AlignMetric::Spearman => stats::spearman(a, b).map(f64::abs).unwrap_or(f64::NAN),
     }
 }
 
