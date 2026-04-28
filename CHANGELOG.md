@@ -6,6 +6,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Generalize keratin contamination filter on `atman programs filter`
+  to a configurable regex (`--contamination-pattern`,
+  `--max-contamination-fraction`).** Replaces the hardcoded
+  `KRT*`/`KERATIN` gene-name match. The default pattern
+  (`(?i)^KRT|KERATIN`) preserves the previous behavior for
+  plasma/serum/CSF cohorts where keratin is a skin-shedding
+  contaminant. Override for tissue contexts where keratin is biology
+  (`--contamination-pattern '^_NEVER_'` to disable), or to flag other
+  contaminants — `'(?i)^HB[AB]'` for hemolysis, `'(?i)^IG[HKL]'` for
+  immunoglobulin carryover, `'(?i)^MT-'` for mitochondrial. The
+  regex is compiled up front (invalid pattern → loud error before
+  any work). The renamed flag, schema columns
+  (`contamination_fraction_top_n`, `contamination_pass`), and
+  fail-reason (`contamination_signature`) are breaking changes; the
+  sidecar now records both `max-contamination-fraction` and the
+  effective `contamination-pattern`.
+
 ### Added
 
 - **Below-LOD safety gate on `atman de`

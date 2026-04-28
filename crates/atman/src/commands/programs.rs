@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args as ClapArgs, Subcommand};
 use csv::ReaderBuilder;
+use regex::Regex;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -11,6 +12,13 @@ use crate::io::{
 use serde_json::json;
 use std::time::SystemTime;
 
+/// Default contamination pattern: matches keratin (KRT* prefix or "KERATIN"
+/// substring, case-insensitive). Tuned for plasma/serum/CSF where keratin is
+/// a known skin-shedding contaminant. Override for tissue contexts where
+/// keratin is biology, or to flag other contaminants (hemoglobin, IGH/IGK,
+/// albumin, mitochondrial proteins, etc.).
+const DEFAULT_CONTAMINATION_PATTERN: &str = "(?i)^KRT|KERATIN";
+
 #[derive(ClapArgs, Debug)]
 pub struct Args {
     #[command(subcommand)]
@@ -19,7 +27,7 @@ pub struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Flag ICA programs that fail annotation, loading, or keratin filters.
+    /// Flag ICA programs that fail annotation, loading, or contamination filters.
     Filter(FilterArgs),
 }
 
@@ -41,11 +49,22 @@ pub struct FilterArgs {
     #[arg(long, default_value_t = 0.5)]
     min_top_loading: f64,
 
-    /// Maximum fraction of top loadings that may be keratin-like.
+    /// Maximum fraction of top loadings that may match the contamination
+    /// pattern before a program is flagged.
     #[arg(long, default_value_t = 0.2)]
-    max_keratin_fraction: f64,
+    max_contamination_fraction: f64,
 
-    /// Number of strongest absolute-loading proteins used for keratin fraction.
+    /// Regular expression matched against each loading's gene/protein label
+    /// to identify contamination signatures. Default targets keratin
+    /// (skin-shedding contamination, common in plasma/serum/CSF). Override
+    /// for tissue contexts where keratin is biology, or to flag other
+    /// contaminants — e.g. `'(?i)^HB[AB]'` for hemolysis,
+    /// `'(?i)^IG[HKL]'` for immunoglobulin carryover.
+    #[arg(long, default_value = DEFAULT_CONTAMINATION_PATTERN)]
+    contamination_pattern: String,
+
+    /// Number of strongest absolute-loading proteins used for the
+    /// contamination-fraction calculation.
     #[arg(long, default_value_t = 20)]
     top_n: usize,
 
@@ -81,20 +100,26 @@ fn run_filter(args: FilterArgs) -> Result<()> {
     if !args.min_top_loading.is_finite() || args.min_top_loading < 0.0 {
         bail!("--min-top-loading must be a non-negative finite value");
     }
-    if !args.max_keratin_fraction.is_finite()
-        || args.max_keratin_fraction < 0.0
-        || args.max_keratin_fraction > 1.0
+    if !args.max_contamination_fraction.is_finite()
+        || args.max_contamination_fraction < 0.0
+        || args.max_contamination_fraction > 1.0
     {
-        bail!("--max-keratin-fraction must be in [0, 1]");
+        bail!("--max-contamination-fraction must be in [0, 1]");
     }
     if args.top_n == 0 {
         bail!("--top-n must be at least 1");
     }
+    let contamination_re = Regex::new(&args.contamination_pattern).with_context(|| {
+        format!(
+            "invalid --contamination-pattern {:?}",
+            args.contamination_pattern
+        )
+    })?;
 
     let loadings = read_loadings(&args.loadings)?;
     let annotations = read_annotations(&args.annotations)?;
     let mut out = String::from(
-        "program\tn_loadings\tmax_abs_loading\tkeratin_fraction_top_n\tannotation_p_value\tcategory\ttop_annotation\tannotation_pass\tloading_pass\tkeratin_pass\tinterpretable\tfail_reasons\n",
+        "program\tn_loadings\tmax_abs_loading\tcontamination_fraction_top_n\tannotation_p_value\tcategory\ttop_annotation\tannotation_pass\tloading_pass\tcontamination_pass\tinterpretable\tfail_reasons\n",
     );
 
     for (program, rows) in &loadings {
@@ -103,15 +128,15 @@ fn run_filter(args: FilterArgs) -> Result<()> {
             .iter()
             .map(|row| row.loading.abs())
             .fold(0.0_f64, f64::max);
-        let keratin_fraction = keratin_fraction(rows, args.top_n);
+        let contamination_fraction = contamination_fraction(rows, args.top_n, &contamination_re);
         let annotation = annotations.get(program);
         let annotation_p_value = annotation.map(|a| a.top_annotation_p_value);
         let annotation_pass = annotation_p_value
             .map(|p| p <= args.min_annotation_pvalue)
             .unwrap_or(false);
         let loading_pass = max_abs_loading >= args.min_top_loading;
-        let keratin_pass = keratin_fraction <= args.max_keratin_fraction;
-        let interpretable = annotation_pass && loading_pass && keratin_pass;
+        let contamination_pass = contamination_fraction <= args.max_contamination_fraction;
+        let interpretable = annotation_pass && loading_pass && contamination_pass;
         let mut fail_reasons = Vec::new();
         if annotation.is_none() {
             fail_reasons.push("missing_annotation");
@@ -121,8 +146,8 @@ fn run_filter(args: FilterArgs) -> Result<()> {
         if !loading_pass {
             fail_reasons.push("diffuse_loading");
         }
-        if !keratin_pass {
-            fail_reasons.push("keratin_contamination");
+        if !contamination_pass {
+            fail_reasons.push("contamination_signature");
         }
 
         let category = annotation.map(|a| a.category.as_str()).unwrap_or("NA");
@@ -135,13 +160,13 @@ fn run_filter(args: FilterArgs) -> Result<()> {
         out.push_str(&format!(
             "{program}\t{n_loadings}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             format_float(max_abs_loading),
-            format_float(keratin_fraction),
+            format_float(contamination_fraction),
             annotation_p,
             escape_tsv(category),
             escape_tsv(top_annotation),
             flag(annotation_pass),
             flag(loading_pass),
-            flag(keratin_pass),
+            flag(contamination_pass),
             flag(interpretable),
             if fail_reasons.is_empty() {
                 "none".to_string()
@@ -172,7 +197,8 @@ fn run_filter(args: FilterArgs) -> Result<()> {
             "annotations": args.annotations.display().to_string(),
             "min-annotation-pvalue": args.min_annotation_pvalue,
             "min-top-loading": args.min_top_loading,
-            "max-keratin-fraction": args.max_keratin_fraction,
+            "max-contamination-fraction": args.max_contamination_fraction,
+            "contamination-pattern": args.contamination_pattern,
             "top-n": args.top_n,
             "output": args.output.display().to_string(),
         }),
@@ -255,7 +281,7 @@ fn read_annotations(path: &Path) -> Result<BTreeMap<String, Annotation>> {
     Ok(out)
 }
 
-fn keratin_fraction(rows: &[Loading], top_n: usize) -> f64 {
+fn contamination_fraction(rows: &[Loading], top_n: usize, pattern: &Regex) -> f64 {
     let mut ranked = rows.to_vec();
     ranked.sort_by(|a, b| {
         b.loading
@@ -267,17 +293,12 @@ fn keratin_fraction(rows: &[Loading], top_n: usize) -> f64 {
     if keep == 0 {
         return 0.0;
     }
-    let keratin = ranked
+    let hits = ranked
         .iter()
         .take(keep)
-        .filter(|row| is_keratin_like(&row.label))
+        .filter(|row| pattern.is_match(&row.label))
         .count();
-    keratin as f64 / keep as f64
-}
-
-fn is_keratin_like(label: &str) -> bool {
-    let upper = label.to_ascii_uppercase();
-    upper.starts_with("KRT") || upper.contains("KERATIN")
+    hits as f64 / keep as f64
 }
 
 fn flag(value: bool) -> &'static str {
