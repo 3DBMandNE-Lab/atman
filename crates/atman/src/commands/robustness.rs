@@ -2,8 +2,12 @@ use anyhow::{bail, Context, Result};
 use atman_core::de::stability_weighted_score;
 use clap::Args as ClapArgs;
 use csv::ReaderBuilder;
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use crate::io::{hash_labeled_inputs, sidecar_path_for, write_run_sidecar};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -32,6 +36,7 @@ struct DeLite {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     if args.top_k == 0 {
         bail!("top-k must be >= 1");
     }
@@ -238,27 +243,46 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
-    std::fs::write(
-        args.output_dir.join("loo_sign_stability.tsv"),
-        sign_out.as_bytes(),
-    )
-    .with_context(|| "writing loo_sign_stability.tsv")?;
-    std::fs::write(
-        args.output_dir.join("rank_stability.tsv"),
-        rank_out.as_bytes(),
-    )
-    .with_context(|| "writing rank_stability.tsv")?;
-    std::fs::write(
-        args.output_dir.join("stability_ranked.tsv"),
-        stab_out.as_bytes(),
-    )
-    .with_context(|| "writing stability_ranked.tsv")?;
+    let sign_path = args.output_dir.join("loo_sign_stability.tsv");
+    let rank_path = args.output_dir.join("rank_stability.tsv");
+    let stab_path = args.output_dir.join("stability_ranked.tsv");
+    std::fs::write(&sign_path, sign_out.as_bytes())
+        .with_context(|| "writing loo_sign_stability.tsv")?;
+    std::fs::write(&rank_path, rank_out.as_bytes())
+        .with_context(|| "writing rank_stability.tsv")?;
+    std::fs::write(&stab_path, stab_out.as_bytes())
+        .with_context(|| "writing stability_ranked.tsv")?;
     eprintln!(
         "robustness: wrote {:?}, {:?}, and {:?}",
-        args.output_dir.join("loo_sign_stability.tsv"),
-        args.output_dir.join("rank_stability.tsv"),
-        args.output_dir.join("stability_ranked.tsv"),
+        sign_path, rank_path, stab_path,
     );
+
+    let finished_at = SystemTime::now();
+    let mut labeled: Vec<(String, PathBuf)> = vec![("baseline".into(), args.baseline.clone())];
+    for (i, p) in loo_files.iter().enumerate() {
+        labeled.push((format!("loo_{i}"), PathBuf::from(p)));
+    }
+    let labeled_refs: Vec<(&str, &Path)> =
+        labeled.iter().map(|(l, p)| (l.as_str(), p.as_path())).collect();
+    let inputs_sha256 = hash_labeled_inputs(&labeled_refs)?;
+    let outputs = [sign_path.clone(), rank_path.clone(), stab_path.clone()];
+    let sidecar = sidecar_path_for(&sign_path);
+    write_run_sidecar(
+        &sidecar,
+        "robustness",
+        json!({
+            "baseline": args.baseline.display().to_string(),
+            "loo": args.loo,
+            "output-dir": args.output_dir.display().to_string(),
+            "top-k": args.top_k,
+        }),
+        &inputs_sha256,
+        &outputs,
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("robustness: sidecar={}", sidecar.display());
     Ok(())
 }
 

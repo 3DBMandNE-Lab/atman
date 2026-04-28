@@ -7,7 +7,12 @@ use csv::ReaderBuilder;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::io::{atomic_write, need_col, read_measurements_long, read_samples};
+use crate::io::{
+    atomic_write, hash_canonical_inputs, need_col, read_measurements_long, read_samples,
+    sidecar_path_for, write_run_sidecar,
+};
+use serde_json::json;
+use std::time::SystemTime;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -55,6 +60,7 @@ enum CovariateSpec {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     let terms = parse_design_terms(&args.design)?;
     let samples_path = args.input_dir.join("samples.tsv");
     let samples = read_samples(&samples_path)?;
@@ -85,6 +91,34 @@ pub fn run(args: Args) -> Result<()> {
         rows.len(),
         args.output.display()
     );
+
+    let finished_at = SystemTime::now();
+    let inputs_sha256 = hash_canonical_inputs(
+        &args.input_dir,
+        &["measurements.tsv", "samples.tsv", "proteins.tsv"],
+    )?;
+    let mut outputs = vec![args.output.clone()];
+    if let Some(p) = &args.output_wide {
+        outputs.push(p.clone());
+    }
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "residuals",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "design": args.design,
+            "output": args.output.display().to_string(),
+            "output-wide": args.output_wide.as_ref().map(|p| p.display().to_string()),
+            "min-samples": args.min_samples,
+        }),
+        &inputs_sha256,
+        &outputs,
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("residuals: sidecar={}", sidecar.display());
     Ok(())
 }
 

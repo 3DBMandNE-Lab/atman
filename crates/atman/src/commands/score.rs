@@ -6,7 +6,12 @@ use csv::ReaderBuilder;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::io::{atomic_write, read_measurements_long, read_samples};
+use crate::io::{
+    atomic_write, hash_canonical_inputs, hash_labeled_inputs, read_measurements_long,
+    read_samples, sidecar_path_for, write_run_sidecar,
+};
+use serde_json::json;
+use std::time::SystemTime;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -69,6 +74,7 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn run_modules(args: ModulesArgs) -> Result<()> {
+    let started_at = SystemTime::now();
     if !matches!(args.method.as_str(), "mean" | "median" | "zscore" | "pc1") {
         bail!("score modules supports --method mean, median, zscore, or pc1");
     }
@@ -144,8 +150,12 @@ fn run_modules(args: ModulesArgs) -> Result<()> {
             .then_with(|| a.sample_id.cmp(&b.sample_id))
     });
     write_scores(&args.output, &rows)?;
+    let mut outputs: Vec<PathBuf> = vec![args.output.clone()];
     if let Some(dir) = &args.canonical_output_dir {
         write_canonical(dir, &args.input_dir, &rows, &modules)?;
+        outputs.push(dir.join("samples.tsv"));
+        outputs.push(dir.join("proteins.tsv"));
+        outputs.push(dir.join("measurements.tsv"));
     }
     eprintln!(
         "score modules: method={} modules={} rows={}",
@@ -153,6 +163,33 @@ fn run_modules(args: ModulesArgs) -> Result<()> {
         modules.len(),
         rows.len()
     );
+
+    let finished_at = SystemTime::now();
+    let mut canonical = hash_canonical_inputs(
+        &args.input_dir,
+        &["measurements.tsv", "samples.tsv", "proteins.tsv"],
+    )?;
+    let modules_hash =
+        hash_labeled_inputs(&[("modules_tsv", args.modules_tsv.as_path())])?;
+    canonical.extend(modules_hash);
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "score modules",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "modules-tsv": args.modules_tsv.display().to_string(),
+            "output": args.output.display().to_string(),
+            "method": args.method,
+            "canonical-output-dir": args.canonical_output_dir.as_ref().map(|p| p.display().to_string()),
+        }),
+        &canonical,
+        &outputs,
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("score modules: sidecar={}", sidecar.display());
     Ok(())
 }
 

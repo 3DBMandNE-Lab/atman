@@ -1,8 +1,12 @@
 use anyhow::{bail, Context, Result};
 use clap::Args as ClapArgs;
 use csv::ReaderBuilder;
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::time::SystemTime;
+
+use crate::io::{hash_labeled_inputs, sidecar_path_for, write_run_sidecar};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -30,6 +34,7 @@ struct Acc {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     let modules = read_modules(&args.modules_tsv)?;
     if modules.is_empty() {
         bail!("no module definitions found in {:?}", args.modules_tsv);
@@ -118,6 +123,28 @@ pub fn run(args: Args) -> Result<()> {
     std::fs::write(&args.output, out.as_bytes())
         .with_context(|| format!("writing {:?}", args.output))?;
     eprintln!("module-trajectory: wrote {:?}", args.output);
+
+    let finished_at = SystemTime::now();
+    let inputs_sha256 = hash_labeled_inputs(&[
+        ("deltas_tsv", args.deltas_tsv.as_path()),
+        ("modules_tsv", args.modules_tsv.as_path()),
+    ])?;
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "module-trajectory",
+        json!({
+            "deltas-tsv": args.deltas_tsv.display().to_string(),
+            "modules-tsv": args.modules_tsv.display().to_string(),
+            "output": args.output.display().to_string(),
+        }),
+        &inputs_sha256,
+        std::slice::from_ref(&args.output),
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("module-trajectory: sidecar={}", sidecar.display());
     Ok(())
 }
 

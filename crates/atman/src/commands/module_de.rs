@@ -8,11 +8,16 @@ use anyhow::{bail, Context, Result};
 use atman_core::de::{bh_fdr, paired_t, welch_t, PairedTResult, SkipReason};
 use clap::Args as ClapArgs;
 use csv::ReaderBuilder;
+use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use super::parse_comparisons;
-use crate::io::read_measurements_long;
+use crate::io::{
+    hash_canonical_inputs, hash_labeled_inputs, read_measurements_long, sidecar_path_for,
+    write_run_sidecar,
+};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -47,6 +52,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     if args.test != "paired-t" && args.test != "welch-t" {
         bail!(
             "test {:?} not supported here; use paired-t or welch-t",
@@ -249,17 +255,44 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
-    std::fs::write(
-        args.output_dir.join("module_de_results.tsv"),
-        out.as_bytes(),
-    )
-    .with_context(|| "writing module_de_results.tsv")?;
+    let output_path = args.output_dir.join("module_de_results.tsv");
+    std::fs::write(&output_path, out.as_bytes())
+        .with_context(|| "writing module_de_results.tsv")?;
     eprintln!(
         "module-de: wrote {:?} (K={} modules × {} comparisons)",
-        args.output_dir.join("module_de_results.tsv"),
+        output_path,
         cells.len(),
         comparisons.len(),
     );
+
+    let finished_at = SystemTime::now();
+    let mut canonical = hash_canonical_inputs(
+        &args.input_dir,
+        &["measurements.tsv", "samples.tsv", "proteins.tsv"],
+    )?;
+    let modules_hash =
+        hash_labeled_inputs(&[("modules_tsv", args.modules_tsv.as_path())])?;
+    canonical.extend(modules_hash);
+    let sidecar = sidecar_path_for(&output_path);
+    write_run_sidecar(
+        &sidecar,
+        "module-de",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "output-dir": args.output_dir.display().to_string(),
+            "modules-tsv": args.modules_tsv.display().to_string(),
+            "test": args.test,
+            "paired-by": args.paired_by,
+            "groups": args.groups,
+            "min-pairs": args.min_pairs,
+        }),
+        &canonical,
+        std::slice::from_ref(&output_path),
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("module-de: sidecar={}", sidecar.display());
     Ok(())
 }
 

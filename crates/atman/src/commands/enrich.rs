@@ -6,7 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use super::enrich_gprofiler::{run_gprofiler, GprofilerArgs};
-use crate::io::{atomic_write, need_col};
+use crate::io::{
+    atomic_write, hash_labeled_inputs, need_col, sidecar_path_for, write_run_sidecar,
+};
+use serde_json::json;
+use std::path::Path as StdPath;
+use std::time::SystemTime;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -70,6 +75,7 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn run_ora(args: OraArgs) -> Result<()> {
+    let started_at = SystemTime::now();
     if !(args.q.is_finite() && (0.0..=1.0).contains(&args.q)) {
         bail!("--q must satisfy 0 <= q <= 1");
     }
@@ -136,6 +142,35 @@ fn run_ora(args: OraArgs) -> Result<()> {
         universe.len(),
         args.q
     );
+
+    let finished_at = SystemTime::now();
+    let mut labeled: Vec<(&str, &StdPath)> = vec![
+        ("de_results", args.de_results.as_path()),
+        ("gene_sets", args.gene_sets.as_path()),
+    ];
+    if let Some(p) = &args.universe {
+        labeled.push(("universe", p.as_path()));
+    }
+    let inputs_sha256 = hash_labeled_inputs(&labeled)?;
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "enrich ora",
+        json!({
+            "de-results": args.de_results.display().to_string(),
+            "gene-sets": args.gene_sets.display().to_string(),
+            "output": args.output.display().to_string(),
+            "comparison": args.comparison,
+            "q": args.q,
+            "universe": args.universe.as_ref().map(|p| p.display().to_string()),
+        }),
+        &inputs_sha256,
+        std::slice::from_ref(&args.output),
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("enrich ora: sidecar={}", sidecar.display());
     Ok(())
 }
 

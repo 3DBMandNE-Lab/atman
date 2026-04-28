@@ -4,7 +4,12 @@ use csv::ReaderBuilder;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::io::{atomic_write, escape_tsv, find_col, format_float, need_col, optional_cell};
+use crate::io::{
+    atomic_write, escape_tsv, find_col, format_float, hash_labeled_inputs, need_col,
+    optional_cell, sidecar_path_for, write_run_sidecar,
+};
+use serde_json::json;
+use std::time::SystemTime;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -69,6 +74,7 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn run_filter(args: FilterArgs) -> Result<()> {
+    let started_at = SystemTime::now();
     if !args.min_annotation_pvalue.is_finite() || args.min_annotation_pvalue < 0.0 {
         bail!("--min-annotation-pvalue must be a non-negative finite value");
     }
@@ -151,6 +157,32 @@ fn run_filter(args: FilterArgs) -> Result<()> {
         loadings.len(),
         args.output.display()
     );
+
+    let finished_at = SystemTime::now();
+    let inputs_sha256 = hash_labeled_inputs(&[
+        ("loadings", args.loadings.as_path()),
+        ("annotations", args.annotations.as_path()),
+    ])?;
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "programs filter",
+        json!({
+            "loadings": args.loadings.display().to_string(),
+            "annotations": args.annotations.display().to_string(),
+            "min-annotation-pvalue": args.min_annotation_pvalue,
+            "min-top-loading": args.min_top_loading,
+            "max-keratin-fraction": args.max_keratin_fraction,
+            "top-n": args.top_n,
+            "output": args.output.display().to_string(),
+        }),
+        &inputs_sha256,
+        std::slice::from_ref(&args.output),
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("programs filter: sidecar={}", sidecar.display());
     Ok(())
 }
 

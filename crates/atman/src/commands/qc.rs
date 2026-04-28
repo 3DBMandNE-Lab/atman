@@ -2,12 +2,17 @@ use anyhow::{Context, Result};
 use atman_core::qc::apply_mask_warn_fail_all;
 use atman_core::MeasurementRecord;
 use clap::Args as ClapArgs;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use crate::io::{read_measurements_long, write_measurements_long};
+use crate::io::{
+    hash_canonical_inputs, read_measurements_long, sidecar_path_for, write_measurements_long,
+    write_run_sidecar,
+};
 
 const RULE_NAME: &str = "mask-warn-fail";
 
@@ -25,6 +30,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
@@ -35,8 +41,10 @@ pub fn run(args: Args) -> Result<()> {
     let after = records.iter().filter(|r| !r.dropped_by_qc).count();
     let masked = before - after;
 
-    write_measurements_long(&args.output_dir.join("measurements.tsv"), &records)?;
-    write_qc_report(&args.output_dir.join("qc_report.tsv"), &records)?;
+    let measurements_out = args.output_dir.join("measurements.tsv");
+    let report_out = args.output_dir.join("qc_report.tsv");
+    write_measurements_long(&measurements_out, &records)?;
+    write_qc_report(&report_out, &records)?;
     eprintln!(
         "qc: rule={} total={} masked={} passed={}",
         RULE_NAME,
@@ -44,6 +52,26 @@ pub fn run(args: Args) -> Result<()> {
         masked,
         after,
     );
+
+    let finished_at = SystemTime::now();
+    let inputs_sha256 = hash_canonical_inputs(&args.input_dir, &["measurements.tsv"])?;
+    let outputs = [measurements_out.clone(), report_out.clone()];
+    let sidecar = sidecar_path_for(&measurements_out);
+    write_run_sidecar(
+        &sidecar,
+        "qc",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "output-dir": args.output_dir.display().to_string(),
+            "rule": RULE_NAME,
+        }),
+        &inputs_sha256,
+        &outputs,
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("qc: sidecar={}", sidecar.display());
     Ok(())
 }
 

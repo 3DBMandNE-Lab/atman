@@ -1,8 +1,12 @@
 use anyhow::{bail, Context, Result};
 use clap::Args as ClapArgs;
 use csv::ReaderBuilder;
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::time::SystemTime;
+
+use crate::io::{hash_labeled_inputs, sidecar_path_for, write_run_sidecar};
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -27,6 +31,7 @@ struct DeLite {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let started_at = SystemTime::now();
     let pairs = parse_pairs(&args.pairs)?;
     let by_comp = read_de_results(&args.de_results)?;
 
@@ -140,6 +145,26 @@ pub fn run(args: Args) -> Result<()> {
     std::fs::write(&args.output, out.as_bytes())
         .with_context(|| format!("writing {:?}", args.output))?;
     eprintln!("asymmetry: wrote {:?}", args.output);
+
+    let finished_at = SystemTime::now();
+    let inputs_sha256 =
+        hash_labeled_inputs(&[("de_results", args.de_results.as_path())])?;
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "asymmetry",
+        json!({
+            "de-results": args.de_results.display().to_string(),
+            "output": args.output.display().to_string(),
+            "pairs": args.pairs,
+        }),
+        &inputs_sha256,
+        std::slice::from_ref(&args.output),
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("asymmetry: sidecar={}", sidecar.display());
     Ok(())
 }
 
