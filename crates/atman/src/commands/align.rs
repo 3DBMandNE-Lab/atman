@@ -140,7 +140,11 @@ pub struct BootstrapArgs {
     n_boot: usize,
 
     /// Top-level seed. Per-iteration sub-seeds derive deterministically
-    /// from SplitMix64`(seed, iter)`.
+    /// from SplitMix64`(seed, iter)`. The default `20260418` is an
+    /// arbitrary fixed integer chosen for reproducibility — change it
+    /// only when you intend to reseed an analysis (any other value is
+    /// equally valid; keeping it pinned means re-runs without `--seed`
+    /// reproduce prior outputs bit-for-bit).
     #[arg(long, default_value_t = 20260418)]
     seed: u64,
 

@@ -2018,36 +2018,24 @@ fn write_proxy_summary(
                 .push(row);
         }
     }
-    let mut buf = String::from(
-        "proxy\tcomparison\tn_tests\tn_p_strict\tmedian_abs_beta\tmedian_p_value\tinterpretation\n",
-    );
+    let mut buf =
+        String::from("proxy\tcomparison\tn_tests\tn_p_strict\tmedian_abs_beta\tmedian_p_value\n");
     for (comparison, rows) in by_comparison {
         let n_tests = rows.len();
         let n_p_strict = rows.iter().filter(|row| row.p_value < p_threshold).count();
         let median_abs_beta = median(rows.iter().map(|row| row.beta.abs()).collect());
         let median_p_value = median(rows.iter().map(|row| row.p_value).collect());
         buf.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
             proxy,
             comparison,
             n_tests,
             n_p_strict,
             fmt_opt(median_abs_beta),
             fmt_opt(median_p_value),
-            proxy_interpretation(proxy)
         ));
     }
     atomic_write(path, buf.as_bytes())
-}
-
-fn proxy_interpretation(proxy: &str) -> &'static str {
-    match proxy {
-        "QAlb" => "albumin quotient barrier-clearance adjustment",
-        "QIgG" => "immunoglobulin quotient barrier-clearance adjustment",
-        "Evans_index" => "ventricular size barrier-clearance adjustment",
-        "ventricular_volume" => "ventricular volume barrier-clearance adjustment",
-        _ => "physiological proxy adjustment",
-    }
 }
 
 pub(super) fn fmt_opt(value: Option<f64>) -> String {

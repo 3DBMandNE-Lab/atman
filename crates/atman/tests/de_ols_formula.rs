@@ -108,7 +108,6 @@ fn per_subject_proxy_adds_continuous_ols_regressor_and_summary() {
     let summary = std::fs::read_to_string(output_dir.join("de_proxy_summary.tsv")).unwrap();
     assert!(summary.starts_with("proxy\tcomparison\tn_tests"));
     assert!(summary.contains("QAlb\tCase-Control\t2\t"));
-    assert!(summary.contains("albumin quotient barrier-clearance adjustment"));
 }
 
 #[test]
