@@ -623,12 +623,14 @@ currently exposes this as a first-class CLI option with provenance.
 
 Subject-level bootstrap of cross-cohort archetype alignment.
 Every iteration resamples subjects within each cohort with
-replacement, re-runs FastICA per cohort, re-aligns with cosine
-similarity, and matches every point-estimate archetype to its
-best-cosine bootstrap counterpart. Output summarises per-archetype
-`bootstrap_prob_universal` / `bootstrap_prob_multi`, both a
-percentile-CI band and a BCa CI on the cohort-count distribution,
-plus Shannon entropy (`alignment_entropy`) over the same histogram.
+replacement, re-runs FastICA per cohort, re-aligns under the
+chosen `--metric`, and matches every point-estimate archetype to
+its best-similarity bootstrap counterpart. Output summarises
+per-archetype `bootstrap_prob_universal` /
+`bootstrap_prob_multi`, both a percentile-CI band and a BCa CI on
+the cohort-count distribution (alpha set by `--ci-alpha`,
+default 0.05 ⇒ 95%), plus Shannon entropy (`alignment_entropy`)
+over the same histogram.
 
 Command:
 
@@ -637,7 +639,9 @@ atman align bootstrap \
   --cohorts out_cohort_a,out_cohort_b,out_cohort_c \
   --labels A,B,C \
   --k 20 --n-boot 200 --seed 20260418 \
+  --metric cosine \
   --cosine-tau 0.30 --match-tau 0.50 \
+  --ci-alpha 0.05 \
   --min-subjects 20 \
   --max-missing-fraction 0.5 --impute mean \
   --output out/align_bootstrap_summary.tsv
@@ -645,12 +649,13 @@ atman align bootstrap \
 
 Scope:
 
-- Cosine similarity only; other metrics deferred.
-- BCa 95% CI whose acceleration is estimated by pooled
-  subject-level jackknife (one leave-one-out pass per subject
-  across all cohorts). When the BCa denominator goes non-monotone
-  the CI silently falls back to the percentile bound and the
-  `bca_fallback_to_percentile` column flips to 1.
+- `--metric` accepts `cosine` (default), `jaccard` (top-N loading
+  set overlap), or `spearman` (absolute rank correlation).
+- BCa CI at the level set by `--ci-alpha`. Acceleration is
+  estimated by pooled subject-level jackknife (one leave-one-out
+  pass per subject across all cohorts). When the BCa denominator
+  goes non-monotone the CI falls back to the percentile bound and
+  the `bca_fallback_to_percentile` column flips to 1.
 - Shannon entropy (`alignment_entropy`, bits) over the empirical
   histogram of `n_cohorts` across the bootstrap, counting misses
   as `n_cohorts = 0`. Low values ⇒ the archetype's cohort coverage

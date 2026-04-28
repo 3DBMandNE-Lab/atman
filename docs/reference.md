@@ -179,7 +179,8 @@ Commands that write a sidecar: `ingest-matrix`, `validate` (when
 `--report` is set), `report qc`, `decompose ica`, `decompose unmix`,
 `align programs`, `align project`, `align bootstrap`, `coupling`,
 `null`, `enrich gprofiler`, `de`, `bootstrap protein`,
-`bootstrap module`, `bootstrap program`, `meta`, and `ratio`. The
+`bootstrap module`, `bootstrap program`, `meta`, `ratio`,
+`network influence`, `modules discover`, and `programs filter`. The
 plan-level `atman run` manifest covers its own provenance independently.
 
 `reinvoke` is a convenience field, not the source of truth. The canonical

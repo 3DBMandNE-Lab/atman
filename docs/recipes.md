@@ -209,6 +209,31 @@ atman null \
     --seed 1
 ```
 
+## Module discovery (WGCNA soft-threshold)
+
+Data-driven module discovery from canonical measurements, written as a
+`modules.tsv` that drops straight into `atman score modules`. Soft-power
+β is auto-picked by scale-free `R²`; the run sidecar logs a similarity
+audit (how many feature pairs hit an undefined metric and fell back to
+zero).
+
+```bash
+atman modules discover \
+    --input-dir out \
+    --similarity pearson \
+    --method wgcna-soft \
+    --soft-power auto \
+    --r2-target 0.8 \
+    --min-module-size 5 \
+    --cut-height 0.5 \
+    --output-dir out/modules
+```
+
+Outputs: `modules_discovered.tsv` (gene → module assignment),
+`module_discovery_report.tsv` (size, hub feature, eigengene PC1
+variance per module), and `soft_power_diagnostics.tsv` for the
+auto-β sweep.
+
 ## Module scoring → module-level DE
 
 ```bash
@@ -323,6 +348,34 @@ atman decompose null \
 Outputs: `loadings.tsv` (protein weights per component),
 `activations.tsv` (subject activation per component),
 `stability.tsv` (cross-seed reproducibility per component).
+
+#### Filtering interpretable programs
+
+`programs filter` flags ICA programs that fail any of three checks:
+weak top annotation p-value, diffuse loading (no single-feature peak),
+or contamination signature (the top loadings match a regex pattern of
+known contaminants). The default contamination pattern targets keratin
+(`(?i)^KRT|KERATIN`) — appropriate for plasma/serum/CSF cohorts where
+keratin is a skin-shedding contaminant. Override the pattern for other
+contexts (e.g. `(?i)^HB[AB]` for hemolysis, `(?i)^IG[HKL]` for
+immunoglobulin carryover) or for tissues where keratin is real biology.
+
+```bash
+atman programs filter \
+    --loadings out/loadings.tsv \
+    --annotations out/program_annotations.tsv \
+    --min-annotation-pvalue 0.05 \
+    --min-top-loading 0.5 \
+    --max-contamination-fraction 0.2 \
+    --contamination-pattern '(?i)^KRT|KERATIN' \
+    --top-n 20 \
+    --output out/programs_interpretable.tsv
+```
+
+Output column `fail_reasons` is `none` for interpretable programs, or
+a `;`-joined list of `missing_annotation`, `annotation_p_value`,
+`diffuse_loading`, `contamination_signature`. The pattern used and
+fraction threshold are recorded in the run sidecar.
 
 ### VCA+FCLS unmixing: compositional endmembers
 

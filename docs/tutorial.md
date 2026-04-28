@@ -17,9 +17,11 @@ cargo install --path crates/atman
 atman --help
 ```
 
-Expected: help text listing `ingest-matrix`, `validate`, `qc`, `report`,
-`matrix`, `fold-change`, `de`, `bootstrap`, `asymmetry`, `robustness`,
-`module-trajectory`, and `module-de`.
+Expected: help text listing the full command set (`ingest-matrix`,
+`validate`, `qc`, `de`, `bootstrap`, `null`, `decompose`, `align`,
+`network`, `modules`, `programs`, `enrich`, `meta`, `score`, `run`, …).
+See the README's [Commands](../README.md#commands) section for the
+full catalogue.
 
 Run the test suite to confirm the reproduction base is intact:
 
