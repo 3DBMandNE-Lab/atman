@@ -214,7 +214,10 @@ pub fn read_measurements_long(path: &Path) -> Result<Vec<MeasurementRecord>> {
     for result in reader.records() {
         let row = result.with_context(|| format!("reading record from {:?}", path))?;
         let unit = &row[c_unit];
-        let dropped_by_qc: bool = row[c_drop].parse::<u8>().map(|v| v != 0).unwrap_or(false);
+        let dropped_by_qc: bool = row[c_drop]
+            .parse::<u8>()
+            .map(|v| v != 0)
+            .with_context(|| format!("parsing dropped_by_qc as 0/1 in {:?}", path))?;
         let abund_str = &row[c_abund];
         let abundance_raw_value: f64 = if row[c_abund_raw].is_empty() {
             if dropped_by_qc {
@@ -236,7 +239,10 @@ pub fn read_measurements_long(path: &Path) -> Result<Vec<MeasurementRecord>> {
         } else {
             DetectionLimit(Some(row[c_lod].parse().context("detection_limit parse")?))
         };
-        let below_lod: bool = row[c_below].parse::<u8>().map(|v| v != 0).unwrap_or(false);
+        let below_lod: bool = row[c_below]
+            .parse::<u8>()
+            .map(|v| v != 0)
+            .with_context(|| format!("parsing below_lod as 0/1 in {:?}", path))?;
         let platform = match c_platform
             .and_then(|idx| row.get(idx))
             .filter(|s| !s.is_empty())
@@ -262,7 +268,9 @@ pub fn read_measurements_long(path: &Path) -> Result<Vec<MeasurementRecord>> {
                 run: None,
             },
             dropped_by_qc,
-            ingest_order: row[c_order].parse().unwrap_or(0),
+            ingest_order: row[c_order]
+                .parse()
+                .with_context(|| format!("parsing ingest_order as integer in {:?}", path))?,
             panel: empty_to_none(&row[c_panel]),
         });
     }
@@ -325,7 +333,9 @@ pub fn read_samples(path: &Path) -> Result<Vec<Sample>> {
                 .with_context(|| format!("is_control parse in {:?}", path))?
                 != 0,
             sample_type: empty_to_none(&row[c_type]),
-            ingest_order: row[c_order].parse().unwrap_or(0),
+            ingest_order: row[c_order]
+                .parse()
+                .with_context(|| format!("parsing ingest_order as integer in {:?}", path))?,
         });
     }
     Ok(out)
@@ -495,7 +505,10 @@ pub fn read_peptide_measurements(path: &Path) -> Result<Vec<PeptideMeasurementRe
     let mut out = Vec::new();
     for result in reader.records() {
         let row = result.with_context(|| format!("reading peptide measurement from {:?}", path))?;
-        let dropped: bool = row[c_drop].parse::<u8>().map(|v| v != 0).unwrap_or(false);
+        let dropped: bool = row[c_drop]
+            .parse::<u8>()
+            .map(|v| v != 0)
+            .with_context(|| format!("parsing dropped_by_qc as 0/1 in {:?}", path))?;
         let abund_str = &row[c_abund];
         let abundance: f64 = if abund_str.is_empty() {
             f64::NAN
@@ -504,7 +517,10 @@ pub fn read_peptide_measurements(path: &Path) -> Result<Vec<PeptideMeasurementRe
                 .parse()
                 .with_context(|| format!("peptide abundance parse in {:?}", path))?
         };
-        let below_lod: bool = row[c_below].parse::<u8>().map(|v| v != 0).unwrap_or(false);
+        let below_lod: bool = row[c_below]
+            .parse::<u8>()
+            .map(|v| v != 0)
+            .with_context(|| format!("parsing below_lod as 0/1 in {:?}", path))?;
         out.push(PeptideMeasurementRecord {
             sample_id: row[c_sample].to_string(),
             peptide_id: row[c_pep].to_string(),
@@ -801,20 +817,24 @@ pub fn read_de_results(path: &Path) -> Result<Vec<DeResultRow>> {
             .unwrap_or("")
             .to_string()
     };
-    let parse_opt_f64 = |row: &csv::StringRecord, name: &str| -> Option<f64> {
+    let parse_opt_f64 = |row: &csv::StringRecord, name: &str| -> Result<Option<f64>> {
         let s = get(row, name);
         if s.is_empty() {
-            None
+            Ok(None)
         } else {
-            s.parse().ok()
+            s.parse()
+                .map(Some)
+                .with_context(|| format!("parsing {name} as f64 in {:?}", path))
         }
     };
-    let parse_opt_usize = |row: &csv::StringRecord, name: &str| -> Option<usize> {
+    let parse_opt_usize = |row: &csv::StringRecord, name: &str| -> Result<Option<usize>> {
         let s = get(row, name);
         if s.is_empty() {
-            None
+            Ok(None)
         } else {
-            s.parse().ok()
+            s.parse()
+                .map(Some)
+                .with_context(|| format!("parsing {name} as integer in {:?}", path))
         }
     };
     let mut out = Vec::new();
@@ -826,39 +846,41 @@ pub fn read_de_results(path: &Path) -> Result<Vec<DeResultRow>> {
             gene_symbol: get(&row, "gene_symbol"),
             uniprot: get(&row, "uniprot"),
             comparison: get(&row, "comparison"),
-            n_pairs: get(&row, "n_pairs").parse().unwrap_or(0),
-            mean_a: parse_opt_f64(&row, "mean_a"),
-            mean_b: parse_opt_f64(&row, "mean_b"),
-            mean_diff: parse_opt_f64(&row, "mean_diff"),
-            t: parse_opt_f64(&row, "t"),
-            df: parse_opt_f64(&row, "df"),
-            p_value: parse_opt_f64(&row, "p_value"),
-            bh_q: parse_opt_f64(&row, "bh_q"),
-            effect_size: parse_opt_f64(&row, "effect_size"),
+            n_pairs: get(&row, "n_pairs")
+                .parse()
+                .with_context(|| format!("parsing n_pairs as integer in {:?}", path))?,
+            mean_a: parse_opt_f64(&row, "mean_a")?,
+            mean_b: parse_opt_f64(&row, "mean_b")?,
+            mean_diff: parse_opt_f64(&row, "mean_diff")?,
+            t: parse_opt_f64(&row, "t")?,
+            df: parse_opt_f64(&row, "df")?,
+            p_value: parse_opt_f64(&row, "p_value")?,
+            bh_q: parse_opt_f64(&row, "bh_q")?,
+            effect_size: parse_opt_f64(&row, "effect_size")?,
             effect_size_method: get(&row, "effect_size_method"),
-            ci_low: parse_opt_f64(&row, "ci_low"),
-            ci_high: parse_opt_f64(&row, "ci_high"),
-            wilcoxon_p: parse_opt_f64(&row, "wilcoxon_p"),
+            ci_low: parse_opt_f64(&row, "ci_low")?,
+            ci_high: parse_opt_f64(&row, "ci_high")?,
+            wilcoxon_p: parse_opt_f64(&row, "wilcoxon_p")?,
             wilcoxon_method: get(&row, "wilcoxon_method"),
-            median_diff: parse_opt_f64(&row, "median_diff"),
-            trimmed_mean_diff: parse_opt_f64(&row, "trimmed_mean_diff"),
+            median_diff: parse_opt_f64(&row, "median_diff")?,
+            trimmed_mean_diff: parse_opt_f64(&row, "trimmed_mean_diff")?,
             skip_reason: get(&row, "skip_reason"),
-            s2_trend: parse_opt_f64(&row, "s2_trend"),
-            s2_prior: parse_opt_f64(&row, "s2_prior"),
-            s2_posterior: parse_opt_f64(&row, "s2_posterior"),
-            df_prior: parse_opt_f64(&row, "df_prior"),
-            df_total: parse_opt_f64(&row, "df_total"),
-            f_statistic: parse_opt_f64(&row, "f_statistic"),
-            f_p_value: parse_opt_f64(&row, "f_p_value"),
-            f_bh_q: parse_opt_f64(&row, "f_bh_q"),
-            lfc_threshold: parse_opt_f64(&row, "lfc_threshold"),
-            n_peptides_observed: parse_opt_usize(&row, "n_peptides_observed"),
-            peptide_variance_ratio: parse_opt_f64(&row, "peptide_variance_ratio"),
-            ridge_lambda: parse_opt_f64(&row, "ridge_lambda"),
+            s2_trend: parse_opt_f64(&row, "s2_trend")?,
+            s2_prior: parse_opt_f64(&row, "s2_prior")?,
+            s2_posterior: parse_opt_f64(&row, "s2_posterior")?,
+            df_prior: parse_opt_f64(&row, "df_prior")?,
+            df_total: parse_opt_f64(&row, "df_total")?,
+            f_statistic: parse_opt_f64(&row, "f_statistic")?,
+            f_p_value: parse_opt_f64(&row, "f_p_value")?,
+            f_bh_q: parse_opt_f64(&row, "f_bh_q")?,
+            lfc_threshold: parse_opt_f64(&row, "lfc_threshold")?,
+            n_peptides_observed: parse_opt_usize(&row, "n_peptides_observed")?,
+            peptide_variance_ratio: parse_opt_f64(&row, "peptide_variance_ratio")?,
+            ridge_lambda: parse_opt_f64(&row, "ridge_lambda")?,
             method: get(&row, "method"),
             posthoc_method: get(&row, "posthoc_method"),
-            posthoc_p: parse_opt_f64(&row, "posthoc_p"),
-            posthoc_adj_p: parse_opt_f64(&row, "posthoc_adj_p"),
+            posthoc_p: parse_opt_f64(&row, "posthoc_p")?,
+            posthoc_adj_p: parse_opt_f64(&row, "posthoc_adj_p")?,
         });
     }
     Ok(out)

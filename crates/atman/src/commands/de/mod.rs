@@ -21,7 +21,7 @@ use atman_core::de::{
 };
 use atman_core::Sample;
 use clap::Args as ClapArgs;
-use serde_json::json;
+use serde_json::{json, Map as JsonMap};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -553,34 +553,64 @@ pub fn run(args: Args) -> Result<()> {
     // cells without needing to pair by subject.
     let mut cells_by_sample: HashMap<(String, String, String), f64> = HashMap::new();
 
+    let n_total_measurements = measurements.len();
+    let mut n_skip_qc_masked = 0usize;
+    let mut n_skip_unknown_sample = 0usize;
+    let mut n_skip_control_sample = 0usize;
+    let mut n_skip_no_subject_id = 0usize;
+    let mut n_skip_no_condition = 0usize;
+    let mut n_skip_no_panel = 0usize;
+    let mut n_skip_no_gene_symbol = 0usize;
+    let mut n_kept_measurements = 0usize;
+
     for m in &measurements {
         let abundance = match m.effective_abundance() {
             Some(a) => a,
-            None => continue, // QC-masked
+            None => {
+                n_skip_qc_masked += 1;
+                continue;
+            }
         };
         let s = match sample_by_id.get(m.sample_id.as_str()) {
             Some(s) => *s,
-            None => continue,
+            None => {
+                n_skip_unknown_sample += 1;
+                continue;
+            }
         };
         if s.is_control {
+            n_skip_control_sample += 1;
             continue;
         }
         let subject = match &s.subject_id {
             Some(id) => id.clone(),
-            None => continue,
+            None => {
+                n_skip_no_subject_id += 1;
+                continue;
+            }
         };
         let condition = match &s.condition {
             Some(c) => c.clone(),
-            None => continue,
+            None => {
+                n_skip_no_condition += 1;
+                continue;
+            }
         };
         let panel = match &m.panel {
             Some(p) => p.clone(),
-            None => continue,
+            None => {
+                n_skip_no_panel += 1;
+                continue;
+            }
         };
         let gene = match &m.gene_symbol {
             Some(g) => g.clone(),
-            None => continue,
+            None => {
+                n_skip_no_gene_symbol += 1;
+                continue;
+            }
         };
+        n_kept_measurements += 1;
         if args.test == "ols" || args.test == "mixed" {
             cells_by_sample.insert(
                 (panel.clone(), gene.clone(), m.sample_id.clone()),
@@ -1053,6 +1083,18 @@ pub fn run(args: Args) -> Result<()> {
             .map(|s| s.label.as_str())
             .unwrap_or(""),
     );
+    eprintln!(
+        "de: measurement_filter total={} kept={} qc_masked={} unknown_sample={} control_sample={} no_subject_id={} no_condition={} no_panel={} no_gene_symbol={}",
+        n_total_measurements,
+        n_kept_measurements,
+        n_skip_qc_masked,
+        n_skip_unknown_sample,
+        n_skip_control_sample,
+        n_skip_no_subject_id,
+        n_skip_no_condition,
+        n_skip_no_panel,
+        n_skip_no_gene_symbol,
+    );
 
     let finished_at = SystemTime::now();
     let inputs_sha256 = hash_canonical_inputs(
@@ -1065,6 +1107,23 @@ pub fn run(args: Args) -> Result<()> {
         ],
     )?;
     let sidecar = sidecar_path_for(&results_path);
+    let mut extras = JsonMap::new();
+    extras.insert(
+        "measurement_filter".into(),
+        json!({
+            "n_total": n_total_measurements,
+            "n_kept": n_kept_measurements,
+            "n_skip": {
+                "qc_masked": n_skip_qc_masked,
+                "unknown_sample": n_skip_unknown_sample,
+                "control_sample": n_skip_control_sample,
+                "no_subject_id": n_skip_no_subject_id,
+                "no_condition": n_skip_no_condition,
+                "no_panel": n_skip_no_panel,
+                "no_gene_symbol": n_skip_no_gene_symbol,
+            },
+        }),
+    );
     write_run_sidecar(
         &sidecar,
         "de",
@@ -1097,7 +1156,7 @@ pub fn run(args: Args) -> Result<()> {
         &outputs,
         started_at,
         finished_at,
-        None,
+        Some(extras),
     )?;
     eprintln!("de: sidecar={}", sidecar.display());
     Ok(())
