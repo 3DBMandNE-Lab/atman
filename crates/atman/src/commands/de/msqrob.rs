@@ -332,11 +332,11 @@ pub(super) fn run_msqrob(
                 if let Some(q) = qs[local] {
                     let panel = fits[global].0.clone();
                     let acc = per_panel.entry(panel).or_default();
-                    if q < 0.05 {
-                        acc.n_q_lt_05 += 1;
+                    if q < args.report_q_strict {
+                        acc.n_q_strict += 1;
                     }
-                    if q < 0.10 {
-                        acc.n_q_lt_10 += 1;
+                    if q < args.report_q_relaxed {
+                        acc.n_q_relaxed += 1;
                     }
                     if acc.min_q.map(|m| q < m).unwrap_or(true) {
                         acc.min_q = Some(q);
@@ -354,8 +354,8 @@ pub(super) fn run_msqrob(
                 panel,
                 n_tests: acc.n_tests,
                 n_skipped: acc.n_skipped,
-                n_q_lt_05: acc.n_q_lt_05,
-                n_q_lt_10: acc.n_q_lt_10,
+                n_q_strict: acc.n_q_strict,
+                n_q_relaxed: acc.n_q_relaxed,
                 min_q: acc.min_q,
                 max_abs_effect: acc.max_abs_effect,
                 limma_trend_fallback_used: None,
@@ -370,8 +370,8 @@ pub(super) fn run_msqrob(
 struct PanelAcc {
     n_tests: usize,
     n_skipped: usize,
-    n_q_lt_05: usize,
-    n_q_lt_10: usize,
+    n_q_strict: usize,
+    n_q_relaxed: usize,
     min_q: Option<f64>,
     max_abs_effect: Option<f64>,
 }

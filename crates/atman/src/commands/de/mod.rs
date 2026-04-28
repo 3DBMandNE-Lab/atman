@@ -229,6 +229,27 @@ pub struct Args {
     /// MNAR-aware model upstream, or after imputation).
     #[arg(long, default_value_t = false)]
     allow_censored: bool,
+
+    /// Strict BH-q threshold counted in the `n_q_strict` column of
+    /// `de_report.tsv`. Reporting policy only — does not change which
+    /// tests are run, what is written to `de_results.tsv`, or the
+    /// post-hoc `decision` column (see `--alpha`). Must satisfy
+    /// `0 < strict < relaxed < 1`. Resolved value is stamped in the
+    /// run sidecar's `report_thresholds` block.
+    #[arg(long, default_value_t = 0.05)]
+    report_q_strict: f64,
+
+    /// Relaxed BH-q threshold counted in the `n_q_relaxed` column of
+    /// `de_report.tsv`. Same scope as `--report-q-strict`. Must
+    /// satisfy `0 < strict < relaxed < 1`.
+    #[arg(long, default_value_t = 0.10)]
+    report_q_relaxed: f64,
+
+    /// p-value threshold counted in the `n_p_strict` column of the
+    /// per-subject-proxy summary TSV. Reporting policy only. Must lie
+    /// in `(0, 1)`.
+    #[arg(long, default_value_t = 0.05)]
+    proxy_p_threshold: f64,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -269,6 +290,31 @@ pub fn run(args: Args) -> Result<()> {
     }
     if args.min_pairs < 2 {
         anyhow::bail!("min-pairs must be >= 2");
+    }
+    if !args.report_q_strict.is_finite() || !(0.0..1.0).contains(&args.report_q_strict) {
+        anyhow::bail!(
+            "--report-q-strict {} must be in (0, 1)",
+            args.report_q_strict
+        );
+    }
+    if !args.report_q_relaxed.is_finite() || !(0.0..1.0).contains(&args.report_q_relaxed) {
+        anyhow::bail!(
+            "--report-q-relaxed {} must be in (0, 1)",
+            args.report_q_relaxed
+        );
+    }
+    if args.report_q_strict >= args.report_q_relaxed {
+        anyhow::bail!(
+            "--report-q-strict {} must be < --report-q-relaxed {}",
+            args.report_q_strict,
+            args.report_q_relaxed
+        );
+    }
+    if !args.proxy_p_threshold.is_finite() || !(0.0..1.0).contains(&args.proxy_p_threshold) {
+        anyhow::bail!(
+            "--proxy-p-threshold {} must be in (0, 1)",
+            args.proxy_p_threshold
+        );
     }
     if args.test == "moderated"
         && (!args.moderation_prior_df.is_finite() || args.moderation_prior_df <= 0.0)
@@ -953,11 +999,11 @@ pub fn run(args: Args) -> Result<()> {
                 let acc = per_panel.entry(row.panel.clone()).or_default();
                 acc.n_tests += 1;
                 if let Some(q) = row.bh_q {
-                    if q < 0.05 {
-                        acc.n_q_lt_05 += 1;
+                    if q < args.report_q_strict {
+                        acc.n_q_strict += 1;
                     }
-                    if q < 0.10 {
-                        acc.n_q_lt_10 += 1;
+                    if q < args.report_q_relaxed {
+                        acc.n_q_relaxed += 1;
                     }
                     if acc.min_q.map(|m| q < m).unwrap_or(true) {
                         acc.min_q = Some(q);
@@ -978,8 +1024,8 @@ pub fn run(args: Args) -> Result<()> {
                     panel,
                     n_tests: acc.n_tests,
                     n_skipped: acc.n_skipped,
-                    n_q_lt_05: acc.n_q_lt_05,
-                    n_q_lt_10: acc.n_q_lt_10,
+                    n_q_strict: acc.n_q_strict,
+                    n_q_relaxed: acc.n_q_relaxed,
                     min_q: acc.min_q,
                     max_abs_effect: acc.max_abs_effect,
                     limma_trend_fallback_used: None,
@@ -1023,7 +1069,7 @@ pub fn run(args: Args) -> Result<()> {
         outputs.push(covariates_path.clone());
     }
     if let Some(proxy) = args.per_subject_proxy.as_deref() {
-        write_proxy_summary(&proxy_path, proxy, &covariate_rows)?;
+        write_proxy_summary(&proxy_path, proxy, &covariate_rows, args.proxy_p_threshold)?;
         outputs.push(proxy_path.clone());
     }
     if args.test == "ols" || args.test == "mixed" {
@@ -1124,6 +1170,14 @@ pub fn run(args: Args) -> Result<()> {
             },
         }),
     );
+    extras.insert(
+        "report_thresholds".into(),
+        json!({
+            "q_strict": args.report_q_strict,
+            "q_relaxed": args.report_q_relaxed,
+            "proxy_p": args.proxy_p_threshold,
+        }),
+    );
     write_run_sidecar(
         &sidecar,
         "de",
@@ -1151,6 +1205,9 @@ pub fn run(args: Args) -> Result<()> {
             "ridge-lambda": args.ridge_lambda,
             "min-peptides": args.min_peptides,
             "omnibus-factor": args.omnibus_factor,
+            "report-q-strict": args.report_q_strict,
+            "report-q-relaxed": args.report_q_relaxed,
+            "proxy-p-threshold": args.proxy_p_threshold,
         }),
         &inputs_sha256,
         &outputs,
@@ -1219,8 +1276,8 @@ fn canonical_proxy_name(proxy: &str) -> String {
 struct ReportAccumulator {
     n_tests: usize,
     n_skipped: usize,
-    n_q_lt_05: usize,
-    n_q_lt_10: usize,
+    n_q_strict: usize,
+    n_q_relaxed: usize,
     min_q: Option<f64>,
     max_abs_effect: Option<f64>,
 }
@@ -1946,7 +2003,12 @@ pub(super) fn write_covariate_rows(path: &Path, rows: &[CovariateRow]) -> Result
     atomic_write(path, buf.as_bytes())
 }
 
-fn write_proxy_summary(path: &Path, proxy: &str, rows: &[CovariateRow]) -> Result<()> {
+fn write_proxy_summary(
+    path: &Path,
+    proxy: &str,
+    rows: &[CovariateRow],
+    p_threshold: f64,
+) -> Result<()> {
     let mut by_comparison: BTreeMap<&str, Vec<&CovariateRow>> = BTreeMap::new();
     for row in rows {
         if row.covariate == proxy {
@@ -1957,11 +2019,11 @@ fn write_proxy_summary(path: &Path, proxy: &str, rows: &[CovariateRow]) -> Resul
         }
     }
     let mut buf = String::from(
-        "proxy\tcomparison\tn_tests\tn_p_lt_05\tmedian_abs_beta\tmedian_p_value\tinterpretation\n",
+        "proxy\tcomparison\tn_tests\tn_p_strict\tmedian_abs_beta\tmedian_p_value\tinterpretation\n",
     );
     for (comparison, rows) in by_comparison {
         let n_tests = rows.len();
-        let n_p_lt_05 = rows.iter().filter(|row| row.p_value < 0.05).count();
+        let n_p_strict = rows.iter().filter(|row| row.p_value < p_threshold).count();
         let median_abs_beta = median(rows.iter().map(|row| row.beta.abs()).collect());
         let median_p_value = median(rows.iter().map(|row| row.p_value).collect());
         buf.push_str(&format!(
@@ -1969,7 +2031,7 @@ fn write_proxy_summary(path: &Path, proxy: &str, rows: &[CovariateRow]) -> Resul
             proxy,
             comparison,
             n_tests,
-            n_p_lt_05,
+            n_p_strict,
             fmt_opt(median_abs_beta),
             fmt_opt(median_p_value),
             proxy_interpretation(proxy)

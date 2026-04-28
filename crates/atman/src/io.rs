@@ -981,13 +981,18 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
 }
 
 /// One row of `de_report.tsv`. Per-panel, per-comparison summary.
+///
+/// `n_q_strict` and `n_q_relaxed` count BH-q values below the strict
+/// and relaxed thresholds resolved at the CLI (`--report-q-strict` and
+/// `--report-q-relaxed` on `atman de`); the resolved numeric values
+/// are stamped in the run sidecar's `report_thresholds` block.
 pub struct DeReportRow {
     pub comparison: String,
     pub panel: String,
     pub n_tests: usize,
     pub n_skipped: usize,
-    pub n_q_lt_05: usize,
-    pub n_q_lt_10: usize,
+    pub n_q_strict: usize,
+    pub n_q_relaxed: usize,
     pub min_q: Option<f64>,
     pub max_abs_effect: Option<f64>,
     // Appended by the limma eBayes + F-tests feature.
@@ -996,7 +1001,7 @@ pub struct DeReportRow {
 
 pub fn write_de_report(path: &Path, rows: &[DeReportRow]) -> Result<()> {
     let mut buf = String::from(
-        "comparison\tpanel\tn_tests\tn_skipped\tn_q_lt_05\tn_q_lt_10\tmin_q\tmax_abs_effect\t\
+        "comparison\tpanel\tn_tests\tn_skipped\tn_q_strict\tn_q_relaxed\tmin_q\tmax_abs_effect\t\
          limma_trend_fallback_used\n",
     );
     for r in rows {
@@ -1008,9 +1013,9 @@ pub fn write_de_report(path: &Path, rows: &[DeReportRow]) -> Result<()> {
         buf.push('\t');
         buf.push_str(&r.n_skipped.to_string());
         buf.push('\t');
-        buf.push_str(&r.n_q_lt_05.to_string());
+        buf.push_str(&r.n_q_strict.to_string());
         buf.push('\t');
-        buf.push_str(&r.n_q_lt_10.to_string());
+        buf.push_str(&r.n_q_relaxed.to_string());
         buf.push('\t');
         push_opt_f64(&mut buf, r.min_q);
         buf.push('\t');

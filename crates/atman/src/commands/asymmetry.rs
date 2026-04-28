@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::io::{hash_labeled_inputs, sidecar_path_for, write_run_sidecar};
+use serde_json::Map as JsonMap;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -22,6 +23,18 @@ pub struct Args {
     /// Example: "PT2-PT1:PR2-PR1,PT2-PR2:PT1-PR1"
     #[arg(long)]
     pairs: String,
+
+    /// Strict BH-q threshold for the `n_sig_strict_*` columns and
+    /// `sig_strict_ratio_a_over_b`. Reporting policy only — no effect
+    /// on which rows are read or written. Must satisfy
+    /// `0 < strict < relaxed < 1`.
+    #[arg(long, default_value_t = 0.05)]
+    report_q_strict: f64,
+
+    /// Relaxed BH-q threshold for the `n_sig_relaxed_*` columns and
+    /// `sig_relaxed_ratio_a_over_b`. Same scope as `--report-q-strict`.
+    #[arg(long, default_value_t = 0.10)]
+    report_q_relaxed: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -32,13 +45,32 @@ struct DeLite {
 
 pub fn run(args: Args) -> Result<()> {
     let started_at = SystemTime::now();
+    if !args.report_q_strict.is_finite() || !(0.0..1.0).contains(&args.report_q_strict) {
+        bail!(
+            "--report-q-strict {} must be in (0, 1)",
+            args.report_q_strict
+        );
+    }
+    if !args.report_q_relaxed.is_finite() || !(0.0..1.0).contains(&args.report_q_relaxed) {
+        bail!(
+            "--report-q-relaxed {} must be in (0, 1)",
+            args.report_q_relaxed
+        );
+    }
+    if args.report_q_strict >= args.report_q_relaxed {
+        bail!(
+            "--report-q-strict {} must be < --report-q-relaxed {}",
+            args.report_q_strict,
+            args.report_q_relaxed
+        );
+    }
     let pairs = parse_pairs(&args.pairs)?;
     let by_comp = read_de_results(&args.de_results)?;
 
     let mut out = String::from(
         "comparison_a\tcomparison_b\tn_common\t\
-         n_sig05_a\tn_sig05_b\tsig05_ratio_a_over_b\t\
-         n_sig10_a\tn_sig10_b\tsig10_ratio_a_over_b\t\
+         n_sig_strict_a\tn_sig_strict_b\tsig_strict_ratio_a_over_b\t\
+         n_sig_relaxed_a\tn_sig_relaxed_b\tsig_relaxed_ratio_a_over_b\t\
          median_abs_effect_a\tmedian_abs_effect_b\tabs_effect_ratio_a_over_b\t\
          sign_concordance_rate\n",
     );
@@ -55,10 +87,10 @@ pub fn run(args: Args) -> Result<()> {
         let keys_b: BTreeSet<&str> = mb.keys().map(|k| k.as_str()).collect();
         let common: Vec<&str> = keys_a.intersection(&keys_b).copied().collect();
 
-        let mut sig05_a = 0usize;
-        let mut sig05_b = 0usize;
-        let mut sig10_a = 0usize;
-        let mut sig10_b = 0usize;
+        let mut sig_strict_a = 0usize;
+        let mut sig_strict_b = 0usize;
+        let mut sig_relaxed_a = 0usize;
+        let mut sig_relaxed_b = 0usize;
         let mut abs_a: Vec<f64> = Vec::new();
         let mut abs_b: Vec<f64> = Vec::new();
         let mut sign_pairs = 0usize;
@@ -69,19 +101,19 @@ pub fn run(args: Args) -> Result<()> {
             let rb = mb.get(k).expect("key from intersection must exist");
 
             if let Some(q) = ra.bh_q {
-                if q < 0.05 {
-                    sig05_a += 1;
+                if q < args.report_q_strict {
+                    sig_strict_a += 1;
                 }
-                if q < 0.10 {
-                    sig10_a += 1;
+                if q < args.report_q_relaxed {
+                    sig_relaxed_a += 1;
                 }
             }
             if let Some(q) = rb.bh_q {
-                if q < 0.05 {
-                    sig05_b += 1;
+                if q < args.report_q_strict {
+                    sig_strict_b += 1;
                 }
-                if q < 0.10 {
-                    sig10_b += 1;
+                if q < args.report_q_relaxed {
+                    sig_relaxed_b += 1;
                 }
             }
 
@@ -103,8 +135,8 @@ pub fn run(args: Args) -> Result<()> {
         }
 
         let n_common = common.len();
-        let sig05_ratio = ratio(sig05_a, sig05_b);
-        let sig10_ratio = ratio(sig10_a, sig10_b);
+        let sig_strict_ratio = ratio(sig_strict_a, sig_strict_b);
+        let sig_relaxed_ratio = ratio(sig_relaxed_a, sig_relaxed_b);
         let med_abs_a = median(&mut abs_a);
         let med_abs_b = median(&mut abs_b);
         let abs_ratio = opt_ratio(med_abs_a, med_abs_b);
@@ -120,17 +152,17 @@ pub fn run(args: Args) -> Result<()> {
         out.push('\t');
         out.push_str(&n_common.to_string());
         out.push('\t');
-        out.push_str(&sig05_a.to_string());
+        out.push_str(&sig_strict_a.to_string());
         out.push('\t');
-        out.push_str(&sig05_b.to_string());
+        out.push_str(&sig_strict_b.to_string());
         out.push('\t');
-        push_opt_f64(&mut out, sig05_ratio);
+        push_opt_f64(&mut out, sig_strict_ratio);
         out.push('\t');
-        out.push_str(&sig10_a.to_string());
+        out.push_str(&sig_relaxed_a.to_string());
         out.push('\t');
-        out.push_str(&sig10_b.to_string());
+        out.push_str(&sig_relaxed_b.to_string());
         out.push('\t');
-        push_opt_f64(&mut out, sig10_ratio);
+        push_opt_f64(&mut out, sig_relaxed_ratio);
         out.push('\t');
         push_opt_f64(&mut out, med_abs_a);
         out.push('\t');
@@ -149,6 +181,14 @@ pub fn run(args: Args) -> Result<()> {
     let finished_at = SystemTime::now();
     let inputs_sha256 = hash_labeled_inputs(&[("de_results", args.de_results.as_path())])?;
     let sidecar = sidecar_path_for(&args.output);
+    let mut extras = JsonMap::new();
+    extras.insert(
+        "report_thresholds".into(),
+        json!({
+            "q_strict": args.report_q_strict,
+            "q_relaxed": args.report_q_relaxed,
+        }),
+    );
     write_run_sidecar(
         &sidecar,
         "asymmetry",
@@ -156,12 +196,14 @@ pub fn run(args: Args) -> Result<()> {
             "de-results": args.de_results.display().to_string(),
             "output": args.output.display().to_string(),
             "pairs": args.pairs,
+            "report-q-strict": args.report_q_strict,
+            "report-q-relaxed": args.report_q_relaxed,
         }),
         &inputs_sha256,
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-        None,
+        Some(extras),
     )?;
     eprintln!("asymmetry: sidecar={}", sidecar.display());
     Ok(())

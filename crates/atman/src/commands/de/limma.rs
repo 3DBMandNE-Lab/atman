@@ -142,8 +142,8 @@ pub(super) fn run_limma(
                 panel: String::new(),
                 n_tests: 0,
                 n_skipped: 0,
-                n_q_lt_05: 0,
-                n_q_lt_10: 0,
+                n_q_strict: 0,
+                n_q_relaxed: 0,
                 min_q: None,
                 max_abs_effect: None,
                 limma_trend_fallback_used: None,
@@ -261,8 +261,8 @@ pub(super) fn run_limma(
                         panel,
                         n_tests: 0,
                         n_skipped: n,
-                        n_q_lt_05: 0,
-                        n_q_lt_10: 0,
+                        n_q_strict: 0,
+                        n_q_relaxed: 0,
                         min_q: None,
                         max_abs_effect: None,
                         limma_trend_fallback_used: None,
@@ -320,8 +320,8 @@ pub(super) fn run_limma(
         struct PanelAcc {
             n_tests: usize,
             n_skipped: usize,
-            n_q_lt_05: usize,
-            n_q_lt_10: usize,
+            n_q_strict: usize,
+            n_q_relaxed: usize,
             min_q: Option<f64>,
             max_abs_effect: Option<f64>,
         }
@@ -387,11 +387,11 @@ pub(super) fn run_limma(
             if p_value.is_some() {
                 acc.n_tests += 1;
                 if let Some(qv) = q {
-                    if qv < 0.05 {
-                        acc.n_q_lt_05 += 1;
+                    if qv < args.report_q_strict {
+                        acc.n_q_strict += 1;
                     }
-                    if qv < 0.10 {
-                        acc.n_q_lt_10 += 1;
+                    if qv < args.report_q_relaxed {
+                        acc.n_q_relaxed += 1;
                     }
                     if acc.min_q.map(|m| qv < m).unwrap_or(true) {
                         acc.min_q = Some(qv);
@@ -480,8 +480,8 @@ pub(super) fn run_limma(
                 panel,
                 n_tests: acc.n_tests,
                 n_skipped: acc.n_skipped,
-                n_q_lt_05: acc.n_q_lt_05,
-                n_q_lt_10: acc.n_q_lt_10,
+                n_q_strict: acc.n_q_strict,
+                n_q_relaxed: acc.n_q_relaxed,
                 min_q: acc.min_q,
                 max_abs_effect: acc.max_abs_effect,
                 limma_trend_fallback_used: Some(output.trend_fallback_used),

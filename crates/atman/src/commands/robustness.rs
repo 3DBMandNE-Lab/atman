@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::io::{hash_labeled_inputs, sidecar_path_for, write_run_sidecar};
+use serde_json::Map as JsonMap;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -26,6 +27,18 @@ pub struct Args {
     /// Top-k for ranking overlap.
     #[arg(long, default_value_t = 20)]
     top_k: usize,
+
+    /// Strict BH-q threshold for the `retained_q_strict` /
+    /// `n_retained_q_strict` columns. Reporting policy only — does
+    /// not change which features are read or written. Must satisfy
+    /// `0 < strict < relaxed < 1`.
+    #[arg(long, default_value_t = 0.05)]
+    report_q_strict: f64,
+
+    /// Relaxed BH-q threshold for the `n_retained_q_relaxed` column.
+    /// Same scope as `--report-q-strict`.
+    #[arg(long, default_value_t = 0.10)]
+    report_q_relaxed: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +53,25 @@ pub fn run(args: Args) -> Result<()> {
     if args.top_k == 0 {
         bail!("top-k must be >= 1");
     }
+    if !args.report_q_strict.is_finite() || !(0.0..1.0).contains(&args.report_q_strict) {
+        bail!(
+            "--report-q-strict {} must be in (0, 1)",
+            args.report_q_strict
+        );
+    }
+    if !args.report_q_relaxed.is_finite() || !(0.0..1.0).contains(&args.report_q_relaxed) {
+        bail!(
+            "--report-q-relaxed {} must be in (0, 1)",
+            args.report_q_relaxed
+        );
+    }
+    if args.report_q_strict >= args.report_q_relaxed {
+        bail!(
+            "--report-q-strict {} must be < --report-q-relaxed {}",
+            args.report_q_strict,
+            args.report_q_relaxed
+        );
+    }
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating {:?}", args.output_dir))?;
 
@@ -53,14 +85,14 @@ pub fn run(args: Args) -> Result<()> {
     let mut sign_out = String::from(
         "comparison\tpanel\tassay_id\tn_loo\t\
          n_sign_match\tsign_match_rate\t\
-         baseline_q\tretained_q_lt_05\tn_retained_q_lt_05\tn_retained_q_lt_10\n",
+         baseline_q\tretained_q_strict\tn_retained_q_strict\tn_retained_q_relaxed\n",
     );
     for (cmp, base_rows) in &base {
         for (key, b) in base_rows {
             let mut n_loo = 0usize;
             let mut n_sign_match = 0usize;
-            let mut n_ret05 = 0usize;
-            let mut n_ret10 = 0usize;
+            let mut n_ret_strict = 0usize;
+            let mut n_ret_relaxed = 0usize;
             for loo in &loos {
                 if let Some(r) = loo.get(cmp).and_then(|m| m.get(key)) {
                     if let (Some(bd), Some(ld)) = (b.mean_diff, r.mean_diff) {
@@ -69,11 +101,11 @@ pub fn run(args: Args) -> Result<()> {
                             n_sign_match += 1;
                         }
                     }
-                    if matches!(r.bh_q, Some(q) if q < 0.05) {
-                        n_ret05 += 1;
+                    if matches!(r.bh_q, Some(q) if q < args.report_q_strict) {
+                        n_ret_strict += 1;
                     }
-                    if matches!(r.bh_q, Some(q) if q < 0.10) {
-                        n_ret10 += 1;
+                    if matches!(r.bh_q, Some(q) if q < args.report_q_relaxed) {
+                        n_ret_relaxed += 1;
                     }
                 }
             }
@@ -83,7 +115,7 @@ pub fn run(args: Args) -> Result<()> {
                 Some(n_sign_match as f64 / n_loo as f64)
             };
             let base_q = b.bh_q;
-            let retained_q_lt_05 = matches!(base_q, Some(q) if q < 0.05);
+            let retained_q_strict = matches!(base_q, Some(q) if q < args.report_q_strict);
             let (panel, assay) = split_key(key);
             sign_out.push_str(cmp);
             sign_out.push('\t');
@@ -99,11 +131,11 @@ pub fn run(args: Args) -> Result<()> {
             sign_out.push('\t');
             push_opt_f64(&mut sign_out, base_q);
             sign_out.push('\t');
-            sign_out.push_str(if retained_q_lt_05 { "true" } else { "false" });
+            sign_out.push_str(if retained_q_strict { "true" } else { "false" });
             sign_out.push('\t');
-            sign_out.push_str(&n_ret05.to_string());
+            sign_out.push_str(&n_ret_strict.to_string());
             sign_out.push('\t');
-            sign_out.push_str(&n_ret10.to_string());
+            sign_out.push_str(&n_ret_relaxed.to_string());
             sign_out.push('\n');
         }
     }
@@ -269,6 +301,14 @@ pub fn run(args: Args) -> Result<()> {
     let inputs_sha256 = hash_labeled_inputs(&labeled_refs)?;
     let outputs = [sign_path.clone(), rank_path.clone(), stab_path.clone()];
     let sidecar = sidecar_path_for(&sign_path);
+    let mut extras = JsonMap::new();
+    extras.insert(
+        "report_thresholds".into(),
+        json!({
+            "q_strict": args.report_q_strict,
+            "q_relaxed": args.report_q_relaxed,
+        }),
+    );
     write_run_sidecar(
         &sidecar,
         "robustness",
@@ -277,12 +317,14 @@ pub fn run(args: Args) -> Result<()> {
             "loo": args.loo,
             "output-dir": args.output_dir.display().to_string(),
             "top-k": args.top_k,
+            "report-q-strict": args.report_q_strict,
+            "report-q-relaxed": args.report_q_relaxed,
         }),
         &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
-        None,
+        Some(extras),
     )?;
     eprintln!("robustness: sidecar={}", sidecar.display());
     Ok(())
