@@ -144,6 +144,7 @@ atman enrich gsea        pre-ranked gene-set enrichment (fgseaSimple-equivalent)
 atman enrich gprofiler   live g:Profiler REST wrapper with cached responses
 atman meta               combine DE results across cohorts
 atman network influence  feature-covariance hub scoring
+atman network differential  cross-cohort differential coexpression (edge-pairwise / edge-summary / module)
 atman decompose ica      multi-seed FastICA with seed-stability reporting
 atman decompose null     permutation-null calibration of archetype stability
 atman decompose variance mixed-model variance partition per archetype

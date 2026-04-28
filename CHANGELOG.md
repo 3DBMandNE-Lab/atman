@@ -8,6 +8,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`atman network differential` — cross-cohort differential
+  coexpression.** Given N cohorts on a shared feature universe (input
+  as `--inputs LABEL1=path1,LABEL2=path2,...`), computes one signed
+  correlation matrix per cohort and summarizes how each protein-pair
+  edge varies across cohorts in one of three runtime-selectable modes:
+  - `--mode edge-pairwise`: per-edge × per-cohort-pair Fisher-z test
+    of `H_0: corr_A = corr_B`. Output shape `n_edges × n_cohort_pairs`.
+  - `--mode edge-summary`: per-edge cross-cohort summary (mean / sd /
+    range / sign-flip count, plus conservation_score = min |r| and
+    divergence_score = sd / (|mean| + ε)). One row per edge; suited to
+    pan-cancer "conserved vs. cohort-specific" maps.
+  - `--mode module`: per-module within-module connectivity per cohort
+    plus a cross-cohort rewiring score (sd of connectivity). Requires
+    `--gene-sets` in the same `set_name` / `gene_symbol` schema used
+    by `enrich ora` / `enrich gsea` / `score signatures`.
+  Signed Pearson (default) or Spearman via `--method`. `--min-overlap`
+  drops edges with sparse subject support in any cohort. `--top-rows`
+  caps emitted rows for the edge modes (sorted by `|z_diff|` and
+  `divergence_score` respectively, with stable tie-breaks). Emits a
+  `*.run.json` SHA-256 sidecar that records every cohort input.
+
 - **CPTAC TMT proteome adapter
   (`adapters/cptac/cptac_tmt_proteome_to_atman.py`).** Converts CPTAC's
   protein-level TMT proteome wide TSVs (the `<TUMOR>_proteome.tsv`

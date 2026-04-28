@@ -318,6 +318,50 @@ Output columns: `sample_id`, `subject_id`, `condition`, `set_name`,
 signature whose observed-in-sample count falls below `--min-set-size`
 emits `score = NaN` so per-sample coverage stays auditable.
 
+## Cross-cohort differential coexpression
+
+`atman network differential` computes per-cohort signed correlation
+matrices on the shared feature universe and summarizes how each
+protein-pair edge varies across cohorts. Three runtime-selectable
+output modes:
+
+```bash
+# Mode 1: per-edge × per-cohort-pair Fisher-z test (DGCA-style).
+atman network differential \
+    --inputs BRCA=runs/BRCA,COAD=runs/COAD,GBM=runs/GBM,HCC=runs/HCC,HNSCC=runs/HNSCC,LUAD=runs/LUAD \
+    --output runs/diff/edge_pairwise.tsv \
+    --mode edge-pairwise \
+    --min-overlap 5 \
+    --top-rows 10000
+
+# Mode 2: per-edge cross-cohort summary (one row per edge).
+atman network differential \
+    --inputs BRCA=runs/BRCA,COAD=runs/COAD,GBM=runs/GBM,HCC=runs/HCC,HNSCC=runs/HNSCC,LUAD=runs/LUAD \
+    --output runs/diff/edge_summary.tsv \
+    --mode edge-summary \
+    --min-overlap 5
+
+# Mode 3: per-module within-module connectivity rewiring.
+atman network differential \
+    --inputs BRCA=runs/BRCA,COAD=runs/COAD,GBM=runs/GBM,HCC=runs/HCC,HNSCC=runs/HNSCC,LUAD=runs/LUAD \
+    --output runs/diff/module_rewiring.tsv \
+    --mode module \
+    --gene-sets hallmarks.tsv
+```
+
+Edge-summary output columns: `feature_a`, `feature_b`, `n_cohorts`,
+`mean_corr`, `sd_corr`, `min_abs_corr`, `max_abs_corr`, `range_corr`,
+`n_sign_flips`, `conservation_score` (min |r| across cohorts —
+high when every cohort agrees), `divergence_score` (sd / (|mean| +
+1e-3) — high when cohorts disagree), then one `<COHORT>_corr` column
+per cohort. Sorted by `divergence_score` descending.
+
+Module output columns: `set_name`, `set_size_declared`,
+`set_size_observed`, `mean_connectivity`, `sd_connectivity`,
+`range_connectivity`, `rewiring_score` (= sd of per-cohort within-
+module mean |r|), then one `<COHORT>_connectivity` column per cohort.
+Sorted by `rewiring_score` descending.
+
 ## Cross-cohort meta-analysis
 
 ```bash

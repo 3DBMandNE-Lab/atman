@@ -24,6 +24,7 @@ pub mod modules_discover;
 pub mod msqrob;
 pub mod multivariate_t;
 pub mod network;
+pub mod network_differential;
 pub mod qc;
 pub mod singscore;
 pub mod stats;
@@ -52,6 +53,11 @@ pub use msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
 pub use network::{
     adjacency, betweenness_centrality, eigenvector_centrality, influence_scores,
     pairwise_similarity, AdjacencyPolicy, InfluenceRow, SimilarityMatrix, SimilarityMetric,
+};
+pub use network_differential::{
+    edge_pairwise_differential, edge_summary_differential, module_rewiring,
+    signed_pairwise_correlations, CohortCorrelations, CohortData, EdgePairwiseRow,
+    EdgeSummaryRow, ModuleRewiringRow, SignedMetric,
 };
 pub use types::{
     Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, PeptideIdentity,

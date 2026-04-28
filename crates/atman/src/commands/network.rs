@@ -10,6 +10,10 @@ use atman_core::network::{
     adjacency, influence_scores, pairwise_similarity, AdjacencyPolicy, InfluenceRow,
     SimilarityMetric,
 };
+use atman_core::network_differential::{
+    edge_pairwise_differential, edge_summary_differential, module_rewiring,
+    signed_pairwise_correlations, CohortCorrelations, CohortData, SignedMetric,
+};
 use atman_core::MeasurementRecord;
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use csv::ReaderBuilder;
@@ -34,6 +38,67 @@ enum Command {
     /// Feature-covariance hub scoring via eigenvector ×
     /// betweenness centrality.
     Influence(InfluenceArgs),
+    /// Cross-cohort differential coexpression. Three output modes:
+    /// edge-pairwise (DGCA-style Fisher-z test), edge-summary
+    /// (per-edge cross-cohort summary), module (per-module within-
+    /// module connectivity rewiring).
+    Differential(DifferentialArgs),
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum DifferentialMode {
+    /// Per-edge × per-cohort-pair Fisher-z test of `H_0: corr_A = corr_B`.
+    EdgePairwise,
+    /// Per-edge cross-cohort summary (mean, sd, sign-flips, conservation,
+    /// divergence). One row per edge.
+    EdgeSummary,
+    /// Per-module within-module connectivity per cohort, with
+    /// cross-cohort rewiring score. Requires --gene-sets.
+    Module,
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct DifferentialArgs {
+    /// Per-cohort canonical input directories. Pass as
+    /// `LABEL=path,LABEL=path,...` to override the default cohort label
+    /// (which is the directory basename). Each directory must contain
+    /// `measurements.tsv` and `samples.tsv`.
+    #[arg(long, value_delimiter = ',')]
+    inputs: Vec<String>,
+
+    /// Output TSV path.
+    #[arg(long)]
+    output: PathBuf,
+
+    /// Differential mode (edge-pairwise / edge-summary / module).
+    #[arg(long, value_enum)]
+    mode: DifferentialMode,
+
+    /// Gene-set TSV (`set_name`, `gene_symbol`). Required when
+    /// `--mode module`.
+    #[arg(long)]
+    gene_sets: Option<PathBuf>,
+
+    /// Feature column to key on (`gene_symbol` or `assay_id`).
+    #[arg(long, default_value = "gene_symbol")]
+    feature_col: String,
+
+    /// Signed correlation metric.
+    #[arg(long, value_enum, default_value_t = MetricArg::Pearson)]
+    method: MetricArg,
+
+    /// Minimum per-pair sample overlap within each cohort. Edges with
+    /// fewer overlapping subjects in any cohort are dropped from the
+    /// output.
+    #[arg(long, default_value_t = 5)]
+    min_overlap: usize,
+
+    /// Cap on emitted rows for `edge-pairwise` and `edge-summary` modes
+    /// (sorted by `|z_diff|` and `divergence_score` respectively, then
+    /// by lexicographic edge key as the deterministic tie-break). 0
+    /// means no cap.
+    #[arg(long, default_value_t = 0)]
+    top_rows: usize,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -120,7 +185,410 @@ pub struct InfluenceArgs {
 pub fn run(args: Args) -> Result<()> {
     match args.command {
         Command::Influence(args) => run_influence(args),
+        Command::Differential(args) => run_differential(args),
     }
+}
+
+fn metric_arg_to_signed(metric: MetricArg) -> Result<SignedMetric> {
+    match metric {
+        MetricArg::Pearson => Ok(SignedMetric::Pearson),
+        MetricArg::Spearman => Ok(SignedMetric::Spearman),
+        MetricArg::Covariance => bail!(
+            "network differential requires a signed correlation metric; pass --method pearson or spearman"
+        ),
+    }
+}
+
+fn parse_cohort_inputs(inputs: &[String]) -> Result<Vec<(String, PathBuf)>> {
+    if inputs.len() < 2 {
+        bail!("network differential requires at least 2 cohorts via --inputs");
+    }
+    let mut out = Vec::with_capacity(inputs.len());
+    let mut seen_labels: BTreeSet<String> = BTreeSet::new();
+    for raw in inputs {
+        let token = raw.trim();
+        let (label, path) = if let Some((lhs, rhs)) = token.split_once('=') {
+            (lhs.trim().to_string(), PathBuf::from(rhs.trim()))
+        } else {
+            let path = PathBuf::from(token);
+            let label = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| token.to_string());
+            (label, path)
+        };
+        if label.is_empty() {
+            bail!("empty cohort label in --inputs entry {token:?}");
+        }
+        if !seen_labels.insert(label.clone()) {
+            bail!("duplicate cohort label {label:?} in --inputs");
+        }
+        if !path.is_dir() {
+            bail!("cohort directory does not exist: {path:?}");
+        }
+        out.push((label, path));
+    }
+    Ok(out)
+}
+
+struct LoadedCohort {
+    label: String,
+    feature_labels: Vec<String>,
+    /// `feature_labels[i]` → values across the kept subjects (NaN if missing
+    /// in that subject). Length per row equals the number of subjects in
+    /// the cohort.
+    data: Vec<Vec<f64>>,
+}
+
+fn load_cohort(
+    label: &str,
+    dir: &Path,
+    shared_features: &[String],
+    feature_col: &str,
+) -> Result<LoadedCohort> {
+    let measurements_path = dir.join("measurements.tsv");
+    let samples_path = dir.join("samples.tsv");
+    let records = read_measurements_long(&measurements_path)
+        .with_context(|| format!("reading {measurements_path:?}"))?;
+    let _samples = read_samples(&samples_path)
+        .with_context(|| format!("reading {samples_path:?}"))?;
+    let FeatureMatrix {
+        features: _,
+        per_sample,
+    } = collect_feature_matrix(&records, feature_col)?;
+    if per_sample.is_empty() {
+        bail!("no subjects with measurements in {measurements_path:?}");
+    }
+    // Build the rectangular feature × subject matrix on the shared
+    // feature universe. Subjects appear in deterministic sorted order.
+    let subject_ids: Vec<String> = per_sample.keys().cloned().collect();
+    let mut data = Vec::with_capacity(shared_features.len());
+    for feat in shared_features {
+        let row: Vec<f64> = subject_ids
+            .iter()
+            .map(|sid| {
+                per_sample
+                    .get(sid)
+                    .and_then(|m| m.get(feat))
+                    .copied()
+                    .unwrap_or(f64::NAN)
+            })
+            .collect();
+        data.push(row);
+    }
+    Ok(LoadedCohort {
+        label: label.to_string(),
+        feature_labels: shared_features.to_vec(),
+        data,
+    })
+}
+
+fn shared_feature_universe(cohort_dirs: &[(String, PathBuf)], feature_col: &str) -> Result<Vec<String>> {
+    let mut intersection: Option<BTreeSet<String>> = None;
+    for (label, dir) in cohort_dirs {
+        let measurements_path = dir.join("measurements.tsv");
+        let records = read_measurements_long(&measurements_path)
+            .with_context(|| format!("reading {measurements_path:?}"))?;
+        let FeatureMatrix { features, .. } = collect_feature_matrix(&records, feature_col)?;
+        let here: BTreeSet<String> = features.into_iter().collect();
+        intersection = Some(match intersection {
+            None => here,
+            Some(prev) => prev.intersection(&here).cloned().collect(),
+        });
+        eprintln!(
+            "network differential: {} contributed {} features",
+            label,
+            intersection.as_ref().unwrap().len()
+        );
+    }
+    let shared = intersection.unwrap_or_default();
+    if shared.len() < 2 {
+        bail!(
+            "shared feature universe has fewer than 2 features ({})",
+            shared.len()
+        );
+    }
+    Ok(shared.into_iter().collect())
+}
+
+fn read_gene_sets_for_modules(path: &Path) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut reader = ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(path)
+        .with_context(|| format!("opening {path:?}"))?;
+    let headers = reader.headers()?.clone();
+    let set_col = headers
+        .iter()
+        .position(|h| h == "set_name")
+        .with_context(|| format!("missing column `set_name` in {path:?}"))?;
+    let gene_col = headers
+        .iter()
+        .position(|h| h == "gene_symbol")
+        .with_context(|| format!("missing column `gene_symbol` in {path:?}"))?;
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for row in reader.records() {
+        let row = row?;
+        let s = row[set_col].trim();
+        let g = row[gene_col].trim();
+        if s.is_empty() || g.is_empty() {
+            continue;
+        }
+        out.entry(s.to_string()).or_default().insert(g.to_string());
+    }
+    Ok(out)
+}
+
+fn run_differential(args: DifferentialArgs) -> Result<()> {
+    let started_at = SystemTime::now();
+    let metric = metric_arg_to_signed(args.method)?;
+    if args.feature_col != "gene_symbol" && args.feature_col != "assay_id" {
+        bail!(
+            "--feature-col must be `gene_symbol` or `assay_id`; got {:?}",
+            args.feature_col
+        );
+    }
+    if matches!(args.mode, DifferentialMode::Module) && args.gene_sets.is_none() {
+        bail!("--mode module requires --gene-sets");
+    }
+    let cohort_dirs = parse_cohort_inputs(&args.inputs)?;
+    let shared_features = shared_feature_universe(&cohort_dirs, &args.feature_col)?;
+    eprintln!(
+        "network differential: shared feature universe = {} features across {} cohorts",
+        shared_features.len(),
+        cohort_dirs.len()
+    );
+
+    let mut loaded: Vec<LoadedCohort> = Vec::with_capacity(cohort_dirs.len());
+    for (label, dir) in &cohort_dirs {
+        loaded.push(load_cohort(label, dir, &shared_features, &args.feature_col)?);
+    }
+    let mut correlations: Vec<CohortCorrelations> = Vec::with_capacity(loaded.len());
+    for c in &loaded {
+        let cd = CohortData {
+            label: c.label.clone(),
+            feature_labels: &c.feature_labels,
+            data: &c.data,
+        };
+        let cc = signed_pairwise_correlations(&cd, metric, args.min_overlap)
+            .with_context(|| format!("computing correlations for cohort {}", c.label))?;
+        correlations.push(cc);
+    }
+    let cohort_refs: Vec<&CohortCorrelations> = correlations.iter().collect();
+
+    if let Some(parent) = args.output.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating output dir {parent:?}"))?;
+    }
+
+    let n_rows = match args.mode {
+        DifferentialMode::EdgePairwise => {
+            let mut rows = edge_pairwise_differential(&cohort_refs);
+            rows.sort_by(|a, b| {
+                b.z_diff
+                    .abs()
+                    .partial_cmp(&a.z_diff.abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.feature_a.cmp(&b.feature_a))
+                    .then_with(|| a.feature_b.cmp(&b.feature_b))
+                    .then_with(|| a.cohort_a.cmp(&b.cohort_a))
+                    .then_with(|| a.cohort_b.cmp(&b.cohort_b))
+            });
+            if args.top_rows > 0 && rows.len() > args.top_rows {
+                rows.truncate(args.top_rows);
+            }
+            write_edge_pairwise(&args.output, &rows)?;
+            rows.len()
+        }
+        DifferentialMode::EdgeSummary => {
+            let mut rows = edge_summary_differential(&cohort_refs, args.min_overlap);
+            rows.sort_by(|a, b| {
+                b.divergence_score
+                    .partial_cmp(&a.divergence_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.feature_a.cmp(&b.feature_a))
+                    .then_with(|| a.feature_b.cmp(&b.feature_b))
+            });
+            if args.top_rows > 0 && rows.len() > args.top_rows {
+                rows.truncate(args.top_rows);
+            }
+            write_edge_summary(&args.output, &rows, &cohort_refs)?;
+            rows.len()
+        }
+        DifferentialMode::Module => {
+            let gene_sets_path = args.gene_sets.as_ref().expect("guarded above");
+            let modules = read_gene_sets_for_modules(gene_sets_path)?;
+            if modules.is_empty() {
+                bail!("no gene sets found in {gene_sets_path:?}");
+            }
+            let mut rows = module_rewiring(&cohort_refs, &modules);
+            rows.sort_by(|a, b| {
+                b.rewiring_score
+                    .partial_cmp(&a.rewiring_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.set_name.cmp(&b.set_name))
+            });
+            write_module_rewiring(&args.output, &rows, &cohort_refs)?;
+            rows.len()
+        }
+    };
+    eprintln!(
+        "network differential: mode={:?} rows={n_rows}",
+        args.mode
+    );
+
+    let finished_at = SystemTime::now();
+    let mut labeled: Vec<(&str, &Path)> = Vec::with_capacity(2 * cohort_dirs.len() + 1);
+    let measurements_paths: Vec<PathBuf> = cohort_dirs
+        .iter()
+        .map(|(_, d)| d.join("measurements.tsv"))
+        .collect();
+    let samples_paths: Vec<PathBuf> = cohort_dirs
+        .iter()
+        .map(|(_, d)| d.join("samples.tsv"))
+        .collect();
+    for (i, (label, _)) in cohort_dirs.iter().enumerate() {
+        labeled.push((
+            Box::leak(format!("{label}_measurements").into_boxed_str()),
+            measurements_paths[i].as_path(),
+        ));
+        labeled.push((
+            Box::leak(format!("{label}_samples").into_boxed_str()),
+            samples_paths[i].as_path(),
+        ));
+    }
+    let gene_sets_path_storage: PathBuf;
+    if let Some(p) = args.gene_sets.as_ref() {
+        gene_sets_path_storage = p.clone();
+        labeled.push(("gene_sets", gene_sets_path_storage.as_path()));
+    }
+    let inputs_sha256 = hash_labeled_inputs(&labeled)?;
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "network differential",
+        json!({
+            "inputs": cohort_dirs
+                .iter()
+                .map(|(l, p)| format!("{l}={}", p.display()))
+                .collect::<Vec<_>>(),
+            "output": args.output.display().to_string(),
+            "mode": format!("{:?}", args.mode).to_ascii_lowercase().replace("::", "-"),
+            "feature-col": args.feature_col,
+            "method": match metric {
+                SignedMetric::Pearson => "pearson",
+                SignedMetric::Spearman => "spearman",
+            },
+            "min-overlap": args.min_overlap,
+            "top-rows": args.top_rows,
+            "gene-sets": args.gene_sets.as_ref().map(|p| p.display().to_string()),
+        }),
+        &inputs_sha256,
+        std::slice::from_ref(&args.output),
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("network differential: sidecar={}", sidecar.display());
+    Ok(())
+}
+
+fn write_edge_pairwise(
+    path: &Path,
+    rows: &[atman_core::network_differential::EdgePairwiseRow],
+) -> Result<()> {
+    let mut buf = String::from(
+        "feature_a\tfeature_b\tcohort_a\tcohort_b\tn_a\tn_b\tcorr_a\tcorr_b\tz_diff\tp_value\n",
+    );
+    for r in rows {
+        buf.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            r.feature_a,
+            r.feature_b,
+            r.cohort_a,
+            r.cohort_b,
+            r.n_a,
+            r.n_b,
+            format_float(r.corr_a),
+            format_float(r.corr_b),
+            format_float(r.z_diff),
+            format_float(r.p_value),
+        ));
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+fn write_edge_summary(
+    path: &Path,
+    rows: &[atman_core::network_differential::EdgeSummaryRow],
+    cohorts: &[&CohortCorrelations],
+) -> Result<()> {
+    let mut header = String::from(
+        "feature_a\tfeature_b\tn_cohorts\tmean_corr\tsd_corr\tmin_abs_corr\tmax_abs_corr\trange_corr\tn_sign_flips\tconservation_score\tdivergence_score",
+    );
+    for c in cohorts {
+        header.push('\t');
+        header.push_str(&format!("{}_corr", c.label));
+    }
+    header.push('\n');
+    let mut buf = header;
+    for r in rows {
+        buf.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            r.feature_a,
+            r.feature_b,
+            r.n_cohorts,
+            format_float(r.mean_corr),
+            format_float(r.sd_corr),
+            format_float(r.min_abs_corr),
+            format_float(r.max_abs_corr),
+            format_float(r.range_corr),
+            r.n_sign_flips,
+            format_float(r.conservation_score),
+            format_float(r.divergence_score),
+        ));
+        for (_, c) in &r.per_cohort_corrs {
+            buf.push('\t');
+            buf.push_str(&format_float(*c));
+        }
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+fn write_module_rewiring(
+    path: &Path,
+    rows: &[atman_core::network_differential::ModuleRewiringRow],
+    cohorts: &[&CohortCorrelations],
+) -> Result<()> {
+    let mut header = String::from(
+        "set_name\tset_size_declared\tset_size_observed\tmean_connectivity\tsd_connectivity\trange_connectivity\trewiring_score",
+    );
+    for c in cohorts {
+        header.push('\t');
+        header.push_str(&format!("{}_connectivity", c.label));
+    }
+    header.push('\n');
+    let mut buf = header;
+    for r in rows {
+        buf.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            r.set_name,
+            r.set_size_declared,
+            r.set_size_observed,
+            format_float(r.mean_connectivity),
+            format_float(r.sd_connectivity),
+            format_float(r.range_connectivity),
+            format_float(r.rewiring_score),
+        ));
+        for (_, c) in &r.per_cohort_connectivity {
+            buf.push('\t');
+            buf.push_str(&format_float(*c));
+        }
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
 }
 
 fn run_influence(args: InfluenceArgs) -> Result<()> {
