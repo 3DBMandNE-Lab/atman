@@ -8,6 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Expose CI alpha as a CLI flag on `atman align bootstrap`
+  (`--ci-alpha`).** The percentile and BCa CIs over the bootstrap
+  `n_cohorts` distribution were both hardcoded to a two-sided 95%
+  band (α=0.05). Now configurable; default 0.05 preserves prior
+  behavior. `BootstrapParams::ci_alpha` carries the value through
+  `align_bootstrap` and into `to_row`, replacing the literal
+  `0.025`/`0.975`/`0.05` constants. Validation rejects values
+  outside `(0, 1)` at both the CLI and core entry points; the
+  sidecar records the chosen `ci-alpha`. Doc comments on
+  `BootstrapRow.ci_lower_n_cohorts` / `bca_lower_n_cohorts` no
+  longer claim a fixed 95% band.
 - **Expose program-stability flag fraction as a CLI flag on
   `atman decompose ica` (`--min-stable-seed-fraction`).** Previously a
   hardcoded constant of 0.9 inside an indirection

@@ -67,6 +67,10 @@ pub struct BootstrapParams {
     /// loadings by `|value|`; Spearman uses the absolute rank
     /// correlation.
     pub metric: AlignMetric,
+    /// Two-sided CI alpha. Both the percentile CI on
+    /// `n_cohorts` and the BCa CI use `alpha/2` and `1 - alpha/2`
+    /// quantiles. `0.05` ⇒ 95% CI; must lie in `(0, 1)`.
+    pub ci_alpha: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -78,7 +82,8 @@ pub struct BootstrapRow {
     pub bootstrap_prob_universal: f64,
     pub bootstrap_prob_multi: f64,
     /// Percentile CI over the bootstrap `n_cohorts` distribution
-    /// at 2.5% / 97.5% (the two-sided 95% band).
+    /// at the `alpha/2` and `1 - alpha/2` quantiles, where `alpha`
+    /// comes from `BootstrapParams::ci_alpha`.
     pub ci_lower_n_cohorts: usize,
     pub ci_upper_n_cohorts: usize,
     /// Fraction of bootstrap iterations where **any** archetype was
@@ -91,10 +96,11 @@ pub struct BootstrapRow {
     /// cohort coverage is stable under subject resampling.
     pub alignment_entropy: f64,
     /// BCa (bias-corrected accelerated) bootstrap CI lower bound at
-    /// the two-sided 95% level. Acceleration is estimated by
-    /// pooled-subject jackknife. When the BCa denominator is
-    /// non-positive (non-monotone tail) the CI falls back to the
-    /// percentile CI and `bca_fallback_to_percentile` is true.
+    /// the level set by `BootstrapParams::ci_alpha`. Acceleration is
+    /// estimated by pooled-subject jackknife. When the BCa
+    /// denominator is non-positive (non-monotone tail) the CI falls
+    /// back to the percentile CI and `bca_fallback_to_percentile` is
+    /// true.
     pub bca_lower_n_cohorts: f64,
     pub bca_upper_n_cohorts: f64,
     pub bca_fallback_to_percentile: bool,
@@ -425,6 +431,12 @@ pub fn align_bootstrap(
     if params.n_boot == 0 {
         return Err("--n-boot must be >= 1".into());
     }
+    if !(params.ci_alpha.is_finite() && params.ci_alpha > 0.0 && params.ci_alpha < 1.0) {
+        return Err(format!(
+            "--ci-alpha must lie in (0, 1); got {}",
+            params.ci_alpha
+        ));
+    }
     // Enforce consistent protein universe across cohorts.
     let universe = &cohorts[0].protein_labels;
     for c in cohorts.iter().skip(1) {
@@ -535,7 +547,7 @@ pub fn align_bootstrap(
         .zip(jack.iter())
         .enumerate()
         .map(|(ai, (((_, pe_cohorts, _), a), jack_row))| {
-            a.to_row(ai + 1, pe_cohorts.clone(), jack_row)
+            a.to_row(ai + 1, pe_cohorts.clone(), jack_row, params.ci_alpha)
         })
         .collect())
 }
@@ -566,6 +578,7 @@ impl BootstrapAcc {
         archetype_id: usize,
         observed_cohorts: Vec<String>,
         jackknife: &[f64],
+        ci_alpha: f64,
     ) -> BootstrapRow {
         let mut sorted = self.matches.clone();
         sorted.sort();
@@ -594,8 +607,8 @@ impl BootstrapAcc {
             (0, 0)
         } else {
             let n = sorted.len();
-            let lower_idx = ((0.025 * n as f64) as usize).min(n - 1);
-            let upper_idx = ((0.975 * n as f64).ceil() as usize)
+            let lower_idx = (((ci_alpha / 2.0) * n as f64) as usize).min(n - 1);
+            let upper_idx = (((1.0 - ci_alpha / 2.0) * n as f64).ceil() as usize)
                 .saturating_sub(1)
                 .min(n - 1);
             (sorted[lower_idx], sorted[upper_idx])
@@ -608,7 +621,7 @@ impl BootstrapAcc {
         full.resize(self.n_boot, 0.0);
         let entropy = shannon_entropy_bits(&full);
         let theta_hat = observed_cohorts.len() as f64;
-        let (bca_lo, bca_hi, bca_fallback) = bca_ci(&full, jackknife, theta_hat, 0.05);
+        let (bca_lo, bca_hi, bca_fallback) = bca_ci(&full, jackknife, theta_hat, ci_alpha);
 
         BootstrapRow {
             archetype_id,
@@ -669,6 +682,7 @@ mod tests {
             tol: 1e-2,
             min_subjects: 5,
             metric: AlignMetric::Cosine,
+            ci_alpha: 0.05,
         };
         let err = align_bootstrap(&[a], p).unwrap_err();
         assert!(err.contains("at least 2 cohorts"));
@@ -689,6 +703,7 @@ mod tests {
             tol: 1e-2,
             min_subjects: 5,
             metric: AlignMetric::Cosine,
+            ci_alpha: 0.05,
         };
         let err = align_bootstrap(&[a, b], p).unwrap_err();
         assert!(err.contains("min-subjects"), "unexpected: {err}");
@@ -710,6 +725,7 @@ mod tests {
             tol: 1e-2,
             min_subjects: 5,
             metric: AlignMetric::Cosine,
+            ci_alpha: 0.05,
         };
         let err = align_bootstrap(&[a, b], p).unwrap_err();
         assert!(err.contains("mismatch"), "unexpected: {err}");
@@ -730,6 +746,7 @@ mod tests {
             tol: 1e-2,
             min_subjects: 5,
             metric: AlignMetric::Cosine,
+            ci_alpha: 0.05,
         };
         let rows = align_bootstrap(&[a, b], p).unwrap();
         for r in &rows {
@@ -803,6 +820,7 @@ mod tests {
             tol: 1e-2,
             min_subjects: 5,
             metric: AlignMetric::Cosine,
+            ci_alpha: 0.05,
         };
         let cos_rows = align_bootstrap(&[a.clone(), b.clone()], base).unwrap();
         let mut jac = base;
@@ -837,6 +855,7 @@ mod tests {
             tol: 1e-2,
             min_subjects: 5,
             metric: AlignMetric::Cosine,
+            ci_alpha: 0.05,
         };
         let x = align_bootstrap(&[a.clone(), b.clone()], p).unwrap();
         let y = align_bootstrap(&[a, b], p).unwrap();

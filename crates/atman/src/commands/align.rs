@@ -193,6 +193,12 @@ pub struct BootstrapArgs {
     #[arg(long, default_value = "none")]
     impute: String,
 
+    /// Two-sided alpha for the percentile and BCa CIs on the
+    /// bootstrap `n_cohorts` distribution. Default `0.05` ⇒ 95% CI.
+    /// Must lie in `(0, 1)`.
+    #[arg(long, default_value_t = 0.05)]
+    ci_alpha: f64,
+
     /// Output TSV path. Summary with one row per point-estimate
     /// archetype.
     #[arg(long)]
@@ -215,6 +221,9 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
     }
     if !(0.0..=1.0).contains(&args.match_tau) {
         bail!("--match-tau must be in [0, 1]");
+    }
+    if !(args.ci_alpha.is_finite() && args.ci_alpha > 0.0 && args.ci_alpha < 1.0) {
+        bail!("--ci-alpha must lie in (0, 1)");
     }
     let cohort_dirs: Vec<PathBuf> = args
         .cohorts
@@ -282,6 +291,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         tol: args.tol,
         min_subjects: args.min_subjects,
         metric,
+        ci_alpha: args.ci_alpha,
     };
     let rows: Vec<BootstrapRow> =
         align_bootstrap(&matrices, params).map_err(|e| anyhow::anyhow!(e))?;
@@ -330,6 +340,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
             "min-subjects": args.min_subjects,
             "max-missing-fraction": args.max_missing_fraction,
             "impute": args.impute,
+            "ci-alpha": args.ci_alpha,
             "output": args.output.display().to_string(),
         }),
         &inputs_sha256,
