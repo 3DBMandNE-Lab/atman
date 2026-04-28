@@ -54,6 +54,29 @@ ranked gene list and the set membership mask.
   differ at the third decimal due to permutation noise — increase
   `--n-permutations` if a tight rank-order needs to be reported.
 
+### singscore parity note
+
+Atman's `score signatures --method singscore` and `singscore::simpleScore`
+use the same per-sample rank construction (average-rank tie handling,
+matching R's `rank(..., ties.method = "average")`) and the same centered,
+scale-normalized TotalScore formula:
+
+```text
+    score = (2 * mean_rank - n - 1) / (2 * (n - m))
+```
+
+where `n` is the count of measured proteins in the sample and `m` is the
+count of signature genes observed in that sample. The score lies in
+`[-0.5, 0.5]` and matches `singscore::simpleScore` with `knownDirection = TRUE`
+and `centerScore = TRUE` (its default). The algorithm is fully
+deterministic — no permutations, no randomness — so byte-stability is
+expected across re-runs and across implementations.
+
+Validated on the planted fixture in `singscore_reference.R` (4 samples × 30
+genes, three signatures: up-loaded, down-loaded, scattered). All 12
+(set × sample) reference rows match `singscore::simpleScore` within
+`1e-12`. See `singscore_reference.tsv` for the reference values.
+
 ### Reference environment
 
 Reference scripts live alongside the fixtures in
@@ -67,6 +90,7 @@ in the script header:
 | `gen_limma_reference.R` | limma (CRAN) 3.x |
 | `posthoc_sidak_reference.R` | base R (`lm`, `pairwise.t.test`) |
 | `gsea_reference.R` | fgsea (Bioconductor ≥ 1.30) |
+| `singscore_reference.R` | singscore (Bioconductor ≥ 1.24) |
 | `variance_type3_reference.R` | car (CRAN) |
 
 Reference TSVs committed in the repo were generated under

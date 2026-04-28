@@ -291,6 +291,33 @@ by `|nes|`. Alternative ranking statistics: `--rank-by t` or
 `--rank-by log2_fc`. Set-size filtering: `--min-set-size` (default
 5), `--max-set-size` (default 500).
 
+## Per-sample signature scoring (singscore)
+
+`atman score signatures` produces a per-sample score for each gene
+set in a `gene_sets.tsv` library — useful for downstream phenotype
+correlation, subtype stratification, and pathway-level visualization.
+v1 implements singscore (Foroutan et al. 2018): per-sample
+average-rank-based score, centered to `[-0.5, 0.5]`. Deterministic,
+no permutations. Validated against `singscore::simpleScore` on a
+planted fixture: TotalScore agreement within `1e-12`. See
+[reference.md](reference.md#singscore-parity-note) for the parity
+statement.
+
+```bash
+atman score signatures \
+    --input-dir out \
+    --gene-sets gene_sets.tsv \
+    --output out/signature_scores.tsv \
+    --method singscore \
+    --min-set-size 3
+```
+
+Output columns: `sample_id`, `subject_id`, `condition`, `set_name`,
+`method`, `score`, `n_genes_declared`, `n_genes_observed_in_sample`,
+`n_proteins_in_sample`. Sorted by `(set_name, sample_id)`. A
+signature whose observed-in-sample count falls below `--min-set-size`
+emits `score = NaN` so per-sample coverage stays auditable.
+
 ## Cross-cohort meta-analysis
 
 ```bash

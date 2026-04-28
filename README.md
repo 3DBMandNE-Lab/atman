@@ -23,6 +23,7 @@ on published fixtures:
 | `de --post-hoc sidak --test ols` | `lm()` + `pairwise.t.test` | Planted 3-level fixture | max Δ < **1e-6** on `estimate`, `posthoc_p`, `posthoc_adj_p` |
 | `decompose variance --omnibus-factor` (Type III F) | `car::Anova(type = 3)` | Planted variance fixture | max Δ p < **1e-6** |
 | `enrich gsea` (weighted KS, fgseaSimple formulation) | `fgsea::fgseaSimple` | Planted ranked-list fixture (top / bottom / scattered sets) | max ES Δ < **1e-12** ([details](docs/reference.md#fgsea-parity-note)) |
+| `score signatures --method singscore` (centered TotalScore) | `singscore::simpleScore` | Planted 4-sample × 30-gene fixture (up / down / scattered sets) | max score Δ < **1e-12** on all 12 (set × sample) rows |
 | Olink Explore NPX reproduction | Dube et al. 2023 published tables | Dube heat-stress cohort | filtered NPX: **byte-exact**; log2-FC: Δ = 1.05e-15 |
 
 Parity assertions run on every `cargo test --workspace --release`; CI
@@ -136,6 +137,7 @@ atman module-trajectory  score user-defined modules from per-subject deltas
 atman module-de          aggregate proteins into modules and test at module level
 atman modules discover   data-driven module discovery (WGCNA soft-threshold + UPGMA)
 atman score modules      score modules per sample from canonical measurements
+atman score signatures   per-sample gene-set signature scoring (singscore)
 atman programs filter    flag ICA programs by annotation, loading, and contamination signature
 atman enrich ora         over-representation analysis from DE hits
 atman enrich gsea        pre-ranked gene-set enrichment (fgseaSimple-equivalent)

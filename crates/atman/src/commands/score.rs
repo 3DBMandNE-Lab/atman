@@ -1,7 +1,8 @@
 use anyhow::{bail, Context, Result};
+use atman_core::singscore::singscore;
 use atman_core::stats::mean;
 use atman_core::Sample;
-use clap::{Args as ClapArgs, Subcommand};
+use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use csv::ReaderBuilder;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -23,6 +24,47 @@ pub struct Args {
 enum Command {
     /// Score user-defined modules per sample.
     Modules(ModulesArgs),
+    /// Score gene-set signatures per sample (singscore; Foroutan 2018).
+    Signatures(SignaturesArgs),
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct SignaturesArgs {
+    /// Directory containing canonical Atman TSV files.
+    #[arg(long)]
+    input_dir: PathBuf,
+
+    /// Gene-set TSV with columns `set_name` and `gene_symbol`.
+    #[arg(long)]
+    gene_sets: PathBuf,
+
+    /// Output TSV path for per-sample signature scores.
+    #[arg(long)]
+    output: PathBuf,
+
+    /// Scoring method (currently only `singscore` is implemented).
+    #[arg(long, value_enum, default_value_t = SignatureMethod::Singscore)]
+    method: SignatureMethod,
+
+    /// Minimum number of signature genes that must be observed in a sample
+    /// for that signature's score to be computed. Below this, the row is
+    /// emitted with `score = NaN` so per-sample coverage is auditable.
+    #[arg(long, default_value_t = 3)]
+    min_set_size: usize,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum SignatureMethod {
+    /// Per-sample rank-based score (Foroutan et al. 2018).
+    Singscore,
+}
+
+impl SignatureMethod {
+    fn key(&self) -> &'static str {
+        match self {
+            SignatureMethod::Singscore => "singscore",
+        }
+    }
 }
 
 #[derive(ClapArgs, Debug)]
@@ -70,7 +112,191 @@ struct Acc {
 pub fn run(args: Args) -> Result<()> {
     match args.command {
         Command::Modules(args) => run_modules(args),
+        Command::Signatures(args) => run_signatures(args),
     }
+}
+
+#[derive(Debug, Clone)]
+struct SignatureScoreRow {
+    sample_id: String,
+    subject_id: String,
+    condition: String,
+    set_name: String,
+    method: String,
+    score: f64,
+    n_genes_declared: usize,
+    n_genes_observed_in_sample: usize,
+    n_proteins_in_sample: usize,
+}
+
+fn run_signatures(args: SignaturesArgs) -> Result<()> {
+    let started_at = SystemTime::now();
+    if args.min_set_size == 0 {
+        bail!("--min-set-size must be >= 1");
+    }
+    let gene_sets = read_gene_sets(&args.gene_sets)?;
+    if gene_sets.is_empty() {
+        bail!("no gene sets found in {:?}", args.gene_sets);
+    }
+    let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
+    let sample_by_id: HashMap<&str, &Sample> =
+        samples.iter().map(|s| (s.sample_id.as_str(), s)).collect();
+    let measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
+
+    // Build sample -> gene -> mean(abundance), aggregating over multiple
+    // measurements of the same (sample, gene) pair (e.g., from multiple
+    // panels or technical replicates).
+    let mut accum: BTreeMap<String, BTreeMap<String, Acc>> = BTreeMap::new();
+    for m in &measurements {
+        let Some(value) = m.effective_abundance() else {
+            continue;
+        };
+        if !value.is_finite() {
+            continue;
+        }
+        let Some(gene) = m.gene_symbol.as_deref() else {
+            continue;
+        };
+        if gene.is_empty() {
+            continue;
+        }
+        let sample_map = accum.entry(m.sample_id.clone()).or_default();
+        let entry = sample_map.entry(gene.to_string()).or_default();
+        entry.sum += value;
+        entry.n += 1;
+    }
+    let abundance: BTreeMap<String, BTreeMap<String, f64>> = accum
+        .into_iter()
+        .map(|(sid, genes)| {
+            (
+                sid,
+                genes
+                    .into_iter()
+                    .map(|(g, acc)| (g, acc.sum / acc.n as f64))
+                    .collect(),
+            )
+        })
+        .collect();
+    if abundance.is_empty() {
+        bail!(
+            "no finite abundance values parsed from {:?}",
+            args.input_dir.join("measurements.tsv")
+        );
+    }
+
+    let raw = singscore(&abundance, &gene_sets, args.min_set_size);
+    let mut rows: Vec<SignatureScoreRow> = raw
+        .into_iter()
+        .filter_map(|r| {
+            let set_size_declared = gene_sets
+                .get(&r.set_name)
+                .map(BTreeSet::len)
+                .unwrap_or(r.set_size_declared);
+            let sample = sample_by_id.get(r.sample_id.as_str())?;
+            Some(SignatureScoreRow {
+                sample_id: r.sample_id,
+                subject_id: sample.subject_id.clone().unwrap_or_default(),
+                condition: sample.condition.clone().unwrap_or_default(),
+                set_name: r.set_name,
+                method: args.method.key().to_string(),
+                score: r.score,
+                n_genes_declared: set_size_declared,
+                n_genes_observed_in_sample: r.set_size_observed,
+                n_proteins_in_sample: r.n_observed_in_sample,
+            })
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        a.set_name
+            .cmp(&b.set_name)
+            .then_with(|| a.sample_id.cmp(&b.sample_id))
+    });
+    write_signature_scores(&args.output, &rows)?;
+    eprintln!(
+        "score signatures: method={} sets={} samples={} rows={}",
+        args.method.key(),
+        gene_sets.len(),
+        sample_by_id.len(),
+        rows.len()
+    );
+
+    let finished_at = SystemTime::now();
+    let mut canonical = hash_canonical_inputs(
+        &args.input_dir,
+        &["measurements.tsv", "samples.tsv", "proteins.tsv"],
+    )?;
+    let sets_hash = hash_labeled_inputs(&[("gene_sets", args.gene_sets.as_path())])?;
+    canonical.extend(sets_hash);
+    let sidecar = sidecar_path_for(&args.output);
+    write_run_sidecar(
+        &sidecar,
+        "score signatures",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "gene-sets": args.gene_sets.display().to_string(),
+            "output": args.output.display().to_string(),
+            "method": args.method.key(),
+            "min-set-size": args.min_set_size,
+        }),
+        &canonical,
+        std::slice::from_ref(&args.output),
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("score signatures: sidecar={}", sidecar.display());
+    Ok(())
+}
+
+fn read_gene_sets(path: &Path) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut reader = ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(path)
+        .with_context(|| format!("opening {:?}", path))?;
+    let headers = reader.headers()?.clone();
+    let set_col = headers
+        .iter()
+        .position(|h| h == "set_name")
+        .with_context(|| format!("missing column `set_name` in {:?}", path))?;
+    let gene_col = headers
+        .iter()
+        .position(|h| h == "gene_symbol")
+        .with_context(|| format!("missing column `gene_symbol` in {:?}", path))?;
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for row in reader.records() {
+        let row = row?;
+        let set = row[set_col].trim();
+        let gene = row[gene_col].trim();
+        if set.is_empty() || gene.is_empty() {
+            continue;
+        }
+        out.entry(set.to_string())
+            .or_default()
+            .insert(gene.to_string());
+    }
+    Ok(out)
+}
+
+fn write_signature_scores(path: &Path, rows: &[SignatureScoreRow]) -> Result<()> {
+    let mut out = String::from(
+        "sample_id\tsubject_id\tcondition\tset_name\tmethod\tscore\tn_genes_declared\tn_genes_observed_in_sample\tn_proteins_in_sample\n",
+    );
+    for row in rows {
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            row.sample_id,
+            row.subject_id,
+            row.condition,
+            row.set_name,
+            row.method,
+            row.score,
+            row.n_genes_declared,
+            row.n_genes_observed_in_sample,
+            row.n_proteins_in_sample,
+        ));
+    }
+    atomic_write(path, out.as_bytes())
 }
 
 fn run_modules(args: ModulesArgs) -> Result<()> {

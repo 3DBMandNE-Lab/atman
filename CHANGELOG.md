@@ -8,6 +8,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`atman score signatures` — per-sample gene-set signature scoring
+  (singscore).** Sibling to `atman score modules` with the same
+  canonical input directory (`samples.tsv` + `measurements.tsv`) and
+  the `gene_sets.tsv` schema (`set_name`, `gene_symbol`) shared with
+  `enrich ora` / `enrich gsea`. v1 implements singscore (Foroutan et
+  al. 2018): per-sample protein ranking with average-rank tie
+  handling, normalized mean-rank score per signature, centered to
+  `[-0.5, 0.5]` matching `singscore::simpleScore` with
+  `centerScore = TRUE`. Deterministic — no randomness, no
+  permutations. Missing values handled per-sample by exclusion.
+  Validated against `singscore::simpleScore` on a planted fixture:
+  TotalScore agreement within `1e-12` on all 12 (set × sample) rows.
+  `--method` CLI flag reserved for future ssGSEA / GSVA
+  implementations. Emits a `*.run.json` SHA-256 sidecar.
+
 - **`atman enrich gsea` — pre-ranked gene-set enrichment analysis.**
   Sibling to `atman enrich ora` with the same `gene_sets.tsv`
   schema (`set_name`, `gene_symbol`) and `de_results.tsv` input.

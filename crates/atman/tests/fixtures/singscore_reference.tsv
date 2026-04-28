@@ -1,0 +1,13 @@
+set_name	sample_id	score
+responder_down	S01	              -0.5
+responder_down	S02	              -0.5
+responder_down	S03	              -0.5
+responder_down	S04	              -0.5
+responder_up	S01	               0.5
+responder_up	S02	               0.5
+responder_up	S03	               0.5
+responder_up	S04	               0.5
+scattered	S01	-0.043999999999999984
+scattered	S02	-0.092000000000000026
+scattered	S03	-0.052000000000000046
+scattered	S04	-0.036000000000000032

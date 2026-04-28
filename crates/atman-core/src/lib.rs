@@ -25,6 +25,7 @@ pub mod msqrob;
 pub mod multivariate_t;
 pub mod network;
 pub mod qc;
+pub mod singscore;
 pub mod stats;
 pub mod studentized_range;
 pub mod types;
@@ -45,6 +46,7 @@ pub use fold_change::{
 };
 pub use gsea::{gsea, GseaConfig, GseaResult};
 pub use ica_null::{archetype_null, generate_null_matrix, ArchetypeNullRow, NullMode, NullParams};
+pub use singscore::{singscore, SingscoreRow};
 pub use matrix::{WidePanel, WidePanelRow};
 pub use msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
 pub use network::{

@@ -11,18 +11,6 @@ Add new proposals as sections below. Remove entries once they land
 
 ## Open
 
-### Per-sample signature scoring (singscore)
-
-`atman score signatures` — per-sample signature scores from a
-gene-set library, sibling to `atman score modules`. Same canonical
-abundance input, same `gene_sets.tsv` schema as `enrich ora` /
-`enrich gsea`. Output is a samples × signatures TSV. v1 implements
-singscore (Foroutan 2018): per-sample protein ranking, normalized
-mean-rank score per signature; deterministic, no permutations,
-handles missing values by per-sample exclusion. `--method` reserved
-for future ssGSEA / GSVA implementations. Validated against
-`singscore::simpleScore` on a planted fixture.
-
 ### Missingness-aware ICA
 
 Extend the compositional-transform surface on `atman decompose ica`

@@ -1,0 +1,16 @@
+set_name	gene_symbol
+responder_up	G26
+responder_up	G27
+responder_up	G28
+responder_up	G29
+responder_up	G30
+responder_down	G01
+responder_down	G02
+responder_down	G03
+responder_down	G04
+responder_down	G05
+scattered	G08
+scattered	G12
+scattered	G16
+scattered	G20
+scattered	G24

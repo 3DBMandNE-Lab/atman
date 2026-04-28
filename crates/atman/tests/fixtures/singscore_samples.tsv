@@ -1,0 +1,5 @@
+sample_id	subject_id	condition	is_control	sample_type	ingest_order
+S01	S01	Case	0	csf	1
+S02	S02	Case	0	csf	2
+S03	S03	Case	0	csf	3
+S04	S04	Case	0	csf	4
