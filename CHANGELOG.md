@@ -8,6 +8,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Expose program-stability flag fraction as a CLI flag on
+  `atman decompose ica` (`--min-stable-seed-fraction`).** Previously a
+  hardcoded constant of 0.9 inside an indirection
+  (`threshold_fraction(_threshold) -> 0.9`) that ignored its only
+  argument; the comment admitted it was kept fixed "for now". A
+  program is now flagged unstable when the fraction of alternative
+  seeds that recover it (best-Jaccard ≥ `--seed-stability-threshold`)
+  falls below `--min-stable-seed-fraction` (default 0.9, preserving
+  prior behavior). The sidecar records the value so re-runs are
+  reproducible. Validation rejects values outside `[0, 1]`.
 - **Generalize keratin contamination filter on `atman programs filter`
   to a configurable regex (`--contamination-pattern`,
   `--max-contamination-fraction`).** Replaces the hardcoded

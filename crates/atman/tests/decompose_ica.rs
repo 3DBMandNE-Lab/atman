@@ -156,6 +156,7 @@ fn decompose_ica_emits_loadings_activations_and_stability() {
     assert_eq!(sidecar["args"]["n-seeds"], 5);
     assert_eq!(sidecar["args"]["seed"], 20260418);
     assert_eq!(sidecar["args"]["seed-stability-threshold"], 0.5);
+    assert_eq!(sidecar["args"]["min-stable-seed-fraction"], 0.9);
     assert_eq!(sidecar["args"]["stability-metric"], "jaccard-top20");
     assert_eq!(sidecar["args"]["stability-top-n"], 10);
     assert!(sidecar["atman_version"].is_string());
@@ -270,5 +271,95 @@ fn decompose_ica_is_deterministic_across_runs() {
     assert_eq!(
         std::fs::read_to_string(&stability_a).unwrap(),
         std::fs::read_to_string(&stability_b).unwrap()
+    );
+}
+
+#[test]
+fn decompose_ica_min_stable_seed_fraction_zero_disables_flag() {
+    // Lower bound regression: floor=0.0 makes the strict-less-than
+    // comparison impossible, so flag_below_threshold must always read 0.
+    // (Behavior under non-zero floors is data-dependent and asserted at
+    // the sidecar level in the main test.)
+    let tmp = tempfile::tempdir().unwrap();
+    let input_dir = build_synthetic_canonical(tmp.path());
+    let stability = tmp.path().join("stability.tsv");
+    let loadings = tmp.path().join("loadings.tsv");
+    let activations = tmp.path().join("activations.tsv");
+
+    let result = run_atman(&[
+        "decompose",
+        "ica",
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--k",
+        "2",
+        "--n-seeds",
+        "5",
+        "--seed",
+        "20260418",
+        "--seed-stability-threshold",
+        "0.999",
+        "--min-stable-seed-fraction",
+        "0.0",
+        "--stability-top-n",
+        "10",
+        "--output-loadings",
+        loadings.to_str().unwrap(),
+        "--output-activations",
+        activations.to_str().unwrap(),
+        "--output-stability",
+        stability.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let text = std::fs::read_to_string(&stability).unwrap();
+    let flags: Vec<&str> = text
+        .lines()
+        .skip(1)
+        .map(|line| line.split('\t').last().unwrap())
+        .collect();
+    assert!(!flags.is_empty());
+    assert!(
+        flags.iter().all(|f| *f == "0"),
+        "expected no flag at floor=0.0, got {flags:?}"
+    );
+}
+
+#[test]
+fn decompose_ica_rejects_min_stable_seed_fraction_out_of_range() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input_dir = build_synthetic_canonical(tmp.path());
+    let stability = tmp.path().join("stability.tsv");
+    let loadings = tmp.path().join("loadings.tsv");
+    let activations = tmp.path().join("activations.tsv");
+
+    let result = run_atman(&[
+        "decompose",
+        "ica",
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--k",
+        "2",
+        "--n-seeds",
+        "3",
+        "--seed",
+        "20260418",
+        "--min-stable-seed-fraction",
+        "1.5",
+        "--output-loadings",
+        loadings.to_str().unwrap(),
+        "--output-activations",
+        activations.to_str().unwrap(),
+        "--output-stability",
+        stability.to_str().unwrap(),
+    ]);
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("--min-stable-seed-fraction must be in [0, 1]"),
+        "stderr was:\n{stderr}"
     );
 }

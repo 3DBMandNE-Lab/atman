@@ -81,6 +81,13 @@ pub struct IcaArgs {
     #[arg(long, default_value_t = 0.9)]
     seed_stability_threshold: f64,
 
+    /// A program is flagged unstable when the fraction of alternative
+    /// seeds that recover it (best-Jaccard >= `--seed-stability-threshold`)
+    /// falls below this value. Default 0.9 — i.e. a program must recover
+    /// in at least 90% of alternative seeds to pass.
+    #[arg(long, default_value_t = 0.9)]
+    min_stable_seed_fraction: f64,
+
     /// Stability metric; currently `jaccard-top20` (i.e. top-N |loading| overlap).
     #[arg(long, value_enum, default_value_t = StabilityMetric::JaccardTop20)]
     stability_metric: StabilityMetric,
@@ -842,6 +849,7 @@ fn run_null(args: NullArgs) -> Result<()> {
         n_seeds: args.n_seeds,
         seed: args.seed,
         seed_stability_threshold: 0.9,
+        min_stable_seed_fraction: 0.9,
         stability_metric: StabilityMetric::JaccardTop20,
         stability_top_n: args.top_n,
         max_iter: args.max_iter,
@@ -970,6 +978,9 @@ fn run_ica(args: IcaArgs) -> Result<()> {
     if !(0.0..=1.0).contains(&args.seed_stability_threshold) {
         bail!("--seed-stability-threshold must be in [0, 1]");
     }
+    if !(0.0..=1.0).contains(&args.min_stable_seed_fraction) {
+        bail!("--min-stable-seed-fraction must be in [0, 1]");
+    }
     if args.stability_top_n == 0 {
         bail!("--stability-top-n must be at least 1");
     }
@@ -1017,6 +1028,7 @@ fn run_ica(args: IcaArgs) -> Result<()> {
         &runs[1..],
         args.stability_top_n,
         args.seed_stability_threshold,
+        args.min_stable_seed_fraction,
         *ref_seed,
     )?;
 
@@ -1072,6 +1084,7 @@ fn run_ica(args: IcaArgs) -> Result<()> {
             "n-seeds": args.n_seeds,
             "seed": args.seed,
             "seed-stability-threshold": args.seed_stability_threshold,
+            "min-stable-seed-fraction": args.min_stable_seed_fraction,
             "stability-metric": stability_metric,
             "stability-top-n": args.stability_top_n,
             "max-iter": args.max_iter,
@@ -1554,12 +1567,14 @@ fn write_activations(
     atomic_write(path, out.as_bytes())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_stability(
     path: &Path,
     reference: &CanonicalIca,
     others: &[(u64, IcaResult)],
     top_n: usize,
-    threshold: f64,
+    jaccard_threshold: f64,
+    min_stable_seed_fraction: f64,
     ref_seed: u64,
 ) -> Result<()> {
     let mut out = String::from(
@@ -1577,7 +1592,7 @@ fn write_stability(
                 .map(|alt_row| jaccard_top_n(row, alt_row, top_n))
                 .fold(0.0_f64, f64::max);
             jaccards.push(best);
-            if best >= threshold {
+            if best >= jaccard_threshold {
                 n_stable += 1;
             }
         }
@@ -1592,7 +1607,7 @@ fn write_stability(
         } else {
             jaccards.iter().sum::<f64>() / jaccards.len() as f64
         };
-        let flag = if n_alt > 0 && fraction < threshold_fraction(threshold) {
+        let flag = if n_alt > 0 && fraction < min_stable_seed_fraction {
             "1"
         } else {
             "0"
@@ -1604,14 +1619,6 @@ fn write_stability(
         ));
     }
     atomic_write(path, out.as_bytes())
-}
-
-fn threshold_fraction(_threshold: f64) -> f64 {
-    // A program is flagged unstable if fewer than this fraction of other-seed runs
-    // achieve best-Jaccard >= threshold. We use 0.9 (matches the feature-request
-    // default of "recover in at least 90% of seeds"); keeping it fixed avoids
-    // introducing another user-facing knob for now.
-    0.9
 }
 
 #[derive(ClapArgs, Debug)]
