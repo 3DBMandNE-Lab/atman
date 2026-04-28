@@ -15,6 +15,7 @@ pub mod decompose_unmix;
 pub mod deqms;
 pub mod ensemble;
 pub mod fold_change;
+pub mod gsea;
 pub mod ica;
 pub mod ica_null;
 pub mod limma;
@@ -42,6 +43,7 @@ pub use ensemble::{
 pub use fold_change::{
     compute_log2_fc, Comparison, FoldChangeInput, FoldChangeOutput, FoldChangePanel,
 };
+pub use gsea::{gsea, GseaConfig, GseaResult};
 pub use ica_null::{archetype_null, generate_null_matrix, ArchetypeNullRow, NullMode, NullParams};
 pub use matrix::{WidePanel, WidePanelRow};
 pub use msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};

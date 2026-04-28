@@ -11,19 +11,6 @@ Add new proposals as sections below. Remove entries once they land
 
 ## Open
 
-### GSEA (rank-based gene-set enrichment)
-
-`atman enrich gsea` — pre-ranked Subramanian-style gene-set
-enrichment, fgsea-equivalent algorithm. Sibling to `atman enrich
-ora`: same `gene_sets.tsv` schema (`set_name`, `gene_symbol`),
-same `de_results.tsv` input, same `*.run.json` sidecar discipline.
-Operates on the full ranked list (no q-cutoff, no foreground/
-background split) so coordinated subtle shifts are captured.
-Ranking statistic configurable via `--rank-by` (default
-`signed_log10_p`); permutation-based null with seeded RNG for
-determinism. Reports ES, NES, p-value, BH-q, leading-edge genes.
-Validated against `fgsea::fgsea` on a planted fixture.
-
 ### Per-sample signature scoring (singscore)
 
 `atman score signatures` — per-sample signature scores from a

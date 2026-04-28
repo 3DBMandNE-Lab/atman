@@ -6,6 +6,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`atman enrich gsea` — pre-ranked gene-set enrichment analysis.**
+  Sibling to `atman enrich ora` with the same `gene_sets.tsv`
+  schema (`set_name`, `gene_symbol`) and `de_results.tsv` input.
+  Implements the weighted Kolmogorov-Smirnov-style enrichment
+  statistic of Subramanian et al. (2005) using the `fgseaSimple`
+  position-mask permutation formulation (Korotkevich et al. 2019).
+  Reports per-set `es`, `nes`, `p_value`, `bh_q`, and
+  `leading_edge` genes. Ranking statistic configurable via
+  `--rank-by` (default `signed_log10_p`; alternatives `t`,
+  `log2_fc`); permutation null seeded via `--seed` for full
+  determinism; set-size filtering via `--min-set-size` /
+  `--max-set-size`. Validated against `fgsea::fgseaSimple` on a
+  planted fixture: ES agreement within `1e-12` on all three
+  fixtures (top-loaded, bottom-loaded, scattered). NES depends on
+  the permutation null and is reproducible across atman re-runs at
+  the same seed but is not byte-equal to fgsea (different PRNGs).
+  Emits a `*.run.json` SHA-256 sidecar with all CLI parameters.
+
 ### Changed
 
 - **Audit silent `0.0` fallbacks in similarity computations

@@ -263,6 +263,34 @@ atman enrich ora \
     --output out/ora.tsv
 ```
 
+## GSEA (pre-ranked gene-set enrichment)
+
+`atman enrich gsea` runs the weighted Kolmogorov-Smirnov enrichment of
+Subramanian et al. (2005) using the position-mask permutation
+formulation of `fgsea::fgseaSimple`. Operates on the full ranked DE
+list — no q-cutoff, no foreground/background split — so coordinated
+subtle shifts are captured. Validated against `fgsea::fgseaSimple` on
+a planted fixture: ES agreement within `1e-12`. See
+[reference.md](reference.md#fgsea-parity-note) for the full parity
+statement.
+
+```bash
+atman enrich gsea \
+    --de-results out/de_results.tsv \
+    --gene-sets gene_sets.tsv \
+    --comparison "PT2-PT1" \
+    --output out/gsea.tsv \
+    --rank-by signed_log10_p \
+    --n-permutations 1000 \
+    --seed 42
+```
+
+Output columns: `set_name`, `set_size`, `es`, `nes`, `p_value`,
+`bh_q`, `leading_edge`. Sorted ascending by `bh_q`, then descending
+by `|nes|`. Alternative ranking statistics: `--rank-by t` or
+`--rank-by log2_fc`. Set-size filtering: `--min-set-size` (default
+5), `--max-set-size` (default 500).
+
 ## Cross-cohort meta-analysis
 
 ```bash

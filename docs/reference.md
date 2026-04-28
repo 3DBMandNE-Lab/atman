@@ -28,6 +28,32 @@ be reproduced inside atman by first summarising peptides to proteins
 with `atman score modules --method median` and running
 `atman de --test ols`, at which point the two paths converge.
 
+### fgsea parity note
+
+Atman's `enrich gsea` and `fgsea::fgseaSimple` use the same weighted
+Kolmogorov-Smirnov enrichment statistic (Subramanian et al. 2005) and
+the same gene-permutation null formulation (Korotkevich et al. 2019).
+The agreement claim is therefore on the deterministic part of the
+algorithm — the enrichment score (ES) — which depends only on the
+ranked gene list and the set membership mask.
+
+- **Enrichment score (ES).** Matches `fgseaSimple` within `1e-12` on
+  the planted fixture in `gsea_reference.R` for all three sets
+  (`top_loaded`, `bottom_loaded`, `scattered`).
+- **Permutation p-value and NES.** Both quantities depend on the
+  permutation null draws. Atman uses the deterministic `Xoshiro256pp`
+  PRNG seeded via `--seed`; fgsea uses R's Mersenne Twister. The
+  per-set p-value and NES are therefore reproducible across atman
+  re-runs at the same seed but are not byte-equal to fgsea. For paper
+  reporting, cite atman's seed and `n-permutations` so reviewers can
+  re-derive the exact p-values from the published artifact.
+- **NES sign and significance bucket.** ES sign matches fgsea exactly
+  (deterministic), so the direction of enrichment is always
+  consistent. Significance buckets agree on the planted fixture; on
+  noisier real-world inputs the rank-order of marginal sets may
+  differ at the third decimal due to permutation noise — increase
+  `--n-permutations` if a tight rank-order needs to be reported.
+
 ### Reference environment
 
 Reference scripts live alongside the fixtures in
@@ -40,6 +66,7 @@ in the script header:
 | `msqrob2_cptac_reference.R` | msqrob2 (Bioconductor ≥ 1.16), QFeatures, SummarizedExperiment |
 | `gen_limma_reference.R` | limma (CRAN) 3.x |
 | `posthoc_sidak_reference.R` | base R (`lm`, `pairwise.t.test`) |
+| `gsea_reference.R` | fgsea (Bioconductor ≥ 1.30) |
 | `variance_type3_reference.R` | car (CRAN) |
 
 Reference TSVs committed in the repo were generated under

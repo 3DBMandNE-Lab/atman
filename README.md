@@ -22,6 +22,7 @@ on published fixtures:
 | `de --test limma` (parametric eBayes) | `limma::eBayes` | 100-feature × 20-sample regression | Δ < **1e-4** on `t`, `p_value`, `df_total`, `s2_post` |
 | `de --post-hoc sidak --test ols` | `lm()` + `pairwise.t.test` | Planted 3-level fixture | max Δ < **1e-6** on `estimate`, `posthoc_p`, `posthoc_adj_p` |
 | `decompose variance --omnibus-factor` (Type III F) | `car::Anova(type = 3)` | Planted variance fixture | max Δ p < **1e-6** |
+| `enrich gsea` (weighted KS, fgseaSimple formulation) | `fgsea::fgseaSimple` | Planted ranked-list fixture (top / bottom / scattered sets) | max ES Δ < **1e-12** ([details](docs/reference.md#fgsea-parity-note)) |
 | Olink Explore NPX reproduction | Dube et al. 2023 published tables | Dube heat-stress cohort | filtered NPX: **byte-exact**; log2-FC: Δ = 1.05e-15 |
 
 Parity assertions run on every `cargo test --workspace --release`; CI
@@ -137,6 +138,7 @@ atman modules discover   data-driven module discovery (WGCNA soft-threshold + UP
 atman score modules      score modules per sample from canonical measurements
 atman programs filter    flag ICA programs by annotation, loading, and contamination signature
 atman enrich ora         over-representation analysis from DE hits
+atman enrich gsea        pre-ranked gene-set enrichment (fgseaSimple-equivalent)
 atman enrich gprofiler   live g:Profiler REST wrapper with cached responses
 atman meta               combine DE results across cohorts
 atman network influence  feature-covariance hub scoring
