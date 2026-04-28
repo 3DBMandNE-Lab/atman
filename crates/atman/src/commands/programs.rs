@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::io::{
-    atomic_write, escape_tsv, find_col, format_float, hash_labeled_inputs, need_col,
-    optional_cell, sidecar_path_for, write_run_sidecar,
+    atomic_write, escape_tsv, find_col, format_float, hash_labeled_inputs, need_col, optional_cell,
+    sidecar_path_for, write_run_sidecar,
 };
 use serde_json::json;
 use std::time::SystemTime;

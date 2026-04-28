@@ -4,3 +4,7 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# Local mdpdf rendering of README — never committed
+README.pdf
+mdpdf.log

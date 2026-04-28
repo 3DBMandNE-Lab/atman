@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::io::{
-    atomic_write, hash_canonical_inputs, hash_labeled_inputs, read_measurements_long,
-    read_samples, sidecar_path_for, write_run_sidecar,
+    atomic_write, hash_canonical_inputs, hash_labeled_inputs, read_measurements_long, read_samples,
+    sidecar_path_for, write_run_sidecar,
 };
 use serde_json::json;
 use std::time::SystemTime;
@@ -169,8 +169,7 @@ fn run_modules(args: ModulesArgs) -> Result<()> {
         &args.input_dir,
         &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     )?;
-    let modules_hash =
-        hash_labeled_inputs(&[("modules_tsv", args.modules_tsv.as_path())])?;
+    let modules_hash = hash_labeled_inputs(&[("modules_tsv", args.modules_tsv.as_path())])?;
     canonical.extend(modules_hash);
     let sidecar = sidecar_path_for(&args.output);
     write_run_sidecar(

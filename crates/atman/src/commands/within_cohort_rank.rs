@@ -9,9 +9,8 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::io::{
-    hash_canonical_inputs, read_measurements_long, read_proteins, read_samples,
-    sidecar_path_for, write_measurements_long, write_proteins, write_run_sidecar,
-    write_samples,
+    hash_canonical_inputs, read_measurements_long, read_proteins, read_samples, sidecar_path_for,
+    write_measurements_long, write_proteins, write_run_sidecar, write_samples,
 };
 
 #[derive(ClapArgs, Debug)]

@@ -270,8 +270,7 @@ pub fn run(args: Args) -> Result<()> {
         &args.input_dir,
         &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     )?;
-    let modules_hash =
-        hash_labeled_inputs(&[("modules_tsv", args.modules_tsv.as_path())])?;
+    let modules_hash = hash_labeled_inputs(&[("modules_tsv", args.modules_tsv.as_path())])?;
     canonical.extend(modules_hash);
     let sidecar = sidecar_path_for(&output_path);
     write_run_sidecar(

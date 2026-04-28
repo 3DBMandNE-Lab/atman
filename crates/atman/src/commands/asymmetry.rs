@@ -147,8 +147,7 @@ pub fn run(args: Args) -> Result<()> {
     eprintln!("asymmetry: wrote {:?}", args.output);
 
     let finished_at = SystemTime::now();
-    let inputs_sha256 =
-        hash_labeled_inputs(&[("de_results", args.de_results.as_path())])?;
+    let inputs_sha256 = hash_labeled_inputs(&[("de_results", args.de_results.as_path())])?;
     let sidecar = sidecar_path_for(&args.output);
     write_run_sidecar(
         &sidecar,

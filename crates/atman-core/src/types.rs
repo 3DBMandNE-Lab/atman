@@ -235,7 +235,13 @@ mod tests {
 
     #[test]
     fn maxquant_tmt_accepts_aliases() {
-        for alias in ["maxquant_tmt", "maxquant-tmt", "tmt", "TMT", " MaxQuant_TMT "] {
+        for alias in [
+            "maxquant_tmt",
+            "maxquant-tmt",
+            "tmt",
+            "TMT",
+            " MaxQuant_TMT ",
+        ] {
             let parsed: Platform = alias.parse().unwrap_or_else(|e| panic!("{alias}: {e}"));
             assert_eq!(parsed, Platform::MaxQuantTmt);
         }

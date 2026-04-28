@@ -6,9 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use super::enrich_gprofiler::{run_gprofiler, GprofilerArgs};
-use crate::io::{
-    atomic_write, hash_labeled_inputs, need_col, sidecar_path_for, write_run_sidecar,
-};
+use crate::io::{atomic_write, hash_labeled_inputs, need_col, sidecar_path_for, write_run_sidecar};
 use serde_json::json;
 use std::path::Path as StdPath;
 use std::time::SystemTime;

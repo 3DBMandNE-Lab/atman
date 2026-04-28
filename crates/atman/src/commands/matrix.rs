@@ -43,10 +43,8 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let finished_at = SystemTime::now();
-    let inputs_sha256 = hash_canonical_inputs(
-        &args.input_dir,
-        &["measurements.tsv", "samples.tsv"],
-    )?;
+    let inputs_sha256 =
+        hash_canonical_inputs(&args.input_dir, &["measurements.tsv", "samples.tsv"])?;
     let primary_output = output_paths
         .first()
         .cloned()

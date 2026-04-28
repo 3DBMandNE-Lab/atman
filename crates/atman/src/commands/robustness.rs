@@ -262,8 +262,10 @@ pub fn run(args: Args) -> Result<()> {
     for (i, p) in loo_files.iter().enumerate() {
         labeled.push((format!("loo_{i}"), PathBuf::from(p)));
     }
-    let labeled_refs: Vec<(&str, &Path)> =
-        labeled.iter().map(|(l, p)| (l.as_str(), p.as_path())).collect();
+    let labeled_refs: Vec<(&str, &Path)> = labeled
+        .iter()
+        .map(|(l, p)| (l.as_str(), p.as_path()))
+        .collect();
     let inputs_sha256 = hash_labeled_inputs(&labeled_refs)?;
     let outputs = [sign_path.clone(), rank_path.clone(), stab_path.clone()];
     let sidecar = sidecar_path_for(&sign_path);
