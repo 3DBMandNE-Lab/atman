@@ -124,7 +124,7 @@ pub fn assign_grade(
 /// p-values are present. Equal weights; exact-zero p clamped to 1e-300
 /// and exact-one p clamped to `1 - 1e-16` to keep `Φ⁻¹` finite.
 pub fn combine_stouffer(p_values: &[f64]) -> Option<f64> {
-    let normal = Normal::new(0.0, 1.0).ok()?;
+    let normal = Normal::new(0.0, 1.0).expect("N(0,1) construction is infallible");
     let mut z_sum = 0.0;
     let mut k = 0usize;
     for &p in p_values {
