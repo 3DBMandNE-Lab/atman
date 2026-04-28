@@ -173,12 +173,10 @@ pub struct Args {
     #[arg(long, default_value_t = 0.05)]
     ensemble_q_threshold: f64,
 
-    /// Fraction of applicable methods that must pass the q-threshold
-    /// for a VALIDATED grade.
-    #[arg(long, default_value_t = 0.80)]
-    ensemble_validated_fraction: f64,
-
-    /// Fraction for PROVISIONAL (below VALIDATED).
+    /// Sign-fraction threshold for the PROVISIONAL grade (below
+    /// VALIDATED, above INSUFFICIENT). At least this fraction of
+    /// methods must agree with the majority sign on the protein's
+    /// effect.
     #[arg(long, default_value_t = 0.50)]
     ensemble_provisional_fraction: f64,
 
@@ -462,13 +460,19 @@ pub fn run(args: Args) -> Result<()> {
     }
     if args.test == "ensemble" {
         for frac in [
-            args.ensemble_validated_fraction,
             args.ensemble_provisional_fraction,
             args.ensemble_sign_fraction,
         ] {
             if !frac.is_finite() || !(0.0..=1.0).contains(&frac) {
                 anyhow::bail!("ensemble fraction thresholds must be in [0, 1]");
             }
+        }
+        if args.ensemble_provisional_fraction > args.ensemble_sign_fraction {
+            anyhow::bail!(
+                "--ensemble-provisional-fraction ({}) must be <= --ensemble-sign-fraction ({})",
+                args.ensemble_provisional_fraction,
+                args.ensemble_sign_fraction,
+            );
         }
         if !args.ensemble_q_threshold.is_finite()
             || !(0.0..=1.0).contains(&args.ensemble_q_threshold)

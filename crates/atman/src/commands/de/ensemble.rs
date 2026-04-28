@@ -45,10 +45,6 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
         validated_sign_fraction: args.ensemble_sign_fraction,
         provisional_sign_fraction: args.ensemble_provisional_fraction,
     };
-    // `--ensemble-validated-fraction` is kept in the CLI surface for
-    // future per-method significance gates; the current grading uses
-    // ensemble_q + sign consistency only.
-    let _ = args.ensemble_validated_fraction;
 
     let tmp = TempDir::new().with_context(|| "creating ensemble tempdir")?;
     let mut merged_rows: Vec<DeResultRow> = Vec::new();
@@ -233,7 +229,6 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
             "peptide-metadata": args.peptide_metadata.as_ref().map(|p| p.display().to_string()),
             "ensemble-methods": args.ensemble_methods,
             "ensemble-q-threshold": args.ensemble_q_threshold,
-            "ensemble-validated-fraction": args.ensemble_validated_fraction,
             "ensemble-provisional-fraction": args.ensemble_provisional_fraction,
             "ensemble-sign-fraction": args.ensemble_sign_fraction,
         }),

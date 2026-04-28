@@ -154,7 +154,11 @@ pub fn write_run_sidecar(
     if let Some(extra) = extras {
         // Reserved keys cannot be overwritten — protects the schema
         // against commands that might accidentally emit a field name
-        // that collides with a canonical one.
+        // that collides with a canonical one. We refuse the whole
+        // sidecar write rather than silently dropping the offending
+        // key, so a programming error surfaces immediately instead of
+        // landing in a sidecar that's missing a value the caller
+        // thought it had recorded.
         const RESERVED: &[&str] = &[
             "schema_version",
             "run_uuid",
@@ -174,7 +178,10 @@ pub fn write_run_sidecar(
         ];
         for (k, v) in extra {
             if RESERVED.contains(&k.as_str()) {
-                continue;
+                anyhow::bail!(
+                    "sidecar `extras` contains reserved key {:?}; rename the field on the caller side",
+                    k
+                );
             }
             payload.insert(k, v);
         }
@@ -418,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn write_run_sidecar_merges_extras_and_rejects_reserved_keys() {
+    fn write_run_sidecar_merges_non_reserved_extras() {
         let dir = TempDir::new().unwrap();
         let out = dir.path().join("result.tsv");
         std::fs::write(&out, b"x\n").unwrap();
@@ -428,9 +435,6 @@ mod tests {
         let mut extras = Map::new();
         extras.insert("k_resolved".into(), json!(7));
         extras.insert("selection_rule".into(), json!("cumulative-variance=0.80"));
-        // Attempt to overwrite a reserved field — should be ignored.
-        extras.insert("schema_version".into(), json!(999));
-        extras.insert("command".into(), json!("evil-command"));
         write_run_sidecar(
             &sidecar,
             "decompose ica",
@@ -446,9 +450,38 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap()).unwrap();
         assert_eq!(parsed["k_resolved"], 7);
         assert_eq!(parsed["selection_rule"], "cumulative-variance=0.80");
-        // Reserved keys survived the merge attempt
         assert_eq!(parsed["schema_version"], 1);
         assert_eq!(parsed["command"], "decompose ica");
+    }
+
+    #[test]
+    fn write_run_sidecar_refuses_extras_that_collide_with_reserved_keys() {
+        let dir = TempDir::new().unwrap();
+        let out = dir.path().join("result.tsv");
+        std::fs::write(&out, b"x\n").unwrap();
+        let sidecar = sidecar_path_for(&out);
+        let t0 = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let t1 = t0 + Duration::from_secs(1);
+        for reserved in ["schema_version", "command", "atman_version", "args"] {
+            let mut extras = Map::new();
+            extras.insert(reserved.into(), json!("attempted-override"));
+            let err = write_run_sidecar(
+                &sidecar,
+                "decompose ica",
+                json!({"k": "auto"}),
+                &InputHashes::new(),
+                std::slice::from_ref(&out),
+                t0,
+                t1,
+                Some(extras),
+            )
+            .expect_err("must refuse reserved-key collision");
+            let msg = err.to_string();
+            assert!(
+                msg.contains(reserved) && msg.contains("reserved"),
+                "rejection message must name the reserved key {reserved:?} and the rule; got {msg:?}"
+            );
+        }
     }
 
     #[test]
