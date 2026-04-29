@@ -11,6 +11,25 @@ Add new proposals as sections below. Remove entries once they land
 
 ## Open
 
+### Bounded-heap truncation for `network differential --mode edge-pairwise`
+
+`atman_core::network_differential::edge_pairwise_differential` builds
+the full per-edge × per-cohort-pair `Vec<EdgePairwiseRow>` in memory
+before the caller in `crates/atman/src/commands/network.rs` applies
+`--top-rows` truncation. On the CPTAC pan-cancer paper workload (6701
+shared features × 15 cohort pairs ≈ 336 million rows pre-truncation
+at ~150 bytes per row) this fails to complete on a 128GB machine
+regardless of `--top-rows` value because the algorithm allocates
+before the cap. `--mode edge-summary` is unaffected (its caller's
+`top_rows` truncation is reached after a per-edge bounded-state
+aggregation, not after a full row-vector materialization).
+
+Resolution: push truncation into the algorithm via a bounded
+`BinaryHeap` of size `top_rows` keyed by `|z_diff|` descending
+(mirror the pattern used in `figures/fig5_pancancer_diffcoex/render.py`
+in the atman-paper repo for the top-K most-divergent edges over a
+22.4M-row stream). Existing CLI surface and output schema unchanged.
+
 ### Missingness-aware ICA
 
 Extend the compositional-transform surface on `atman decompose ica`
