@@ -8,6 +8,7 @@ use atman_core::decompose_unmix::{
 use atman_core::ica::{
     fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult,
 };
+use atman_core::nmf::{nmf as nmf_core, BetaLoss, Init, NmfConfig};
 use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
 use atman_core::variance_decomposition::{decompose_archetype_variance, FixedFactor, VarianceRow};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
@@ -45,6 +46,8 @@ enum Command {
     /// set to a target value (default 0). Produces a delta matrix
     /// showing each program's per-protein, per-sample contribution.
     Counterfactual(CounterfactualArgs),
+    /// Multiplicative-updates NMF (Frobenius loss, Lee & Seung).
+    Nmf(NmfArgs),
 }
 
 #[derive(ClapArgs, Debug)]
@@ -192,6 +195,54 @@ pub struct CounterfactualArgs {
     output: PathBuf,
 }
 
+#[derive(ClapArgs, Debug)]
+pub struct NmfArgs {
+    /// Canonical Atman input directory (contains `measurements.tsv`).
+    #[arg(long)]
+    pub input_dir: PathBuf,
+
+    /// Number of NMF components.
+    #[arg(long)]
+    pub k: usize,
+
+    /// `frobenius` (this task) or `kullback-leibler` (Task C, not yet supported).
+    #[arg(long, default_value = "frobenius")]
+    pub beta_loss: String,
+
+    /// Initialization strategy: `nndsvda` (deterministic) or `random`.
+    #[arg(long, default_value = "nndsvda")]
+    pub init: String,
+
+    /// Update rule: only `mu` (multiplicative updates) is supported.
+    #[arg(long, default_value = "mu")]
+    pub solver: String,
+
+    /// Maximum number of multiplicative-update iterations.
+    #[arg(long, default_value_t = 400)]
+    pub max_iter: usize,
+
+    /// Convergence tolerance on the change in Frobenius error per iteration.
+    #[arg(long, default_value_t = 1e-6)]
+    pub tol: f64,
+
+    /// RNG seed (used only when `--init random`).
+    #[arg(long, default_value_t = 42)]
+    pub seed: u64,
+
+    /// Loadings output TSV path (`program\tassay_id\tgene_symbol\tloading`).
+    #[arg(long)]
+    pub output_loadings: PathBuf,
+
+    /// Activations output TSV path (`sample_id\tprogram\tactivation`). Optional.
+    #[arg(long)]
+    pub output_activations: Option<PathBuf>,
+
+    /// Pre-decomposition transform. Default `none` (NMF requires non-negative
+    /// input; atman will reject the input loudly if any value is < 0).
+    #[arg(long, default_value = "none")]
+    pub transform: String,
+}
+
 pub fn run(args: Args) -> Result<()> {
     match args.command {
         Command::Ica(args) => run_ica(args),
@@ -199,7 +250,239 @@ pub fn run(args: Args) -> Result<()> {
         Command::Variance(args) => run_variance(args),
         Command::Unmix(args) => run_unmix(args),
         Command::Counterfactual(args) => run_counterfactual(args),
+        Command::Nmf(args) => nmf_run(args),
     }
+}
+
+fn nmf_run(args: NmfArgs) -> Result<()> {
+    let started_at = SystemTime::now();
+
+    // ── parse / validate discrete args ──────────────────────────────────────
+    let beta_loss = match args.beta_loss.as_str() {
+        "frobenius" => BetaLoss::Frobenius,
+        "kullback-leibler" => bail!(
+            "--beta-loss kullback-leibler will be supported in Task C; use frobenius for now"
+        ),
+        other => bail!("--beta-loss {:?}: expected `frobenius`", other),
+    };
+
+    let init = match args.init.as_str() {
+        "nndsvda" => Init::Nndsvda,
+        "random" => Init::Random,
+        other => bail!(
+            "--init {:?}: expected `nndsvda` or `random`",
+            other
+        ),
+    };
+
+    match args.solver.as_str() {
+        "mu" => {}
+        other => bail!(
+            "--solver {:?}: only `mu` (multiplicative updates) is supported in this release",
+            other
+        ),
+    }
+
+    if args.k == 0 {
+        bail!("--k must be at least 1");
+    }
+
+    // ── load matrix (canonical input: measurements.tsv) ────────────────────
+    let tsv = args.input_dir.join("measurements.tsv");
+    let records = read_measurements_long(&tsv)?;
+    if records.is_empty() {
+        bail!("no measurements in {:?}", tsv);
+    }
+
+    // Pivot to sample × feature (same pattern as load_matrix for ICA).
+    let mut abundance_by_key: BTreeMap<(String, String), f64> = BTreeMap::new();
+    let mut sample_order: Vec<String> = Vec::new();
+    let mut seen_samples: BTreeSet<String> = BTreeSet::new();
+    let mut assay_meta: BTreeMap<String, String> = BTreeMap::new(); // assay_id → gene_symbol
+
+    for r in &records {
+        if r.dropped_by_qc {
+            continue;
+        }
+        let assay = r.assay_id.0.clone();
+        let sample = r.sample_id.clone();
+        let abundance = r.abundance.as_f64();
+        if !abundance.is_finite() {
+            continue;
+        }
+        if seen_samples.insert(sample.clone()) {
+            sample_order.push(sample.clone());
+        }
+        assay_meta
+            .entry(assay.clone())
+            .or_insert_with(|| r.gene_symbol.clone().unwrap_or_default());
+        abundance_by_key.insert((assay, sample), abundance);
+    }
+
+    let n_samples = sample_order.len();
+    if n_samples < 2 {
+        bail!("need at least 2 samples for NMF, got {}", n_samples);
+    }
+
+    let assay_order: Vec<String> = assay_meta.keys().cloned().collect();
+    let n_assays = assay_order.len();
+
+    if args.k > n_samples.min(n_assays) {
+        bail!(
+            "--k={} exceeds min(n_samples={}, n_assays={})",
+            args.k,
+            n_samples,
+            n_assays
+        );
+    }
+
+    // Build dense matrix: data[i][j] = sample i, assay j.
+    // NMF requires no missing values; fail loudly if any are absent.
+    let mut data = vec![vec![0.0_f64; n_assays]; n_samples];
+    for (i, sample) in sample_order.iter().enumerate() {
+        for (j, assay) in assay_order.iter().enumerate() {
+            match abundance_by_key.get(&(assay.clone(), sample.clone())) {
+                Some(&v) => data[i][j] = v,
+                None => bail!(
+                    "NMF: missing value for sample={} assay={}; NMF requires a complete matrix. \
+                     Drop incomplete assays upstream or impute before running decompose nmf.",
+                    sample, assay
+                ),
+            }
+        }
+    }
+
+    // ── apply transform (only "none" supported; validate non-negativity) ────
+    match args.transform.as_str() {
+        "none" => {
+            // Validate that all values are non-negative.
+            for (i, row) in data.iter().enumerate() {
+                for (j, &v) in row.iter().enumerate() {
+                    if v < 0.0 {
+                        bail!(
+                            "NMF (--transform none) requires non-negative input, but \
+                             sample={} assay={} has value {}. \
+                             Apply a non-negativity-preserving transform upstream \
+                             (e.g. shift to [0, ∞)) before calling decompose nmf.",
+                            sample_order[i], assay_order[j], v
+                        );
+                    }
+                }
+            }
+        }
+        other => bail!(
+            "--transform {:?}: only `none` is supported for decompose nmf in this release. \
+             CLR/log are not appropriate without thought; ensure your input is already non-negative.",
+            other
+        ),
+    }
+
+    eprintln!(
+        "decompose nmf: n_samples={} n_assays={} k={} init={} max_iter={} tol={}",
+        n_samples, n_assays, args.k, args.init, args.max_iter, args.tol,
+    );
+
+    // ── run NMF ─────────────────────────────────────────────────────────────
+    let cfg = NmfConfig {
+        k: args.k,
+        beta_loss,
+        init,
+        max_iter: args.max_iter,
+        tol: args.tol,
+        seed: args.seed,
+    };
+    let result = nmf_core(&data, &cfg);
+    eprintln!(
+        "decompose nmf: n_iter={} converged={} final_error={:.6e}",
+        result.n_iter, result.converged, result.final_error
+    );
+
+    // ── write loadings TSV: program\tassay_id\tgene_symbol\tloading ─────────
+    // H is k × p; H[a][j] = loading of program a on assay j.
+    if let Some(parent) = args.output_loadings.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating output dir {:?}", parent))?;
+    }
+    {
+        let mut out = String::from("program\tassay_id\tgene_symbol\tloading\n");
+        for (a, h_row) in result.h.iter().enumerate() {
+            let prog = program_name(a);
+            for (j, &load) in h_row.iter().enumerate() {
+                let assay_id = &assay_order[j];
+                let gene_symbol = assay_meta.get(assay_id).map(|s| s.as_str()).unwrap_or("");
+                out.push_str(&prog);
+                out.push('\t');
+                out.push_str(assay_id);
+                out.push('\t');
+                out.push_str(gene_symbol);
+                out.push('\t');
+                out.push_str(&format_float(load));
+                out.push('\n');
+            }
+        }
+        atomic_write(&args.output_loadings, out.as_bytes())?;
+    }
+    eprintln!("decompose nmf: loadings={}", args.output_loadings.display());
+
+    // ── write activations TSV: sample_id\tprogram\tactivation ───────────────
+    // W is n × k; W[i][a] = activation of sample i on program a.
+    let mut output_files: Vec<PathBuf> = vec![args.output_loadings.clone()];
+    if let Some(ref act_path) = args.output_activations {
+        if let Some(parent) = act_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating output dir {:?}", parent))?;
+        }
+        let mut out = String::from("sample_id\tprogram\tactivation\n");
+        for (i, w_row) in result.w.iter().enumerate() {
+            let sample_id = &sample_order[i];
+            for (a, &activation) in w_row.iter().enumerate() {
+                let prog = program_name(a);
+                out.push_str(sample_id);
+                out.push('\t');
+                out.push_str(&prog);
+                out.push('\t');
+                out.push_str(&format_float(activation));
+                out.push('\n');
+            }
+        }
+        atomic_write(act_path, out.as_bytes())?;
+        eprintln!("decompose nmf: activations={}", act_path.display());
+        output_files.push(act_path.clone());
+    }
+
+    // ── sidecar ─────────────────────────────────────────────────────────────
+    let finished_at = SystemTime::now();
+    let canonical_inputs: &[&str] = &["measurements.tsv", "samples.tsv", "proteins.tsv"];
+    let inputs_sha256 = hash_canonical_inputs(&args.input_dir, canonical_inputs)?;
+    let sidecar = sidecar_path_for(&args.output_loadings);
+    write_run_sidecar(
+        &sidecar,
+        "decompose nmf",
+        json!({
+            "input-dir": args.input_dir.display().to_string(),
+            "k": args.k,
+            "beta-loss": args.beta_loss,
+            "init": args.init,
+            "solver": args.solver,
+            "max-iter": args.max_iter,
+            "tol": args.tol,
+            "seed": args.seed,
+            "transform": args.transform,
+            "output-loadings": args.output_loadings.display().to_string(),
+            "output-activations": args.output_activations.as_ref().map(|p| p.display().to_string()),
+            "decomposition_method": "nmf",
+            "n_iter": result.n_iter,
+            "converged": result.converged,
+            "final_error": result.final_error,
+        }),
+        &inputs_sha256,
+        &output_files,
+        started_at,
+        finished_at,
+        None,
+    )?;
+    eprintln!("decompose nmf: sidecar={}", sidecar.display());
+    Ok(())
 }
 
 #[derive(ClapArgs, Debug)]
