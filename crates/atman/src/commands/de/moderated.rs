@@ -4,7 +4,9 @@
 //! then recomputes the t-statistic and p-value.
 
 use anyhow::{Context, Result};
-use statrs::distribution::{ContinuousCDF, StudentsT};
+use statrs::distribution::StudentsT;
+
+use atman_core::de::two_sided_t_p_value;
 
 use crate::io::DeResultRow;
 
@@ -47,9 +49,9 @@ pub(super) fn apply_moderated_shrinkage(rows: &mut [DeResultRow], prior_df: f64)
         }
         let t_mod = mean_diff / (post_var / n).sqrt();
         let df_mod = prior_df + df_i;
-        let dist = StudentsT::new(0.0, 1.0, df_mod)
+        StudentsT::new(0.0, 1.0, df_mod)
             .with_context(|| format!("building t distribution with df={}", df_mod))?;
-        let p_mod = 2.0 * (1.0 - dist.cdf(t_mod.abs()));
+        let p_mod = two_sided_t_p_value(t_mod, df_mod).unwrap_or(f64::NAN);
         if p_mod.is_finite() {
             row.t = Some(t_mod);
             row.df = Some(df_mod);

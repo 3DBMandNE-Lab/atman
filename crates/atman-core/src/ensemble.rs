@@ -139,7 +139,7 @@ pub fn combine_stouffer(p_values: &[f64]) -> Option<f64> {
         return None;
     }
     let z_combined = z_sum / (k as f64).sqrt();
-    Some(1.0 - normal.cdf(z_combined))
+    Some(normal.sf(z_combined))
 }
 
 /// Aggregate per-method rows for one (comparison, protein) into an

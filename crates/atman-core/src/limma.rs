@@ -8,7 +8,7 @@
 //! Reference: Smyth 2004 (eBayes), Phipson et al. 2013 (TREAT),
 //! Phipson et al. 2016 (robust), Ritchie et al. 2015 (limma v3).
 
-use crate::de::cholesky_lower;
+use crate::de::{cholesky_lower, two_sided_t_p_value};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor, StudentsT};
 
 /// Digamma ψ(x) = d/dx ln Γ(x). Asymptotic expansion for x ≥ 10,
@@ -426,18 +426,7 @@ pub fn moderated_t(
         };
     }
     let t = effect / se;
-    let dist = match StudentsT::new(0.0, 1.0, df_total) {
-        Ok(d) => d,
-        Err(_) => {
-            return ModeratedT {
-                effect,
-                se,
-                t,
-                p_value: f64::NAN,
-            }
-        }
-    };
-    let p_value = 2.0 * (1.0 - dist.cdf(t.abs()));
+    let p_value = two_sided_t_p_value(t, df_total).unwrap_or(f64::NAN);
     ModeratedT {
         effect,
         se,
@@ -560,7 +549,7 @@ pub fn moderated_f(
         return None;
     }
     let dist = FisherSnedecor::new(k as f64, df_total).ok()?;
-    let p_value = 1.0 - dist.cdf(f);
+    let p_value = dist.sf(f);
     Some(ModeratedF {
         f,
         num_df: k,
@@ -593,7 +582,7 @@ pub fn treat_p_value(t: f64, se: f64, df_total: f64, lfc_threshold: f64) -> f64 
     };
     let abs_t = t.abs();
     let shift = lfc_threshold.abs() / se;
-    let upper = 1.0 - dist.cdf(abs_t - shift);
+    let upper = dist.sf(abs_t - shift);
     let lower = dist.cdf(-abs_t - shift);
     (upper + lower).clamp(0.0, 1.0)
 }

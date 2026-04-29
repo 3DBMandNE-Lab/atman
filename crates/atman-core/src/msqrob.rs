@@ -122,7 +122,7 @@ pub fn squeeze_variance(fits: &mut [MsqrobFit]) -> Option<(f64, f64)> {
             };
             fit.t[j] = t;
             fit.p_value[j] = if t.is_finite() {
-                2.0 * (1.0 - t_dist.cdf(t.abs()))
+                (2.0 * t_dist.sf(t.abs())).clamp(0.0, 1.0)
             } else {
                 f64::NAN
             };
@@ -364,7 +364,7 @@ pub fn fit_msqrob(
         .iter()
         .map(|&ti| {
             if ti.is_finite() {
-                2.0 * (1.0 - t_dist.cdf(ti.abs()))
+                (2.0 * t_dist.sf(ti.abs())).clamp(0.0, 1.0)
             } else {
                 f64::NAN
             }

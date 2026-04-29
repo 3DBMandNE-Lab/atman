@@ -16,6 +16,33 @@
 
 use statrs::distribution::{ContinuousCDF, FisherSnedecor, StudentsT};
 
+/// Numerically stable two-sided Student's t p-value.
+///
+/// Use the distribution survival function directly rather than
+/// `2 * (1 - cdf(|t|))`; the subtraction path rounds to zero for large but
+/// still representable tails such as `t = 39, df = 326`.
+pub fn two_sided_t_p_value(t: f64, df: f64) -> Option<f64> {
+    if !t.is_finite() || !df.is_finite() || df <= 0.0 {
+        return None;
+    }
+    let dist = StudentsT::new(0.0, 1.0, df).ok()?;
+    Some((2.0 * dist.sf(t.abs())).clamp(0.0, 1.0))
+}
+
+/// Numerically stable right-tail F-test p-value.
+pub fn right_tail_f_p_value(f: f64, df_num: f64, df_den: f64) -> Option<f64> {
+    if !f.is_finite()
+        || !df_num.is_finite()
+        || !df_den.is_finite()
+        || df_num <= 0.0
+        || df_den <= 0.0
+    {
+        return None;
+    }
+    let dist = FisherSnedecor::new(df_num, df_den).ok()?;
+    Some(dist.sf(f).clamp(0.0, 1.0))
+}
+
 /// A single paired t-test result for one protein in one comparison.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PairedTResult {
@@ -106,7 +133,7 @@ pub fn paired_t(pairs: &[(f64, f64)], min_pairs: usize) -> PairedTResult {
             };
         }
     };
-    let p_value = 2.0 * (1.0 - t_dist.cdf(t.abs()));
+    let p_value = (2.0 * t_dist.sf(t.abs())).clamp(0.0, 1.0);
 
     PairedTResult::Computed {
         n_pairs: n,
@@ -199,7 +226,7 @@ pub fn welch_t(group_a: &[f64], group_b: &[f64], min_per_group: usize) -> Paired
             };
         }
     };
-    let p_value = 2.0 * (1.0 - t_dist.cdf(t.abs()));
+    let p_value = (2.0 * t_dist.sf(t.abs())).clamp(0.0, 1.0);
 
     PairedTResult::Computed {
         n_pairs: n_total,
@@ -509,7 +536,7 @@ pub fn ols(design: &[Vec<f64>], y: &[f64], min_samples: usize) -> OlsOutcome {
             if !ti.is_finite() {
                 f64::NAN
             } else {
-                2.0 * (1.0 - t_dist.cdf(ti.abs()))
+                (2.0 * t_dist.sf(ti.abs())).clamp(0.0, 1.0)
             }
         })
         .collect();
@@ -658,7 +685,7 @@ pub fn mixed_random_intercept(
         .iter()
         .map(|&ti| {
             if ti.is_finite() {
-                2.0 * (1.0 - t_dist.cdf(ti.abs()))
+                (2.0 * t_dist.sf(ti.abs())).clamp(0.0, 1.0)
             } else {
                 f64::NAN
             }
@@ -952,7 +979,7 @@ pub fn contrast_inference(
     }
     let t = if se == 0.0 { f64::NAN } else { estimate / se };
     let p_value = match StudentsT::new(0.0, 1.0, df) {
-        Ok(dist) if t.is_finite() => 2.0 * (1.0 - dist.cdf(t.abs())),
+        Ok(dist) if t.is_finite() => (2.0 * dist.sf(t.abs())).clamp(0.0, 1.0),
         _ => f64::NAN,
     };
     Some(ContrastResult {
@@ -1071,7 +1098,7 @@ pub fn omnibus_f_test(
         return None;
     }
     let p_value = match FisherSnedecor::new(k as f64, df) {
-        Ok(dist) => 1.0 - dist.cdf(f),
+        Ok(dist) => dist.sf(f).clamp(0.0, 1.0),
         Err(_) => f64::NAN,
     };
     Some(OmnibusF {
@@ -1281,6 +1308,23 @@ mod tests {
             "expected p<0.001, got {}",
             omni.p_value
         );
+    }
+
+    #[test]
+    fn two_sided_t_p_value_uses_stable_tail_for_extreme_t() {
+        let p = two_sided_t_p_value(39.4186141848897, 326.12788865688213).expect("finite p-value");
+        assert!(p.is_finite() && p > 0.0, "p={p}");
+        assert!(
+            (p.log10() + 125.366440245).abs() < 1e-6,
+            "log10(p)={}",
+            p.log10()
+        );
+    }
+
+    #[test]
+    fn right_tail_f_p_value_uses_stable_tail_for_extreme_f() {
+        let p = right_tail_f_p_value(500.0, 2.0, 300.0).expect("finite p-value");
+        assert!(p.is_finite() && p > 0.0, "p={p}");
     }
 
     #[test]

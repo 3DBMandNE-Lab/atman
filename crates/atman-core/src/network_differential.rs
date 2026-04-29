@@ -378,17 +378,14 @@ fn sample_sd(values: &[f64], mu: f64) -> f64 {
     var.sqrt()
 }
 
-/// Two-sided normal-tail p-value: `2 * (1 - Φ(z))` for `z >= 0`. Uses
-/// the standard `erfc` formulation via `statrs` to avoid pulling a new
-/// dep — but `statrs` is already in the workspace, so we use its
-/// `Normal::cdf` directly.
+/// Two-sided normal-tail p-value: `2 * P(Z > |z|)`.
 fn two_sided_normal_p(z: f64) -> f64 {
     use statrs::distribution::{ContinuousCDF, Normal};
     if !z.is_finite() {
         return f64::NAN;
     }
     let n = Normal::new(0.0, 1.0).expect("standard normal");
-    let p = 2.0 * (1.0 - n.cdf(z.abs()));
+    let p = 2.0 * n.sf(z.abs());
     p.clamp(0.0, 1.0)
 }
 

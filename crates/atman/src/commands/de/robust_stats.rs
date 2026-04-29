@@ -190,7 +190,7 @@ fn normal_two_sided_p(stat: f64, mean: f64, var: f64) -> Option<f64> {
     }
     let z = (stat - mean).abs() / var.sqrt();
     let dist = Normal::new(0.0, 1.0).ok()?;
-    Some(2.0 * (1.0 - dist.cdf(z)))
+    Some((2.0 * dist.sf(z)).clamp(0.0, 1.0))
 }
 
 fn average_ranks(values: &[f64]) -> Vec<f64> {
