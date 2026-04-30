@@ -271,8 +271,11 @@ fn frobenius_reconstruction_error(
     error_sq.sqrt() / x_norm
 }
 
-#[test]
-fn nmf_frobenius_matches_sklearn_reference() {
+/// Parameterized NMF parity test helper.
+/// Runs atman with `--beta-loss <beta_loss>`, checks Jaccard top-20 >= 0.9 per program,
+/// and checks relative Frobenius reconstruction error <= 5%.
+/// Input fixture is always `nmf_frobenius_input.tsv` (loss-independent).
+fn run_nmf_parity_test(beta_loss: &str, reference_tsv_path: &str) {
     let tmp = tempfile::tempdir().unwrap();
     let tmp_path = tmp.path();
 
@@ -370,7 +373,7 @@ fn nmf_frobenius_matches_sklearn_reference() {
         "--solver",
         "mu",
         "--beta-loss",
-        "frobenius",
+        beta_loss,
         "--init",
         "nndsvda",
         "--max-iter",
@@ -385,14 +388,12 @@ fn nmf_frobenius_matches_sklearn_reference() {
         activations_path.to_str().unwrap(),
     ]);
 
-    // Step 4: Check that atman was invoked (may fail if nmf not yet implemented).
+    // Step 4: Check that atman succeeded.
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Expected failure during B2->B3/B4: "unrecognized subcommand 'nmf'".
-        // Panic with stderr for debugging.
         panic!(
-            "atman decompose nmf failed (expected until B3/B4 implemented):\nstderr:\n{}",
-            stderr
+            "atman decompose nmf --beta-loss {} failed:\nstderr:\n{}",
+            beta_loss, stderr
         );
     }
 
@@ -400,7 +401,7 @@ fn nmf_frobenius_matches_sklearn_reference() {
     let actual_loadings = read_loadings_tsv(&loadings_path);
     let reference_fixture_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/nmf_frobenius_reference.tsv");
+            .join(reference_tsv_path);
     let reference_loadings = read_loadings_tsv(&reference_fixture_path);
 
     // Step 6: Align programs by Jaccard top-20.
@@ -413,7 +414,8 @@ fn nmf_frobenius_matches_sklearn_reference() {
         let j = jaccard_top_n(ref_genes, act_genes, 20);
         assert!(
             j >= 0.9,
-            "program {} Jaccard top-20 = {}, expected >= 0.9",
+            "beta-loss={}: program {} Jaccard top-20 = {}, expected >= 0.9",
+            beta_loss,
             ref_idx + 1,
             j
         );
@@ -427,7 +429,24 @@ fn nmf_frobenius_matches_sklearn_reference() {
 
     assert!(
         act_error <= 0.05,
-        "Frobenius reconstruction error = {}, expected <= 0.05",
+        "beta-loss={}: Frobenius reconstruction error = {}, expected <= 0.05",
+        beta_loss,
         act_error
+    );
+}
+
+#[test]
+fn nmf_frobenius_matches_sklearn_reference() {
+    run_nmf_parity_test(
+        "frobenius",
+        "tests/fixtures/nmf_frobenius_reference.tsv",
+    );
+}
+
+#[test]
+fn nmf_kl_matches_sklearn_reference() {
+    run_nmf_parity_test(
+        "kullback-leibler",
+        "tests/fixtures/nmf_kl_reference.tsv",
     );
 }
