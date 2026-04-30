@@ -818,6 +818,385 @@ fn top_abs_indices_vec(v: &[f64], n: usize) -> Vec<usize> {
     out
 }
 
+// ── k-selection ─────────────────────────────────────────────────────────────
+
+/// Method for automatic k-selection in NMF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KSelection {
+    /// Use `nmf_cfg.k` as-is; no sweep is performed.
+    Fixed,
+    /// Select k by cophenetic-correlation knee (Brunet 2004).
+    CopheneticKnee,
+    /// Select k by reconstruction-error (RSS) elbow.
+    RssKnee,
+}
+
+/// One row in the k-sweep output.
+#[derive(Debug, Clone)]
+pub struct KSweepRow {
+    pub k: usize,
+    /// Mean cophenetic correlation across seeds (consensus-matrix based).
+    pub cophenetic: f64,
+    /// Mean ||X - WH||_F^2 across seeds.
+    pub mean_rss: f64,
+    /// Mean KL loss across seeds (None when beta_loss == Frobenius).
+    pub mean_kl: Option<f64>,
+}
+
+/// Result of automatic k-selection.
+#[derive(Debug, Clone)]
+pub struct KSelectionResult {
+    pub selected_k: usize,
+    pub per_k: Vec<KSweepRow>,
+}
+
+/// Run automatic k-selection for NMF.
+///
+/// For `KSelection::Fixed`: trivial — returns a single-row sweep at `nmf_cfg.k`.
+/// For `KSelection::CopheneticKnee`: sweeps k ∈ [k_min, k_max], builds
+///   the per-k consensus matrix (fraction of seeds where two samples co-cluster),
+///   and selects the k with the highest cophenetic correlation (with tie-breaking
+///   toward the left/smaller k).
+/// For `KSelection::RssKnee`: sweeps k ∈ [k_min, k_max] and selects the k at
+///   the maximum distance from the line connecting the first and last RSS points
+///   (standard elbow / max-perpendicular-distance method).
+pub fn select_k(
+    x: &[Vec<f64>],
+    nmf_cfg: &NmfConfig,
+    ms_cfg: &MultiSeedConfig,
+    k_min: usize,
+    k_max: usize,
+    method: KSelection,
+) -> KSelectionResult {
+    if method == KSelection::Fixed {
+        // Trivial: run a single NMF at the configured k.
+        let result = nmf(x, nmf_cfg);
+        let rss = result.final_error * result.final_error;
+        let mean_kl = if nmf_cfg.beta_loss == BetaLoss::KullbackLeibler {
+            Some(result.final_error)
+        } else {
+            None
+        };
+        return KSelectionResult {
+            selected_k: nmf_cfg.k,
+            per_k: vec![KSweepRow {
+                k: nmf_cfg.k,
+                cophenetic: f64::NAN,
+                mean_rss: rss,
+                mean_kl,
+            }],
+        };
+    }
+
+    assert!(k_min >= 2, "k_min must be >= 2");
+    assert!(k_max >= k_min, "k_max must be >= k_min");
+
+    let n = x.len();
+    let ks: Vec<usize> = (k_min..=k_max).collect();
+    let mut rows: Vec<KSweepRow> = Vec::with_capacity(ks.len());
+
+    for &k in &ks {
+        let cfg_k = NmfConfig { k, ..*nmf_cfg };
+
+        // Run n_seeds NMF runs, collect W matrices and errors.
+        let mut rss_sum = 0.0_f64;
+        let mut kl_sum = 0.0_f64;
+        // co_occurrence[i][j] = number of seeds where sample i and j are assigned
+        // to the same component (argmax of W row).
+        let mut co_count = vec![vec![0u32; n]; n];
+
+        for seed_i in 0..ms_cfg.n_seeds {
+            let seed = ms_cfg.seed_base.wrapping_add(seed_i as u64);
+            let cfg_s = NmfConfig { seed, ..cfg_k };
+            let res = nmf(x, &cfg_s);
+
+            // Compute per-seed RSS (Frobenius squared).
+            let n_p = if x.is_empty() { 0 } else { x[0].len() };
+            let mut rss = 0.0_f64;
+            for i in 0..n {
+                for j in 0..n_p {
+                    let wh: f64 = (0..k).map(|a| res.w[i][a] * res.h[a][j]).sum();
+                    let d = x[i][j] - wh;
+                    rss += d * d;
+                }
+            }
+            rss_sum += rss;
+
+            // KL: only meaningful if BetaLoss::KullbackLeibler.
+            if nmf_cfg.beta_loss == BetaLoss::KullbackLeibler {
+                kl_sum += res.final_error;
+            }
+
+            // Assign each sample to the component with the highest W value.
+            let assignments: Vec<usize> = res.w.iter().map(|row| {
+                row.iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0)
+            }).collect();
+
+            // Update co-occurrence.
+            for i in 0..n {
+                for j in i..n {
+                    if assignments[i] == assignments[j] {
+                        co_count[i][j] += 1;
+                        co_count[j][i] += 1;
+                    }
+                }
+            }
+        }
+
+        let n_seeds_f = ms_cfg.n_seeds as f64;
+        let mean_rss = rss_sum / n_seeds_f;
+        let mean_kl = if nmf_cfg.beta_loss == BetaLoss::KullbackLeibler {
+            Some(kl_sum / n_seeds_f)
+        } else {
+            None
+        };
+
+        // Build consensus matrix C[i][j] = co_count[i][j] / n_seeds.
+        // Cophenetic correlation: Spearman r between upper-triangle of (1 - C)
+        // and upper-triangle of cophenetic distances from average-linkage
+        // hierarchical clustering of (1 - C).
+        let cophenetic = if n < 2 {
+            1.0
+        } else {
+            let consensus_dist: Vec<Vec<f64>> = (0..n)
+                .map(|i| (0..n).map(|j| {
+                    1.0 - co_count[i][j] as f64 / n_seeds_f
+                }).collect())
+                .collect();
+            let cophenetic_dist = average_linkage_cophenetic(&consensus_dist, n);
+            spearman_upper_tri(&consensus_dist, &cophenetic_dist, n)
+        };
+
+        rows.push(KSweepRow { k, cophenetic, mean_rss, mean_kl });
+    }
+
+    let selected_k = match method {
+        KSelection::Fixed => unreachable!(),
+        KSelection::CopheneticKnee => {
+            // The cophenetic curve typically decreases monotonically with k
+            // (adding components splits clusters that were already coherent).
+            // We want the "elbow": the k where the curve first begins to
+            // plateau, i.e., the point of maximum perpendicular distance from
+            // the line connecting the first and last cophenetic values.
+            // This is the same max-perpendicular-distance elbow as the RSS
+            // method, but applied to the cophenetic curve (descending).
+            let n_pts = rows.len();
+            if n_pts <= 1 {
+                rows.first().map(|r| r.k).unwrap_or(k_min)
+            } else {
+                let x0 = 0.0_f64;
+                let y0 = rows[0].cophenetic;
+                let x1 = (n_pts - 1) as f64;
+                let y1 = rows[n_pts - 1].cophenetic;
+
+                let a = y1 - y0;
+                let b = x0 - x1;
+                let c = x1 * y0 - x0 * y1;
+                let denom = (a * a + b * b).sqrt().max(1e-30);
+
+                let mut best_k = rows[0].k;
+                let mut best_dist = f64::NEG_INFINITY;
+                for (idx, row) in rows.iter().enumerate() {
+                    if row.cophenetic.is_nan() { continue; }
+                    let xi = idx as f64;
+                    let yi = row.cophenetic;
+                    let dist = (a * xi + b * yi + c).abs() / denom;
+                    if dist > best_dist {
+                        best_dist = dist;
+                        best_k = row.k;
+                    }
+                }
+                best_k
+            }
+        }
+        KSelection::RssKnee => {
+            // Standard elbow: max perpendicular distance from the line
+            // connecting the (k_min, rss_first) and (k_max, rss_last) points.
+            let n_pts = rows.len();
+            if n_pts <= 1 {
+                rows.first().map(|r| r.k).unwrap_or(k_min)
+            } else {
+                let x0 = 0.0_f64;
+                let y0 = rows[0].mean_rss;
+                let x1 = (n_pts - 1) as f64;
+                let y1 = rows[n_pts - 1].mean_rss;
+
+                // Line from (x0, y0) to (x1, y1): ax + by + c = 0
+                // a = y1 - y0, b = x0 - x1, c = x1*y0 - x0*y1
+                let a = y1 - y0;
+                let b = x0 - x1;
+                let c = x1 * y0 - x0 * y1;
+                let denom = (a * a + b * b).sqrt().max(1e-30);
+
+                let mut best_k = rows[0].k;
+                let mut best_dist = f64::NEG_INFINITY;
+                for (idx, row) in rows.iter().enumerate() {
+                    let xi = idx as f64;
+                    let yi = row.mean_rss;
+                    let dist = (a * xi + b * yi + c).abs() / denom;
+                    if dist > best_dist {
+                        best_dist = dist;
+                        best_k = row.k;
+                    }
+                }
+                best_k
+            }
+        }
+    };
+
+    KSelectionResult { selected_k, per_k: rows }
+}
+
+/// Compute cophenetic distances from average-linkage hierarchical clustering
+/// of a pre-computed distance matrix `d` (n × n, symmetric, zero diagonal).
+///
+/// Returns an n × n cophenetic distance matrix where `coph[i][j]` is the
+/// height at which samples i and j first merge.
+///
+/// This is a minimal O(n^3) implementation (sufficient for n ≤ 200).
+fn average_linkage_cophenetic(d: &[Vec<f64>], n: usize) -> Vec<Vec<f64>> {
+    // We use a standard O(n^3) agglomerative algorithm with active-cluster tracking.
+    // Each cluster stores the set of original sample indices it contains.
+    // The distance between two clusters is the average of all pairwise distances
+    // between their members (true average linkage).
+
+    // coph[i][j] = merge height of the pair (i, j); initialized to 0.
+    let mut coph = vec![vec![0.0_f64; n]; n];
+
+    // Cluster membership: cluster k -> Vec of original indices.
+    // Start with n singleton clusters.
+    let mut clusters: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
+    // Active flag per cluster slot.
+    let mut active: Vec<bool> = vec![true; n];
+
+    // Current distances between active clusters (we update in place).
+    let mut dist = d.to_vec();
+
+    for _step in 0..(n - 1) {
+        // Find the two active clusters with minimum distance.
+        let mut best = f64::INFINITY;
+        let mut best_i = 0;
+        let mut best_j = 0;
+        for i in 0..dist.len() {
+            if !active[i] { continue; }
+            for j in (i + 1)..dist.len() {
+                if !active[j] { continue; }
+                if dist[i][j] < best {
+                    best = dist[i][j];
+                    best_i = i;
+                    best_j = j;
+                }
+            }
+        }
+
+        let merge_height = best;
+
+        // Record cophenetic height for all pairs (a, b) where a ∈ cluster_i, b ∈ cluster_j.
+        for &a in &clusters[best_i] {
+            for &b in &clusters[best_j] {
+                coph[a][b] = merge_height;
+                coph[b][a] = merge_height;
+            }
+        }
+
+        // Merge cluster best_j into best_i.
+        // New distance from merged cluster to any other active cluster c:
+        //   avg-linkage: (|ci| * d(ci, c) + |cj| * d(cj, c)) / (|ci| + |cj|)
+        let size_i = clusters[best_i].len() as f64;
+        let size_j = clusters[best_j].len() as f64;
+        let total = size_i + size_j;
+
+        let n_slots = dist.len();
+        for c in 0..n_slots {
+            if !active[c] || c == best_i || c == best_j { continue; }
+            let new_d = (size_i * dist[best_i][c] + size_j * dist[best_j][c]) / total;
+            dist[best_i][c] = new_d;
+            dist[c][best_i] = new_d;
+        }
+
+        // Move best_j members into best_i.
+        let members_j = clusters[best_j].clone();
+        clusters[best_i].extend(members_j);
+        active[best_j] = false;
+    }
+
+    coph
+}
+
+/// Spearman correlation between the upper triangles of two n×n symmetric matrices.
+fn spearman_upper_tri(a: &[Vec<f64>], b: &[Vec<f64>], n: usize) -> f64 {
+    let m = n * (n - 1) / 2;
+    if m == 0 {
+        return 1.0;
+    }
+    let mut va = Vec::with_capacity(m);
+    let mut vb = Vec::with_capacity(m);
+    for i in 0..n {
+        for j in (i + 1)..n {
+            va.push(a[i][j]);
+            vb.push(b[i][j]);
+        }
+    }
+    pearson_on_ranks(&va, &vb)
+}
+
+/// Convert values to ranks (average ranks for ties), then compute Pearson r.
+fn pearson_on_ranks(a: &[f64], b: &[f64]) -> f64 {
+    let n = a.len();
+    if n == 0 { return 0.0; }
+    let ra = rank_vector(a);
+    let rb = rank_vector(b);
+    pearson_r(&ra, &rb)
+}
+
+/// Assign average ranks to a slice of f64 values.
+fn rank_vector(v: &[f64]) -> Vec<f64> {
+    let n = v.len();
+    // Sort by value, keeping original indices.
+    let mut indexed: Vec<(usize, f64)> = v.iter().enumerate().map(|(i, &x)| (i, x)).collect();
+    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut ranks = vec![0.0_f64; n];
+    let mut i = 0;
+    while i < n {
+        // Find the run of equal values.
+        let mut j = i;
+        while j < n && (indexed[j].1 - indexed[i].1).abs() < f64::EPSILON * 1e3 {
+            j += 1;
+        }
+        // Average rank for this group (1-based).
+        let avg_rank = (i + j + 1) as f64 / 2.0;
+        for k in i..j {
+            ranks[indexed[k].0] = avg_rank;
+        }
+        i = j;
+    }
+    ranks
+}
+
+/// Pearson r between two equal-length slices.
+fn pearson_r(a: &[f64], b: &[f64]) -> f64 {
+    let n = a.len();
+    if n < 2 { return 0.0; }
+    let mean_a = a.iter().sum::<f64>() / n as f64;
+    let mean_b = b.iter().sum::<f64>() / n as f64;
+    let mut num = 0.0_f64;
+    let mut sa = 0.0_f64;
+    let mut sb = 0.0_f64;
+    for i in 0..n {
+        let da = a[i] - mean_a;
+        let db = b[i] - mean_b;
+        num += da * db;
+        sa += da * da;
+        sb += db * db;
+    }
+    let denom = (sa * sb).sqrt();
+    if denom < 1e-30 { 0.0 } else { num / denom }
+}
+
 // ── tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1202,5 +1581,125 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── k-selection tests ────────────────────────────────────────────────────
+
+    /// Build a rank-3 synthetic matrix: 20 samples × 10 features.
+    fn make_rank3_synthetic() -> Vec<Vec<f64>> {
+        let n = 20usize;
+        let p = 10usize;
+        let k_true = 3usize;
+
+        let h_true: Vec<Vec<f64>> = vec![
+            vec![5.0, 4.0, 3.0, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+            vec![0.1, 0.1, 0.1, 5.0, 4.0, 3.0, 0.1, 0.1, 0.1, 0.1],
+            vec![0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 5.0, 4.0, 3.0],
+        ];
+        let mut w_true = vec![vec![0.0_f64; k_true]; n];
+        for i in 0..n {
+            w_true[i][i % k_true] = 2.0 + (i as f64 * 0.1);
+            w_true[i][(i + 1) % k_true] = 0.5;
+        }
+        (0..n)
+            .map(|i| {
+                (0..p)
+                    .map(|j| (0..k_true).map(|a| w_true[i][a] * h_true[a][j]).sum::<f64>())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn select_k_cophenetic_picks_planted_k_on_synthetic_rank_3() {
+        let x = make_rank3_synthetic();
+        let nmf_cfg = NmfConfig {
+            k: 3, // will be overridden per-k
+            beta_loss: BetaLoss::Frobenius,
+            init: Init::Random,
+            max_iter: 600,
+            tol: 1e-8,
+            seed: 0,
+        };
+        let ms_cfg = MultiSeedConfig {
+            n_seeds: 10,
+            seed_base: 200,
+            stability_metric: StabilityMetric::JaccardTopN,
+            stability_top_n: 3,
+        };
+
+        let result = select_k(&x, &nmf_cfg, &ms_cfg, 2, 6, KSelection::CopheneticKnee);
+
+        assert_eq!(
+            result.per_k.len(),
+            5,
+            "per_k should have k_max - k_min + 1 = 5 rows"
+        );
+        assert_eq!(
+            result.selected_k, 3,
+            "cophenetic knee should select k=3 on rank-3 synthetic; got k={}, cophenetic values: {:?}",
+            result.selected_k,
+            result.per_k.iter().map(|r| (r.k, r.cophenetic)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn select_k_rss_picks_planted_k_on_synthetic_rank_3() {
+        let x = make_rank3_synthetic();
+        let nmf_cfg = NmfConfig {
+            k: 3,
+            beta_loss: BetaLoss::Frobenius,
+            init: Init::Random,
+            max_iter: 600,
+            tol: 1e-8,
+            seed: 0,
+        };
+        let ms_cfg = MultiSeedConfig {
+            n_seeds: 10,
+            seed_base: 300,
+            stability_metric: StabilityMetric::JaccardTopN,
+            stability_top_n: 3,
+        };
+
+        let result = select_k(&x, &nmf_cfg, &ms_cfg, 2, 6, KSelection::RssKnee);
+
+        // Knee detection has off-by-one ambiguity; accept k ∈ {3, 4}.
+        assert!(
+            result.selected_k == 3 || result.selected_k == 4,
+            "RSS knee should select k ∈ {{3, 4}} on rank-3 synthetic; got k={}, rss values: {:?}",
+            result.selected_k,
+            result.per_k.iter().map(|r| (r.k, r.mean_rss)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn select_k_fixed_passes_through() {
+        let x = mat(&[
+            &[3.0, 2.0, 0.1, 0.1],
+            &[2.5, 3.0, 0.1, 0.1],
+            &[0.1, 0.1, 4.0, 3.0],
+            &[0.1, 0.1, 3.0, 4.5],
+            &[1.5, 1.0, 2.0, 2.0],
+        ]);
+        let nmf_cfg = NmfConfig {
+            k: 2,
+            beta_loss: BetaLoss::Frobenius,
+            init: Init::Random,
+            max_iter: 200,
+            tol: 1e-8,
+            seed: 42,
+        };
+        let ms_cfg = MultiSeedConfig {
+            n_seeds: 3,
+            seed_base: 42,
+            stability_metric: StabilityMetric::JaccardTopN,
+            stability_top_n: 2,
+        };
+
+        let result = select_k(&x, &nmf_cfg, &ms_cfg, 2, 5, KSelection::Fixed);
+
+        assert_eq!(result.selected_k, nmf_cfg.k, "Fixed should pass through cfg.k");
+        assert_eq!(result.per_k.len(), 1, "Fixed should return exactly 1 per_k row");
+        assert_eq!(result.per_k[0].k, nmf_cfg.k);
     }
 }

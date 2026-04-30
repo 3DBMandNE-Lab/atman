@@ -9,8 +9,8 @@ use atman_core::ica::{
     fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult,
 };
 use atman_core::nmf::{
-    multi_seed_nmf, nmf as nmf_core, BetaLoss, Init, MultiSeedConfig, NmfConfig,
-    StabilityMetric as NmfStabilityMetric,
+    multi_seed_nmf, nmf as nmf_core, select_k as nmf_select_k, BetaLoss, Init, KSelection,
+    MultiSeedConfig, NmfConfig, StabilityMetric as NmfStabilityMetric,
 };
 use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
 use atman_core::variance_decomposition::{decompose_archetype_variance, FixedFactor, VarianceRow};
@@ -204,9 +204,29 @@ pub struct NmfArgs {
     #[arg(long)]
     pub input_dir: PathBuf,
 
-    /// Number of NMF components.
+    /// Number of NMF components. Required when `--k-selection fixed` (default).
+    /// Ignored (with a warning) when `--k-selection` is automatic.
     #[arg(long)]
-    pub k: usize,
+    pub k: Option<usize>,
+
+    /// K-selection method: `fixed` (use `--k`), `cophenetic-knee`, or `rss-knee`.
+    #[arg(long, default_value = "fixed")]
+    pub k_selection: String,
+
+    /// Minimum k for automatic k-selection sweep (≥ 2). Required when
+    /// `--k-selection` is not `fixed`.
+    #[arg(long)]
+    pub k_min: Option<usize>,
+
+    /// Maximum k for automatic k-selection sweep (≤ 50, > k_min). Required
+    /// when `--k-selection` is not `fixed`.
+    #[arg(long)]
+    pub k_max: Option<usize>,
+
+    /// Optional path for the k-sweep TSV when `--k-selection` is automatic.
+    /// Columns: `k\tcophenetic\tmean_rss\tmean_kl\tselected`.
+    #[arg(long)]
+    pub output_k_sweep: Option<PathBuf>,
 
     /// `frobenius` or `kullback-leibler` (alias `kl`).
     #[arg(long, default_value = "frobenius")]
@@ -315,9 +335,50 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
         ),
     }
 
-    if args.k == 0 {
-        bail!("--k must be at least 1");
-    }
+    // ── parse k-selection ────────────────────────────────────────────────────
+    let k_sel = match args.k_selection.as_str() {
+        "fixed" => KSelection::Fixed,
+        "cophenetic-knee" => KSelection::CopheneticKnee,
+        "rss-knee" => KSelection::RssKnee,
+        other => bail!(
+            "--k-selection {:?}: expected `fixed`, `cophenetic-knee`, or `rss-knee`",
+            other
+        ),
+    };
+
+    // Validate --k / --k-min / --k-max depending on selection mode.
+    let k_fixed: usize = if k_sel == KSelection::Fixed {
+        let k = args.k.ok_or_else(|| {
+            anyhow::anyhow!("--k is required when --k-selection fixed (the default)")
+        })?;
+        if k == 0 {
+            bail!("--k must be at least 1");
+        }
+        k
+    } else {
+        0 // placeholder; will be determined by select_k
+    };
+
+    let (k_min, k_max) = if k_sel != KSelection::Fixed {
+        let k_min = args.k_min.ok_or_else(|| {
+            anyhow::anyhow!("--k-min is required when --k-selection is not fixed")
+        })?;
+        let k_max = args.k_max.ok_or_else(|| {
+            anyhow::anyhow!("--k-max is required when --k-selection is not fixed")
+        })?;
+        if k_min < 2 {
+            bail!("--k-min must be >= 2, got {}", k_min);
+        }
+        if k_max > 50 {
+            bail!("--k-max must be <= 50, got {}", k_max);
+        }
+        if k_max <= k_min {
+            bail!("--k-max ({}) must be > --k-min ({})", k_max, k_min);
+        }
+        (k_min, k_max)
+    } else {
+        (0, 0) // unused for Fixed
+    };
 
     // ── load matrix (canonical input: measurements.tsv) ────────────────────
     let tsv = args.input_dir.join("measurements.tsv");
@@ -359,10 +420,10 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
     let assay_order: Vec<String> = assay_meta.keys().cloned().collect();
     let n_assays = assay_order.len();
 
-    if args.k > n_samples.min(n_assays) {
+    if k_sel == KSelection::Fixed && k_fixed > n_samples.min(n_assays) {
         bail!(
             "--k={} exceeds min(n_samples={}, n_assays={})",
-            args.k,
+            k_fixed,
             n_samples,
             n_assays
         );
@@ -421,20 +482,49 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
         ),
     };
 
-    eprintln!(
-        "decompose nmf: n_samples={} n_assays={} k={} init={} max_iter={} tol={} n_seeds={}",
-        n_samples, n_assays, args.k, args.init, args.max_iter, args.tol, args.n_seeds,
-    );
-
-    // ── build NmfConfig (seed will be overridden per-run in multi-seed mode) ─
-    let nmf_cfg = NmfConfig {
-        k: args.k,
+    // ── build NmfConfig base (k will be finalised after k-selection) ─────────
+    let nmf_cfg_base = NmfConfig {
+        k: if k_sel == KSelection::Fixed { k_fixed } else { k_min }, // temp; overridden below
         beta_loss,
         init,
         max_iter: args.max_iter,
         tol: args.tol,
         seed: if args.n_seeds == 1 { args.seed } else { args.seed_base },
     };
+
+    // ── run k-selection (or Fixed pass-through) ───────────────────────────────
+    let ms_cfg_for_sel = MultiSeedConfig {
+        n_seeds: args.n_seeds,
+        seed_base: args.seed_base,
+        stability_metric: nmf_stability_metric,
+        stability_top_n: args.stability_top_n,
+    };
+
+    let (effective_k, k_sweep_result) = if k_sel == KSelection::Fixed {
+        (k_fixed, None)
+    } else {
+        eprintln!(
+            "decompose nmf: k-selection={} k_min={} k_max={} n_seeds={}",
+            args.k_selection, k_min, k_max, args.n_seeds,
+        );
+        let sel_result = nmf_select_k(&data, &nmf_cfg_base, &ms_cfg_for_sel, k_min, k_max, k_sel);
+        eprintln!(
+            "decompose nmf: selected_k={}",
+            sel_result.selected_k,
+        );
+        let sk = sel_result.selected_k;
+        (sk, Some(sel_result))
+    };
+
+    let nmf_cfg = NmfConfig {
+        k: effective_k,
+        ..nmf_cfg_base
+    };
+
+    eprintln!(
+        "decompose nmf: n_samples={} n_assays={} k={} init={} max_iter={} tol={} n_seeds={}",
+        n_samples, n_assays, effective_k, args.init, args.max_iter, args.tol, args.n_seeds,
+    );
 
     // ── run NMF (single-seed or multi-seed) ─────────────────────────────────
     //
@@ -698,6 +788,42 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
         }
     }
 
+    // ── write k-sweep TSV (automatic k-selection only) ───────────────────────
+    if let Some(ref sweep_result) = k_sweep_result {
+        if let Some(ref sweep_path) = args.output_k_sweep {
+            if let Some(parent) = sweep_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating k-sweep dir {:?}", parent))?;
+            }
+            let mut out = String::from("k\tcophenetic\tmean_rss\tmean_kl\tselected\n");
+            for row in &sweep_result.per_k {
+                let cophenetic_str = if row.cophenetic.is_nan() {
+                    "NA".to_string()
+                } else {
+                    format_float(row.cophenetic)
+                };
+                let mean_kl_str = row
+                    .mean_kl
+                    .map(|v| format_float(v))
+                    .unwrap_or_else(|| "NA".to_string());
+                let selected = if row.k == sweep_result.selected_k { "1" } else { "0" };
+                out.push_str(&row.k.to_string());
+                out.push('\t');
+                out.push_str(&cophenetic_str);
+                out.push('\t');
+                out.push_str(&format_float(row.mean_rss));
+                out.push('\t');
+                out.push_str(&mean_kl_str);
+                out.push('\t');
+                out.push_str(selected);
+                out.push('\n');
+            }
+            atomic_write(sweep_path, out.as_bytes())?;
+            eprintln!("decompose nmf: k-sweep={}", sweep_path.display());
+            output_files.push(sweep_path.clone());
+        }
+    }
+
     // ── sidecar ─────────────────────────────────────────────────────────────
     let finished_at = SystemTime::now();
     let canonical_inputs: &[&str] = &["measurements.tsv", "samples.tsv", "proteins.tsv"];
@@ -717,12 +843,21 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
         ),
     };
 
+    let selected_k_val = k_sweep_result
+        .as_ref()
+        .map(|r| serde_json::Value::from(r.selected_k))
+        .unwrap_or(serde_json::Value::Null);
+
     write_run_sidecar(
         &sidecar,
         "decompose nmf",
         json!({
             "input-dir": args.input_dir.display().to_string(),
-            "k": args.k,
+            "k": effective_k,
+            "k-selection": args.k_selection,
+            "k-min": args.k_min,
+            "k-max": args.k_max,
+            "selected-k": selected_k_val,
             "beta-loss": args.beta_loss,
             "init": args.init,
             "solver": args.solver,
@@ -738,6 +873,7 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
             "output-loadings": args.output_loadings.display().to_string(),
             "output-activations": args.output_activations.as_ref().map(|p| p.display().to_string()),
             "output-stability": args.output_stability.as_ref().map(|p| p.display().to_string()),
+            "output-k-sweep": args.output_k_sweep.as_ref().map(|p| p.display().to_string()),
             "decomposition_method": "nmf",
             "n_iter": n_iter_val,
             "converged": converged_val,
