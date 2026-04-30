@@ -1,9 +1,13 @@
 //! Multiplicative-updates NMF (Brunet 2004, Lee & Seung 1999/2001).
 //!
 //! Frobenius variant: minimises ||X - WH||_F^2 via the standard
-//! multiplicative update rules. Initialization options are NNDSVDa
-//! (Boutsidis & Gallopoulos 2008, deterministic) and Random
-//! (Xoshiro256++ seeded, reproducible given `seed`).
+//! multiplicative update rules.  KL variant: minimises the generalised
+//! KL divergence D_KL(X || WH) = sum X*log(X/WH) - X + WH via the Lee
+//! & Seung 2001 (NIPS) multiplicative update rules.
+//!
+//! Initialization options are NNDSVDa (Boutsidis & Gallopoulos 2008,
+//! deterministic) and Random (Xoshiro256++ seeded, reproducible given
+//! `seed`).
 //!
 //! Data layout matches the ICA convention in `ica.rs`: all matrices
 //! are `Vec<Vec<f64>>` (outer = rows). The public API converts from/to
@@ -18,7 +22,8 @@ use crate::ica::{jacobi_eigen, Xoshiro256pp};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BetaLoss {
     Frobenius,
-    /// Reserved for Task C; not yet implemented.
+    /// Lee & Seung 2001 (NIPS) KL-divergence multiplicative updates.
+    /// Minimises D_KL(X || WH) = sum_ij [ X_ij * log(X_ij / (WH)_ij) - X_ij + (WH)_ij ].
     KullbackLeibler,
 }
 
@@ -84,19 +89,15 @@ pub fn nmf(x: &[Vec<f64>], cfg: &NmfConfig) -> NmfResult {
     );
     assert!(cfg.k > 0 && cfg.k <= n.min(p), "nmf: k out of range");
 
-    match cfg.beta_loss {
-        BetaLoss::KullbackLeibler => {
-            unimplemented!("KL-divergence NMF is reserved for Task C")
-        }
-        BetaLoss::Frobenius => {}
-    }
-
     let (mut w, mut h) = match cfg.init {
         Init::Nndsvda => init_nndsvda(x, n, p, cfg.k),
         Init::Random => init_random(x, n, p, cfg.k, cfg.seed),
     };
 
-    frobenius_mu(x, &mut w, &mut h, n, p, cfg.k, cfg.max_iter, cfg.tol)
+    match cfg.beta_loss {
+        BetaLoss::Frobenius => frobenius_mu(x, &mut w, &mut h, n, p, cfg.k, cfg.max_iter, cfg.tol),
+        BetaLoss::KullbackLeibler => kl_mu(x, &mut w, &mut h, n, p, cfg.k, cfg.max_iter, cfg.tol),
+    }
 }
 
 // ── Frobenius multiplicative updates ────────────────────────────────────────
@@ -206,6 +207,148 @@ fn frobenius_error(
         }
     }
     acc.sqrt()
+}
+
+// ── KL-divergence multiplicative updates ────────────────────────────────────
+
+/// Run Lee & Seung 2001 (NIPS) multiplicative updates for the KL-divergence loss.
+///
+/// Loss: D_KL(X || WH) = sum_ij [ X_ij * log(X_ij / (WH)_ij) - X_ij + (WH)_ij ]
+///
+/// Update rules (element-wise):
+///   H_kj ← H_kj * (sum_i  W_ik * X_ij / (WH)_ij) / (sum_i W_ik)
+///   W_ik ← W_ik * (sum_j  H_kj * X_ij / (WH)_ij) / (sum_j H_kj)
+fn kl_mu(
+    x: &[Vec<f64>],
+    w: &mut Vec<Vec<f64>>,
+    h: &mut Vec<Vec<f64>>,
+    n: usize,
+    p: usize,
+    k: usize,
+    max_iter: usize,
+    tol: f64,
+) -> NmfResult {
+    let mut prev_loss = kl_loss(x, w, h, n, p, k);
+    let mut n_iter = 0usize;
+    let mut converged = false;
+
+    for iter in 0..max_iter {
+        n_iter = iter + 1;
+
+        // ── update H ──────────────────────────────────────────────────────
+        // H_kj ← H_kj * (sum_i W_ik * X_ij / (WH)_ij) / (sum_i W_ik)
+        //
+        // Precompute WH (n × p).
+        let wh = mat_mul(n, k, w, k, p, h);
+
+        // Numerator for each (k, j): sum_i W[i][k] * X[i][j] / WH[i][j]
+        // Denominator for each k:    sum_i W[i][k]
+        let mut h_num = vec![vec![0.0_f64; p]; k];
+        let mut w_col_sum = vec![0.0_f64; k];
+
+        for i in 0..n {
+            for kk in 0..k {
+                let w_ik = w[i][kk];
+                w_col_sum[kk] += w_ik;
+                for j in 0..p {
+                    let wh_ij = wh[i][j] + EPSILON;
+                    h_num[kk][j] += w_ik * x[i][j] / wh_ij;
+                }
+            }
+        }
+
+        for kk in 0..k {
+            let den = w_col_sum[kk] + EPSILON;
+            for j in 0..p {
+                h[kk][j] *= h_num[kk][j] / den;
+                if h[kk][j] < 0.0 {
+                    h[kk][j] = 0.0;
+                }
+            }
+        }
+
+        // ── update W ──────────────────────────────────────────────────────
+        // W_ik ← W_ik * (sum_j H_kj * X_ij / (WH)_ij) / (sum_j H_kj)
+        //
+        // Recompute WH after H update.
+        let wh = mat_mul(n, k, w, k, p, h);
+
+        // Numerator for each (i, k): sum_j H[k][j] * X[i][j] / WH[i][j]
+        // Denominator for each k:    sum_j H[k][j]
+        let mut w_num = vec![vec![0.0_f64; k]; n];
+        let mut h_row_sum = vec![0.0_f64; k];
+
+        for kk in 0..k {
+            for j in 0..p {
+                h_row_sum[kk] += h[kk][j];
+            }
+        }
+
+        for i in 0..n {
+            for j in 0..p {
+                let wh_ij = wh[i][j] + EPSILON;
+                let x_ij = x[i][j];
+                for kk in 0..k {
+                    w_num[i][kk] += h[kk][j] * x_ij / wh_ij;
+                }
+            }
+        }
+
+        for i in 0..n {
+            for kk in 0..k {
+                let den = h_row_sum[kk] + EPSILON;
+                w[i][kk] *= w_num[i][kk] / den;
+                if w[i][kk] < 0.0 {
+                    w[i][kk] = 0.0;
+                }
+            }
+        }
+
+        // ── convergence check ─────────────────────────────────────────────
+        let loss = kl_loss(x, w, h, n, p, k);
+        if (prev_loss - loss).abs() < tol {
+            converged = true;
+            prev_loss = loss;
+            break;
+        }
+        prev_loss = loss;
+    }
+
+    NmfResult {
+        w: w.clone(),
+        h: h.clone(),
+        n_iter,
+        final_error: prev_loss,
+        converged,
+    }
+}
+
+/// Generalised KL divergence D_KL(X || WH).
+///
+/// D = sum_ij [ X_ij * log(X_ij / (WH)_ij) - X_ij + (WH)_ij ]
+/// Convention: 0 * log(0) = 0 (handled via the EPSILON floor on WH).
+fn kl_loss(
+    x: &[Vec<f64>],
+    w: &[Vec<f64>],
+    h: &[Vec<f64>],
+    n: usize,
+    p: usize,
+    k: usize,
+) -> f64 {
+    let mut acc = 0.0_f64;
+    for i in 0..n {
+        for j in 0..p {
+            let wh_ij: f64 = (0..k).map(|kk| w[i][kk] * h[kk][j]).sum::<f64>().max(EPSILON);
+            let x_ij = x[i][j];
+            if x_ij > 0.0 {
+                acc += x_ij * (x_ij / wh_ij).ln() - x_ij + wh_ij;
+            } else {
+                // x_ij == 0: contribution is 0*log(0) - 0 + WH = WH
+                acc += wh_ij;
+            }
+        }
+    }
+    acc
 }
 
 // ── initializations ─────────────────────────────────────────────────────────
@@ -677,6 +820,100 @@ mod tests {
         for i in 0..3 {
             for a in 0..2 {
                 assert_eq!(r1.w[i][a].to_bits(), r2.w[i][a].to_bits());
+            }
+        }
+    }
+
+    // ── KL-divergence tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn kl_recovers_synthetic_rank_1() {
+        // Rank-1 synthetic: x = w * h with w = [1, 2, 3]^T, h = [1.5, 2.5].
+        // KL MU is also exact on rank-1 nonneg data.
+        let x = mat(&[&[1.5, 2.5], &[3.0, 5.0], &[4.5, 7.5]]);
+        let cfg = NmfConfig {
+            k: 1,
+            beta_loss: BetaLoss::KullbackLeibler,
+            init: Init::Nndsvda,
+            max_iter: 500,
+            tol: 1e-10,
+            seed: 42,
+        };
+        let r = nmf(&x, &cfg);
+        let n = x.len();
+        let p = x[0].len();
+        let err: f64 = {
+            let mut acc = 0.0_f64;
+            for i in 0..n {
+                for j in 0..p {
+                    let wh: f64 = (0..cfg.k).map(|a| r.w[i][a] * r.h[a][j]).sum();
+                    let d = x[i][j] - wh;
+                    acc += d * d;
+                }
+            }
+            acc.sqrt()
+        };
+        assert!(err < 1e-3, "KL rank-1 reconstruction err = {err:.6}");
+        assert!(r.converged, "expected convergence");
+    }
+
+    #[test]
+    fn kl_returns_non_negative() {
+        let x = mat(&[&[1.0, 2.0], &[2.0, 4.0]]);
+        let cfg = NmfConfig {
+            k: 1,
+            beta_loss: BetaLoss::KullbackLeibler,
+            init: Init::Nndsvda,
+            max_iter: 200,
+            tol: 1e-9,
+            seed: 42,
+        };
+        let r = nmf(&x, &cfg);
+        assert!(
+            r.w.iter().all(|row| row.iter().all(|&v| v >= 0.0)),
+            "W contains negatives"
+        );
+        assert!(
+            r.h.iter().all(|row| row.iter().all(|&v| v >= 0.0)),
+            "H contains negatives"
+        );
+    }
+
+    #[test]
+    fn kl_deterministic_under_nndsvda() {
+        // Same input + NNDSVDa init + same params → byte-identical W, H, n_iter.
+        let x = mat(&[
+            &[1.0, 2.0, 3.0],
+            &[4.0, 5.0, 6.0],
+            &[7.0, 8.0, 9.0],
+        ]);
+        let cfg = NmfConfig {
+            k: 2,
+            beta_loss: BetaLoss::KullbackLeibler,
+            init: Init::Nndsvda,
+            max_iter: 100,
+            tol: 1e-9,
+            seed: 42,
+        };
+        let r1 = nmf(&x, &cfg);
+        let r2 = nmf(&x, &cfg);
+        assert_eq!(r1.n_iter, r2.n_iter);
+        for i in 0..3 {
+            for a in 0..2 {
+                assert_eq!(
+                    r1.w[i][a].to_bits(),
+                    r2.w[i][a].to_bits(),
+                    "W[{i}][{a}] differs"
+                );
+            }
+        }
+        for a in 0..2 {
+            for j in 0..3 {
+                assert_eq!(
+                    r1.h[a][j].to_bits(),
+                    r2.h[a][j].to_bits(),
+                    "H[{a}][{j}] differs"
+                );
             }
         }
     }

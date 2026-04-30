@@ -205,7 +205,7 @@ pub struct NmfArgs {
     #[arg(long)]
     pub k: usize,
 
-    /// `frobenius` (this task) or `kullback-leibler` (Task C, not yet supported).
+    /// `frobenius` or `kullback-leibler` (alias `kl`).
     #[arg(long, default_value = "frobenius")]
     pub beta_loss: String,
 
@@ -260,10 +260,11 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
     // ── parse / validate discrete args ──────────────────────────────────────
     let beta_loss = match args.beta_loss.as_str() {
         "frobenius" => BetaLoss::Frobenius,
-        "kullback-leibler" => bail!(
-            "--beta-loss kullback-leibler will be supported in Task C; use frobenius for now"
+        "kullback-leibler" | "kl" => BetaLoss::KullbackLeibler,
+        other => bail!(
+            "--beta-loss {:?}: expected `frobenius` or `kullback-leibler`",
+            other
         ),
-        other => bail!("--beta-loss {:?}: expected `frobenius`", other),
     };
 
     let init = match args.init.as_str() {
