@@ -653,6 +653,171 @@ fn frobenius_norm_vec(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum::<f64>().sqrt()
 }
 
+// ── multi-seed stability ─────────────────────────────────────────────────────
+
+/// Stability metric variant used by [`multi_seed_nmf`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StabilityMetric {
+    /// Jaccard overlap of the top-N absolute-loading indices.
+    JaccardTopN,
+}
+
+/// Configuration for [`multi_seed_nmf`].
+#[derive(Debug, Clone, Copy)]
+pub struct MultiSeedConfig {
+    /// Number of independent random seeds to run.
+    pub n_seeds: usize,
+    /// Base seed; seed `i` is `seed_base + i as u64`.
+    pub seed_base: u64,
+    /// Stability metric used for program clustering across seeds.
+    pub stability_metric: StabilityMetric,
+    /// Top-N loadings used by the Jaccard metric.
+    pub stability_top_n: usize,
+}
+
+/// One row in the multi-seed stability output.
+#[derive(Debug, Clone)]
+pub struct StableProgramRow {
+    /// Label, e.g. `"program_01"`.
+    pub program_id: String,
+    /// Fraction of seeds in which this program was recovered (0.0–1.0).
+    pub stable_seed_fraction: f64,
+    /// Mean loading vector averaged over all seeds in which the program appeared.
+    /// Length = number of features (`p`).
+    pub mean_loading: Vec<f64>,
+}
+
+/// Run NMF `ms_cfg.n_seeds` times with seeds `ms_cfg.seed_base + i`,
+/// cluster programs across seeds by Jaccard top-N overlap on H rows
+/// (reference = seed 0), and return per-program stability rows.
+///
+/// NMF loadings are non-negative by construction so there is no sign
+/// ambiguity — clustering directly compares H rows without sign flipping.
+///
+/// Each result uses `nmf_cfg.init` and `nmf_cfg.beta_loss`; `nmf_cfg.seed`
+/// is overridden per iteration to `ms_cfg.seed_base + i`.
+pub fn multi_seed_nmf(
+    x: &[Vec<f64>],
+    nmf_cfg: &NmfConfig,
+    ms_cfg: &MultiSeedConfig,
+) -> Vec<StableProgramRow> {
+    assert!(ms_cfg.n_seeds >= 1, "n_seeds must be at least 1");
+
+    let k = nmf_cfg.k;
+    let p = if x.is_empty() { 0 } else { x[0].len() };
+
+    // ── run all seeds ────────────────────────────────────────────────────────
+    let mut all_h: Vec<Vec<Vec<f64>>> = Vec::with_capacity(ms_cfg.n_seeds);
+    for i in 0..ms_cfg.n_seeds {
+        let seed = ms_cfg.seed_base.wrapping_add(i as u64);
+        let cfg_i = NmfConfig { seed, ..*nmf_cfg };
+        let result = nmf(x, &cfg_i);
+        // result.h is k × p; store as Vec<Vec<f64>> where each inner Vec is one program row.
+        all_h.push(result.h);
+    }
+
+    // ── build per-reference-program clusters ─────────────────────────────────
+    // Reference = seed 0.  For each alternative seed, greedily match its k
+    // programs to reference programs (best Jaccard, each program matched once).
+    let reference = &all_h[0];
+
+    // For each reference program `a`, collect loadings from each seed that
+    // matched it (plus the reference itself).
+    let mut seed_loadings_per_ref: Vec<Vec<Vec<f64>>> = (0..k)
+        .map(|a| vec![reference[a].clone()])
+        .collect();
+
+    for seed_idx in 1..ms_cfg.n_seeds {
+        let alt = &all_h[seed_idx];
+
+        // Greedy matching: for each reference program (in order), find the
+        // best-matching alternative program not yet assigned.
+        let mut used = vec![false; k];
+        for ref_a in 0..k {
+            let ref_row = &reference[ref_a];
+            let mut best_j = 0.0_f64;
+            let mut best_alt = usize::MAX;
+            for alt_a in 0..k {
+                if used[alt_a] {
+                    continue;
+                }
+                let j = jaccard_top_n_vec(ref_row, &alt[alt_a], ms_cfg.stability_top_n);
+                if j > best_j {
+                    best_j = j;
+                    best_alt = alt_a;
+                }
+            }
+            if best_alt != usize::MAX {
+                used[best_alt] = true;
+                seed_loadings_per_ref[ref_a].push(alt[best_alt].clone());
+            }
+        }
+    }
+
+    // ── compute stability fraction and mean loadings ─────────────────────────
+    let n_seeds_f = ms_cfg.n_seeds as f64;
+    let mut rows: Vec<StableProgramRow> = Vec::with_capacity(k);
+
+    for (a, matched_loadings) in seed_loadings_per_ref.into_iter().enumerate() {
+        let n_present = matched_loadings.len(); // always >= 1 (includes seed 0)
+        let stable_seed_fraction = n_present as f64 / n_seeds_f;
+
+        // Mean loading = element-wise average over matched loadings (no sign flip needed).
+        let mut mean_loading = vec![0.0_f64; p];
+        for row in &matched_loadings {
+            for (j, &v) in row.iter().enumerate() {
+                mean_loading[j] += v;
+            }
+        }
+        let n_f = n_present as f64;
+        for v in mean_loading.iter_mut() {
+            *v /= n_f;
+        }
+
+        let prog_idx = a + 1;
+        let program_id = format!("program_{:02}", prog_idx);
+
+        rows.push(StableProgramRow {
+            program_id,
+            stable_seed_fraction,
+            mean_loading,
+        });
+    }
+
+    rows
+}
+
+/// Jaccard overlap of top-`top_n` absolute-value index sets for two `Vec<f64>` rows.
+/// Duplicates the `jaccard_top_n` helper from `stats.rs` to avoid a crate-level
+/// dependency loop; kept private to this module.
+fn jaccard_top_n_vec(a: &[f64], b: &[f64], top_n: usize) -> f64 {
+    let set_a = top_abs_indices_vec(a, top_n);
+    let set_b = top_abs_indices_vec(b, top_n);
+    if set_a.is_empty() && set_b.is_empty() {
+        return 0.0;
+    }
+    let inter = set_a.iter().filter(|i| set_b.contains(i)).count();
+    let union_sz = set_a.len() + set_b.len() - inter;
+    if union_sz == 0 {
+        0.0
+    } else {
+        inter as f64 / union_sz as f64
+    }
+}
+
+/// Top-`n` indices by absolute value, sorted ascending (for set membership).
+fn top_abs_indices_vec(v: &[f64], n: usize) -> Vec<usize> {
+    let n = n.min(v.len());
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut indexed: Vec<(usize, f64)> = v.iter().enumerate().map(|(i, &x)| (i, x.abs())).collect();
+    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out: Vec<usize> = indexed.iter().take(n).map(|&(i, _)| i).collect();
+    out.sort_unstable();
+    out
+}
+
 // ── tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -820,6 +985,127 @@ mod tests {
         for i in 0..3 {
             for a in 0..2 {
                 assert_eq!(r1.w[i][a].to_bits(), r2.w[i][a].to_bits());
+            }
+        }
+    }
+
+    // ── multi-seed stability tests ───────────────────────────────────────────
+
+    #[test]
+    fn multi_seed_nmf_recovers_k_stable_programs_on_synthetic_rank_3() {
+        // Build a rank-3 synthetic matrix: X = W_true @ H_true
+        // W_true: 20 × 3, H_true: 3 × 10
+        let n = 20;
+        let p = 10;
+        let k_true = 3;
+
+        // Construct distinct non-negative basis rows for H.
+        let h_true: Vec<Vec<f64>> = vec![
+            // program 1: loads mainly on features 0–2
+            vec![5.0, 4.0, 3.0, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+            // program 2: loads mainly on features 3–5
+            vec![0.1, 0.1, 0.1, 5.0, 4.0, 3.0, 0.1, 0.1, 0.1, 0.1],
+            // program 3: loads mainly on features 7–9
+            vec![0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 5.0, 4.0, 3.0],
+        ];
+
+        // W_true: cyclic pattern so each program gets reasonable activation.
+        let mut w_true = vec![vec![0.0_f64; k_true]; n];
+        for i in 0..n {
+            w_true[i][i % k_true] = 2.0 + (i as f64 * 0.1);
+            w_true[i][(i + 1) % k_true] = 0.5;
+        }
+
+        // Build X = W_true @ H_true.
+        let x: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                (0..p)
+                    .map(|j| {
+                        (0..k_true)
+                            .map(|a| w_true[i][a] * h_true[a][j])
+                            .sum::<f64>()
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let nmf_cfg = NmfConfig {
+            k: k_true,
+            beta_loss: BetaLoss::Frobenius,
+            init: Init::Random,
+            max_iter: 600,
+            tol: 1e-8,
+            seed: 0, // will be overridden per-seed
+        };
+        let ms_cfg = MultiSeedConfig {
+            n_seeds: 5,
+            seed_base: 100,
+            stability_metric: StabilityMetric::JaccardTopN,
+            stability_top_n: 3,
+        };
+
+        let rows = multi_seed_nmf(&x, &nmf_cfg, &ms_cfg);
+        assert_eq!(rows.len(), k_true, "should return k rows");
+
+        let n_stable = rows
+            .iter()
+            .filter(|r| r.stable_seed_fraction >= 0.6)
+            .count();
+        assert!(
+            n_stable >= k_true,
+            "expected all {} programs stable (>=0.6), got {}: {:?}",
+            k_true,
+            n_stable,
+            rows.iter()
+                .map(|r| r.stable_seed_fraction)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn multi_seed_nmf_is_deterministic_given_seed_base() {
+        let x = mat(&[
+            &[3.0, 2.0, 0.1, 0.1],
+            &[2.5, 3.0, 0.1, 0.1],
+            &[0.1, 0.1, 4.0, 3.0],
+            &[0.1, 0.1, 3.0, 4.5],
+            &[1.5, 1.0, 2.0, 2.0],
+            &[1.0, 1.5, 2.5, 2.0],
+        ]);
+        let nmf_cfg = NmfConfig {
+            k: 2,
+            beta_loss: BetaLoss::Frobenius,
+            init: Init::Random,
+            max_iter: 200,
+            tol: 1e-8,
+            seed: 0,
+        };
+        let ms_cfg = MultiSeedConfig {
+            n_seeds: 3,
+            seed_base: 42,
+            stability_metric: StabilityMetric::JaccardTopN,
+            stability_top_n: 2,
+        };
+
+        let r1 = multi_seed_nmf(&x, &nmf_cfg, &ms_cfg);
+        let r2 = multi_seed_nmf(&x, &nmf_cfg, &ms_cfg);
+
+        assert_eq!(r1.len(), r2.len());
+        for (a, b) in r1.iter().zip(r2.iter()) {
+            assert_eq!(a.program_id, b.program_id);
+            assert_eq!(
+                a.stable_seed_fraction.to_bits(),
+                b.stable_seed_fraction.to_bits()
+            );
+            assert_eq!(a.mean_loading.len(), b.mean_loading.len());
+            for (va, vb) in a.mean_loading.iter().zip(b.mean_loading.iter()) {
+                assert_eq!(
+                    va.to_bits(),
+                    vb.to_bits(),
+                    "mean_loading differs: {} vs {}",
+                    va,
+                    vb
+                );
             }
         }
     }

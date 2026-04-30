@@ -8,7 +8,10 @@ use atman_core::decompose_unmix::{
 use atman_core::ica::{
     fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult,
 };
-use atman_core::nmf::{nmf as nmf_core, BetaLoss, Init, NmfConfig};
+use atman_core::nmf::{
+    multi_seed_nmf, nmf as nmf_core, BetaLoss, Init, MultiSeedConfig, NmfConfig,
+    StabilityMetric as NmfStabilityMetric,
+};
 use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
 use atman_core::variance_decomposition::{decompose_archetype_variance, FixedFactor, VarianceRow};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
@@ -229,6 +232,34 @@ pub struct NmfArgs {
     #[arg(long, default_value_t = 42)]
     pub seed: u64,
 
+    /// Number of independent seeds to run. When 1 (default), single-seed NMF
+    /// is used and no stability TSV is emitted.  When > 1, multi-seed NMF runs
+    /// and programs are filtered by `--min-stable-seed-fraction`.
+    #[arg(long, default_value_t = 1)]
+    pub n_seeds: usize,
+
+    /// Base seed for multi-seed runs; seed i = seed_base + i.
+    #[arg(long, default_value_t = 42)]
+    pub seed_base: u64,
+
+    /// Minimum fraction of seeds in which a program must appear to survive
+    /// filtering in multi-seed mode.
+    #[arg(long, default_value_t = 0.9)]
+    pub min_stable_seed_fraction: f64,
+
+    /// Stability metric: `jaccard-top20` (Jaccard overlap of top-N loadings).
+    #[arg(long, default_value = "jaccard-top20")]
+    pub stability_metric: String,
+
+    /// Top-N loadings used by the stability metric.
+    #[arg(long, default_value_t = 20)]
+    pub stability_top_n: usize,
+
+    /// Optional path for the stability TSV (`program\tstable_seed_fraction\tn_seeds_present`).
+    /// Only written when `--n-seeds > 1`.
+    #[arg(long)]
+    pub output_stability: Option<PathBuf>,
+
     /// Loadings output TSV path (`program\tassay_id\tgene_symbol\tloading`).
     #[arg(long)]
     pub output_loadings: PathBuf,
@@ -378,55 +409,227 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
         ),
     }
 
+    // ── validate multi-seed args ────────────────────────────────────────────
+    if args.n_seeds == 0 {
+        bail!("--n-seeds must be at least 1");
+    }
+    let nmf_stability_metric = match args.stability_metric.as_str() {
+        "jaccard-top20" | "jaccard-topn" | "jaccard" => NmfStabilityMetric::JaccardTopN,
+        other => bail!(
+            "--stability-metric {:?}: expected `jaccard-top20`",
+            other
+        ),
+    };
+
     eprintln!(
-        "decompose nmf: n_samples={} n_assays={} k={} init={} max_iter={} tol={}",
-        n_samples, n_assays, args.k, args.init, args.max_iter, args.tol,
+        "decompose nmf: n_samples={} n_assays={} k={} init={} max_iter={} tol={} n_seeds={}",
+        n_samples, n_assays, args.k, args.init, args.max_iter, args.tol, args.n_seeds,
     );
 
-    // ── run NMF ─────────────────────────────────────────────────────────────
-    let cfg = NmfConfig {
+    // ── build NmfConfig (seed will be overridden per-run in multi-seed mode) ─
+    let nmf_cfg = NmfConfig {
         k: args.k,
         beta_loss,
         init,
         max_iter: args.max_iter,
         tol: args.tol,
-        seed: args.seed,
+        seed: if args.n_seeds == 1 { args.seed } else { args.seed_base },
     };
-    let result = nmf_core(&data, &cfg);
-    eprintln!(
-        "decompose nmf: n_iter={} converged={} final_error={:.6e}",
-        result.n_iter, result.converged, result.final_error
-    );
 
-    // ── write loadings TSV: program\tassay_id\tgene_symbol\tloading ─────────
-    // H is k × p; H[a][j] = loading of program a on assay j.
+    // ── run NMF (single-seed or multi-seed) ─────────────────────────────────
+    //
+    // Outputs produced differ by mode:
+    //   n_seeds == 1: run nmf_core once; H is k×p loadings, W is n×k activations.
+    //   n_seeds >  1: run multi_seed_nmf; filter by min_stable_seed_fraction;
+    //                 re-fit activations from surviving mean loadings via a
+    //                 fixed-H NMF (1 MU update step, H held fixed).
+
+    // final_h: Vec of (program_label, Vec<f64> of length p)
+    // final_w: Vec of (sample_idx, Vec<f64> of length k_surviving)  [row order = sample_order]
+    // stability_rows: Some only in multi-seed mode.
+
+    struct SingleResult {
+        h: Vec<Vec<f64>>,      // k × p
+        w: Vec<Vec<f64>>,      // n × k
+        n_iter: usize,
+        converged: bool,
+        final_error: f64,
+    }
+
+    enum RunOutput {
+        Single(SingleResult),
+        MultiSeed {
+            /// All programs (pre-filter) with stability info.
+            all_rows: Vec<atman_core::nmf::StableProgramRow>,
+            /// Indices into all_rows that passed the stability filter.
+            surviving: Vec<usize>,
+            /// Re-fitted activations: n × k_surviving.
+            w_refit: Vec<Vec<f64>>,
+        },
+    }
+
+    let run_output = if args.n_seeds == 1 {
+        let result = nmf_core(&data, &nmf_cfg);
+        eprintln!(
+            "decompose nmf: n_iter={} converged={} final_error={:.6e}",
+            result.n_iter, result.converged, result.final_error
+        );
+        RunOutput::Single(SingleResult {
+            h: result.h,
+            w: result.w,
+            n_iter: result.n_iter,
+            converged: result.converged,
+            final_error: result.final_error,
+        })
+    } else {
+        let ms_cfg = MultiSeedConfig {
+            n_seeds: args.n_seeds,
+            seed_base: args.seed_base,
+            stability_metric: nmf_stability_metric,
+            stability_top_n: args.stability_top_n,
+        };
+        eprintln!(
+            "decompose nmf: running {} seeds (seed_base={}) …",
+            args.n_seeds, args.seed_base
+        );
+        let all_rows = multi_seed_nmf(&data, &nmf_cfg, &ms_cfg);
+        let surviving: Vec<usize> = all_rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.stable_seed_fraction >= args.min_stable_seed_fraction)
+            .map(|(i, _)| i)
+            .collect();
+        eprintln!(
+            "decompose nmf: {} / {} programs pass stability >= {}",
+            surviving.len(),
+            all_rows.len(),
+            args.min_stable_seed_fraction
+        );
+
+        // Re-fit W for surviving programs with H fixed (NNLS-style via MU, H locked).
+        // Strategy: run NMF on data with k = k_surviving, initialised so H = mean_loadings
+        // (surviving) and W = uniform.  We freeze H by using only the W-update MU rule.
+        // For simplicity and reproducibility we use atman_core::nmf's existing infrastructure:
+        // we run a Frobenius MU update with H held to mean_loadings by re-initialising H
+        // after each W update. 50 iterations is enough for activations to converge.
+        let k_surv = surviving.len();
+        let w_refit = if k_surv == 0 {
+            vec![]
+        } else {
+            // Build fixed H from mean loadings of surviving programs.
+            let h_fixed: Vec<Vec<f64>> = surviving
+                .iter()
+                .map(|&i| all_rows[i].mean_loading.clone())
+                .collect();
+
+            // Initialise W randomly (n × k_surv), then iterate W-only MU updates.
+            let mean_x: f64 = {
+                let total: f64 = data.iter().flat_map(|r| r.iter()).sum();
+                let cnt = (n_samples * n_assays) as f64;
+                if cnt > 0.0 { total / cnt } else { 1.0 }
+            };
+            let scale = (mean_x / k_surv.max(1) as f64).sqrt().max(1e-9);
+            let mut rng = atman_core::ica::Xoshiro256pp::new(args.seed_base.wrapping_add(9999));
+            let mut w: Vec<Vec<f64>> = (0..n_samples)
+                .map(|_| (0..k_surv).map(|_| rng.next_normal().abs() * scale).collect())
+                .collect();
+
+            const EPS: f64 = 1e-9;
+            for _iter in 0..100 {
+                // W update: W[i,a] <- W[i,a] * (X H^T)[i,a] / (W H H^T)[i,a]
+                // XHt: n × k_surv
+                let mut xht = vec![vec![0.0_f64; k_surv]; n_samples];
+                for i in 0..n_samples {
+                    for a in 0..k_surv {
+                        for j in 0..n_assays {
+                            xht[i][a] += data[i][j] * h_fixed[a][j];
+                        }
+                    }
+                }
+                // HHt: k_surv × k_surv
+                let mut hht = vec![vec![0.0_f64; k_surv]; k_surv];
+                for a in 0..k_surv {
+                    for b in 0..k_surv {
+                        for j in 0..n_assays {
+                            hht[a][b] += h_fixed[a][j] * h_fixed[b][j];
+                        }
+                    }
+                }
+                // WHHt: n × k_surv
+                let mut whht = vec![vec![0.0_f64; k_surv]; n_samples];
+                for i in 0..n_samples {
+                    for a in 0..k_surv {
+                        for b in 0..k_surv {
+                            whht[i][a] += w[i][b] * hht[b][a];
+                        }
+                    }
+                }
+                for i in 0..n_samples {
+                    for a in 0..k_surv {
+                        let num = xht[i][a];
+                        let den = whht[i][a] + EPS;
+                        w[i][a] *= num / den;
+                        if w[i][a] < 0.0 { w[i][a] = 0.0; }
+                    }
+                }
+            }
+            w
+        };
+
+        RunOutput::MultiSeed { all_rows, surviving, w_refit }
+    };
+
+    // ── write loadings TSV ───────────────────────────────────────────────────
     if let Some(parent) = args.output_loadings.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating output dir {:?}", parent))?;
     }
     {
         let mut out = String::from("program\tassay_id\tgene_symbol\tloading\n");
-        for (a, h_row) in result.h.iter().enumerate() {
-            let prog = program_name(a);
-            for (j, &load) in h_row.iter().enumerate() {
-                let assay_id = &assay_order[j];
-                let gene_symbol = assay_meta.get(assay_id).map(|s| s.as_str()).unwrap_or("");
-                out.push_str(&prog);
-                out.push('\t');
-                out.push_str(assay_id);
-                out.push('\t');
-                out.push_str(gene_symbol);
-                out.push('\t');
-                out.push_str(&format_float(load));
-                out.push('\n');
+        match &run_output {
+            RunOutput::Single(r) => {
+                for (a, h_row) in r.h.iter().enumerate() {
+                    let prog = program_name(a);
+                    for (j, &load) in h_row.iter().enumerate() {
+                        let assay_id = &assay_order[j];
+                        let gene_symbol =
+                            assay_meta.get(assay_id).map(|s| s.as_str()).unwrap_or("");
+                        out.push_str(&prog);
+                        out.push('\t');
+                        out.push_str(assay_id);
+                        out.push('\t');
+                        out.push_str(gene_symbol);
+                        out.push('\t');
+                        out.push_str(&format_float(load));
+                        out.push('\n');
+                    }
+                }
+            }
+            RunOutput::MultiSeed { all_rows, surviving, .. } => {
+                for (out_idx, &surv_idx) in surviving.iter().enumerate() {
+                    let row = &all_rows[surv_idx];
+                    let prog = program_name(out_idx);
+                    for (j, &load) in row.mean_loading.iter().enumerate() {
+                        let assay_id = &assay_order[j];
+                        let gene_symbol =
+                            assay_meta.get(assay_id).map(|s| s.as_str()).unwrap_or("");
+                        out.push_str(&prog);
+                        out.push('\t');
+                        out.push_str(assay_id);
+                        out.push('\t');
+                        out.push_str(gene_symbol);
+                        out.push('\t');
+                        out.push_str(&format_float(load));
+                        out.push('\n');
+                    }
+                }
             }
         }
         atomic_write(&args.output_loadings, out.as_bytes())?;
     }
     eprintln!("decompose nmf: loadings={}", args.output_loadings.display());
 
-    // ── write activations TSV: sample_id\tprogram\tactivation ───────────────
-    // W is n × k; W[i][a] = activation of sample i on program a.
+    // ── write activations TSV ────────────────────────────────────────────────
     let mut output_files: Vec<PathBuf> = vec![args.output_loadings.clone()];
     if let Some(ref act_path) = args.output_activations {
         if let Some(parent) = act_path.parent() {
@@ -434,16 +637,34 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
                 .with_context(|| format!("creating output dir {:?}", parent))?;
         }
         let mut out = String::from("sample_id\tprogram\tactivation\n");
-        for (i, w_row) in result.w.iter().enumerate() {
-            let sample_id = &sample_order[i];
-            for (a, &activation) in w_row.iter().enumerate() {
-                let prog = program_name(a);
-                out.push_str(sample_id);
-                out.push('\t');
-                out.push_str(&prog);
-                out.push('\t');
-                out.push_str(&format_float(activation));
-                out.push('\n');
+        match &run_output {
+            RunOutput::Single(r) => {
+                for (i, w_row) in r.w.iter().enumerate() {
+                    let sample_id = &sample_order[i];
+                    for (a, &activation) in w_row.iter().enumerate() {
+                        let prog = program_name(a);
+                        out.push_str(sample_id);
+                        out.push('\t');
+                        out.push_str(&prog);
+                        out.push('\t');
+                        out.push_str(&format_float(activation));
+                        out.push('\n');
+                    }
+                }
+            }
+            RunOutput::MultiSeed { w_refit, .. } => {
+                for (i, w_row) in w_refit.iter().enumerate() {
+                    let sample_id = &sample_order[i];
+                    for (a, &activation) in w_row.iter().enumerate() {
+                        let prog = program_name(a);
+                        out.push_str(sample_id);
+                        out.push('\t');
+                        out.push_str(&prog);
+                        out.push('\t');
+                        out.push_str(&format_float(activation));
+                        out.push('\n');
+                    }
+                }
             }
         }
         atomic_write(act_path, out.as_bytes())?;
@@ -451,11 +672,51 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
         output_files.push(act_path.clone());
     }
 
+    // ── write stability TSV (multi-seed only) ────────────────────────────────
+    if let RunOutput::MultiSeed { ref all_rows, ref surviving, .. } = run_output {
+        if let Some(ref stab_path) = args.output_stability {
+            if let Some(parent) = stab_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("creating stability dir {:?}", parent))?;
+            }
+            let mut out =
+                String::from("program\tstable_seed_fraction\tn_seeds_present\n");
+            for row in all_rows {
+                let n_seeds_present =
+                    (row.stable_seed_fraction * args.n_seeds as f64).round() as usize;
+                out.push_str(&row.program_id);
+                out.push('\t');
+                out.push_str(&format_float(row.stable_seed_fraction));
+                out.push('\t');
+                out.push_str(&n_seeds_present.to_string());
+                out.push('\n');
+            }
+            let _ = surviving; // already written in loadings
+            atomic_write(stab_path, out.as_bytes())?;
+            eprintln!("decompose nmf: stability={}", stab_path.display());
+            output_files.push(stab_path.clone());
+        }
+    }
+
     // ── sidecar ─────────────────────────────────────────────────────────────
     let finished_at = SystemTime::now();
     let canonical_inputs: &[&str] = &["measurements.tsv", "samples.tsv", "proteins.tsv"];
     let inputs_sha256 = hash_canonical_inputs(&args.input_dir, canonical_inputs)?;
     let sidecar = sidecar_path_for(&args.output_loadings);
+
+    let (n_iter_val, converged_val, final_error_val) = match &run_output {
+        RunOutput::Single(r) => (
+            serde_json::Value::from(r.n_iter),
+            serde_json::Value::from(r.converged),
+            serde_json::Value::from(r.final_error),
+        ),
+        RunOutput::MultiSeed { .. } => (
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+        ),
+    };
+
     write_run_sidecar(
         &sidecar,
         "decompose nmf",
@@ -468,13 +729,19 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
             "max-iter": args.max_iter,
             "tol": args.tol,
             "seed": args.seed,
+            "n-seeds": args.n_seeds,
+            "seed-base": args.seed_base,
+            "min-stable-seed-fraction": args.min_stable_seed_fraction,
+            "stability-metric": args.stability_metric,
+            "stability-top-n": args.stability_top_n,
             "transform": args.transform,
             "output-loadings": args.output_loadings.display().to_string(),
             "output-activations": args.output_activations.as_ref().map(|p| p.display().to_string()),
+            "output-stability": args.output_stability.as_ref().map(|p| p.display().to_string()),
             "decomposition_method": "nmf",
-            "n_iter": result.n_iter,
-            "converged": result.converged,
-            "final_error": result.final_error,
+            "n_iter": n_iter_val,
+            "converged": converged_val,
+            "final_error": final_error_val,
         }),
         &inputs_sha256,
         &output_files,

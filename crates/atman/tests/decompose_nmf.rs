@@ -450,3 +450,254 @@ fn nmf_kl_matches_sklearn_reference() {
         "tests/fixtures/nmf_kl_reference.tsv",
     );
 }
+
+/// Reads a stability TSV (3 columns: program, stable_seed_fraction, n_seeds_present).
+fn read_stability_tsv(
+    path: &std::path::Path,
+) -> Vec<(String, f64, usize)> {
+    let text = std::fs::read_to_string(path).expect("read stability TSV");
+    let lines: Vec<&str> = text.lines().collect();
+
+    // Skip #-prefixed version comment if present.
+    let data_start = if lines.get(0).map(|l| l.starts_with('#')).unwrap_or(false) {
+        1
+    } else {
+        0
+    };
+
+    assert!(
+        lines
+            .get(data_start)
+            .map(|l| l.starts_with("program\t"))
+            .unwrap_or(false),
+        "invalid stability TSV header: {:?}",
+        lines.get(data_start)
+    );
+
+    let mut rows = Vec::new();
+    for line in &lines[(data_start + 1)..] {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\t').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "expected 3 columns in stability row: {}",
+            line
+        );
+        let program = parts[0].to_string();
+        let frac: f64 = parts[1].parse().expect("parse stable_seed_fraction");
+        let n: usize = parts[2].parse().expect("parse n_seeds_present");
+        rows.push((program, frac, n));
+    }
+    rows
+}
+
+/// Build a canonical Atman input directory from the standard NMF fixture and
+/// return the path to the directory + a vec of (sample_id, gene_symbol, abundance).
+fn build_canonical_dir(
+    tmp_path: &std::path::Path,
+) -> (std::path::PathBuf, Vec<(String, String, f64)>) {
+    let input_fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/nmf_frobenius_input.tsv");
+    let input_text =
+        std::fs::read_to_string(&input_fixture_path).expect("read nmf_frobenius_input.tsv");
+    let input_lines: Vec<&str> = input_text.lines().collect();
+    let data_start = if input_lines[0].starts_with('#') { 1 } else { 0 };
+
+    let mut samples: BTreeSet<String> = BTreeSet::new();
+    let mut genes: BTreeSet<String> = BTreeSet::new();
+    let mut measurements: Vec<(String, String, f64)> = Vec::new();
+
+    for line in &input_lines[(data_start + 1)..] {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        let sample_id = parts[0].to_string();
+        let gene_symbol = parts[1].to_string();
+        let abundance: f64 = parts[2].parse().expect("parse abundance");
+        samples.insert(sample_id.clone());
+        genes.insert(gene_symbol.clone());
+        measurements.push((sample_id, gene_symbol, abundance));
+    }
+
+    let canonical_dir = tmp_path.join("canonical");
+    std::fs::create_dir(&canonical_dir).unwrap();
+
+    let genes_vec: Vec<String> = genes.iter().cloned().collect();
+
+    let headers = "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
+                   abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
+                   detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order";
+    let mut measurements_tsv = String::from(headers);
+    measurements_tsv.push('\n');
+    let mut ingest_order = 0u64;
+    for (sample_id, gene_symbol, abundance) in &measurements {
+        let gene_idx = genes_vec.iter().position(|g| g == gene_symbol).unwrap();
+        let assay_id = format!("A{:03}", gene_idx);
+        ingest_order += 1;
+        let src = format!("{:.6}", abundance);
+        measurements_tsv.push_str(&format!(
+            "proteomics\t{}\t{}\t{}\tP1\t{}\t{:.6}\t{:.6}\tlog2_scale\tPASS\tPASS\t\t0\t0\t\t\t{}\n",
+            sample_id, assay_id, gene_symbol, src, abundance, abundance, ingest_order
+        ));
+    }
+    std::fs::write(canonical_dir.join("measurements.tsv"), &measurements_tsv).unwrap();
+
+    let mut samples_tsv =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
+    for (i, sample_id) in samples.iter().enumerate() {
+        samples_tsv.push_str(&format!(
+            "{}\t{}\tcase\t0\tcsf\t{}\n",
+            sample_id, sample_id, i + 1
+        ));
+    }
+    std::fs::write(canonical_dir.join("samples.tsv"), &samples_tsv).unwrap();
+
+    let mut proteins_tsv =
+        String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    for (gene_idx, gene) in genes_vec.iter().enumerate() {
+        let assay_id = format!("A{:03}", gene_idx);
+        proteins_tsv.push_str(&format!("proteomics\t{}\t\t{}\tP1\t\n", assay_id, gene));
+    }
+    std::fs::write(canonical_dir.join("proteins.tsv"), &proteins_tsv).unwrap();
+
+    (canonical_dir, measurements)
+}
+
+#[test]
+fn nmf_multi_seed_emits_stability_and_filters_unstable_programs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tmp_path = tmp.path();
+
+    let (canonical_dir, _measurements) = build_canonical_dir(tmp_path);
+
+    let loadings_path = tmp_path.join("ms_loadings.tsv");
+    let activations_path = tmp_path.join("ms_activations.tsv");
+    let stability_path = tmp_path.join("ms_stability.tsv");
+
+    let output = run_atman(&[
+        "decompose",
+        "nmf",
+        "--input-dir",
+        canonical_dir.to_str().unwrap(),
+        "--k",
+        "4",
+        "--solver",
+        "mu",
+        "--beta-loss",
+        "frobenius",
+        "--init",
+        "random",
+        "--max-iter",
+        "400",
+        "--tol",
+        "1e-6",
+        "--n-seeds",
+        "5",
+        "--seed-base",
+        "100",
+        "--min-stable-seed-fraction",
+        "0.9",
+        "--stability-metric",
+        "jaccard-top20",
+        "--stability-top-n",
+        "20",
+        "--output-loadings",
+        loadings_path.to_str().unwrap(),
+        "--output-activations",
+        activations_path.to_str().unwrap(),
+        "--output-stability",
+        stability_path.to_str().unwrap(),
+    ]);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        panic!(
+            "atman decompose nmf --n-seeds 5 failed:\nstderr:\n{}",
+            stderr
+        );
+    }
+
+    // ── 1. stability TSV must exist with the right columns ───────────────────
+    assert!(
+        stability_path.exists(),
+        "stability TSV was not written to {:?}",
+        stability_path
+    );
+    let stability_rows = read_stability_tsv(&stability_path);
+    // The stability TSV reports ALL k=4 programs (pre-filter).
+    assert_eq!(
+        stability_rows.len(),
+        4,
+        "stability TSV should have 4 rows (one per original program)"
+    );
+    // Each n_seeds_present must be between 1 and 5.
+    for (prog, frac, n_present) in &stability_rows {
+        assert!(
+            *n_present >= 1 && *n_present <= 5,
+            "program {}: n_seeds_present={} out of range [1,5]",
+            prog,
+            n_present
+        );
+        assert!(
+            *frac >= 0.0 && *frac <= 1.0,
+            "program {}: stable_seed_fraction={} out of [0,1]",
+            prog,
+            frac
+        );
+    }
+
+    // ── 2. loadings TSV: at most k=4 programs (filter never expands) ─────────
+    let surviving_loadings = read_loadings_tsv(&loadings_path);
+    let n_surviving = surviving_loadings.len();
+    assert!(
+        n_surviving <= 4,
+        "loadings TSV has {} programs, expected <= 4 (k)",
+        n_surviving
+    );
+
+    // ── 3. every program in loadings has stable_seed_fraction >= 0.9 ─────────
+    // (The loadings TSV uses re-indexed program labels; match by position.)
+    for (stab_prog, stab_frac, _) in stability_rows
+        .iter()
+        .filter(|(_, frac, _)| *frac >= 0.9)
+    {
+        // Verify the fraction is non-NaN and non-negative.
+        assert!(
+            stab_frac.is_finite() && *stab_frac >= 0.0,
+            "stability fraction for {} is invalid: {}",
+            stab_prog,
+            stab_frac
+        );
+    }
+    // Surviving programs in loadings must all have been stable.
+    let n_stable_in_stability = stability_rows
+        .iter()
+        .filter(|(_, frac, _)| *frac >= 0.9)
+        .count();
+    assert_eq!(
+        n_surviving, n_stable_in_stability,
+        "loadings TSV has {} programs but {} pass stability >= 0.9",
+        n_surviving, n_stable_in_stability
+    );
+
+    // ── 4. activations TSV: samples × surviving programs ────────────────────
+    let activations = read_activations_tsv(&activations_path);
+    // Every surviving program should appear in activations for every sample.
+    for (sample_id, prog_map) in &activations {
+        assert_eq!(
+            prog_map.len(),
+            n_surviving,
+            "sample {} has {} program activations, expected {}",
+            sample_id,
+            prog_map.len(),
+            n_surviving
+        );
+    }
+}
