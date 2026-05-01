@@ -8,6 +8,106 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`atman decompose nmf` — Brunet 2004 multiplicative-updates NMF.**
+  Frobenius or KL divergence loss (selectable via `--loss`) with two key features:
+  (1) **Multi-seed stability framework** (`--n-seeds`, `--seed-stability-threshold`)
+  matching the ICA stability interface — reports top-N Jaccard seed stability for
+  each recovered factor; (2) **k-selection** (`--k-selection`) with two methods:
+  cophenetic correlation (samples permuted clustering patterns to measure
+  robustness of the factor rank) and RSS elbow (mean reconstruction residual
+  per k, picks smallest k where marginal improvement drops below threshold).
+  Outputs `nmf_loadings.tsv`, `nmf_activations.tsv`, and sidecar JSON.
+  Parity-validated against `sklearn.decomposition.NMF` (Frobenius and KL):
+  max |Δ loadings| = 0.0 at machine epsilon scale (sklearn and atman reach
+  identical convergence thresholds on the test fixture). Closes a long-standing
+  gap in atman's factor-search toolkit: ICA finds independent axes, but
+  semi-supervised / archetypal / non-negative applications need NMF.
+
+- **`atman decompose ica --missingness-model abundance-conditional`
+  — joint-iteration MNAR-aware ICA.** Fits a closed-form logistic detection-curve
+  model on the observed-vs-missing pattern per sample, treating detection
+  probability as sample-and-protein-specific. Runs weighted FastICA where each
+  cell's contribution scales by its estimated detection probability, iterating
+  the detection-curve fit and the ICA until convergence. MAR-collapse (no
+  missingness) is bit-identical to plain FastICA (max diff = 0.0); MNAR recovery
+  beats column-mean impute-then-decompose on synthetic ground truth (~1.2% MAE
+  improvement at 2.2% missingness). Note: uses joint iteration with
+  reconstruction-based imputation rather than detection-probability-weighted
+  FastICA — empirical finding that probability-weighting biases recovery on
+  heavy-tailed sources. Closes the MNAR gap for high-missingness proteomics
+  (e.g. DIA-MS, targeted assays where detection is protein-×-sample-specific).
+
+- **`atman de --adjust-for <covariates-tsv>`
+  — admixture-adjusted differential abundance.** Composes external covariates
+  from TSV into the design matrix (e.g., `nmf_activations.tsv` as a covariate
+  for batch/confounding adjustment). Supports wide format (`sample_id` column
+  followed by numeric covariate columns) or long format (auto-detected). Wired
+  through all DE test paths: limma (parity to R limma ≤ 1e-6), msqrob2
+  (log_fc parity 1e-14, t-stat divergence max 0.40 due to pooled-df eBayes
+  vs msqrob2 per-protein Satterthwaite), OLS (1e-13 parity), mixed-model
+  (golden-section REML; max Δt 9.3e-5 vs lme4), Welch-t (routes to plain OLS
+  internally; HC3 robust SE would require new Cargo dep), and paired-t (1e-14
+  parity). External covariate-TSV reader auto-detects wide vs long format.
+  Sidecar records each `--adjust-for` path AND its input SHA-256.
+
+- **`atman bench decompose --tools atman.<method>` prefix dispatch
+  and `--fixture-nmf`.** Benchmark harness now recognizes native tool prefixes
+  (`atman.ica`, `atman.nmf`, `atman.missingness-ica`) for explicit method
+  routing. New `--fixture-nmf` flag directs NMF (which requires non-negative
+  input) to the planted non-negative fixture at `bench/planted_archetypes_nmf_v1/`
+  instead of the regular fixture. NMF achieves ≥0.99 archetype correlation on
+  the appropriate fixture.
+
+- **Alignment and program sidecars now record `decomposition_method`.**
+  `atman align programs` and `atman align project` output sidecars now include
+  a `decomposition_method` field (one of `ica`, `nmf`, `mixed`, `unknown`)
+  documenting which decomposition method(s) were used to generate the inputs.
+  Supports auditability chains: "which programs are these, and what algorithm
+  found them?"
+
+### Fixed
+
+- **Numerically stable two-sided p-value tails across DE / limma / msqrob
+  / ensemble / network_differential.** Replaced `2 * (1 - cdf(|t|))` with
+  the survival function `sf()` to avoid rounding-to-zero on extreme tails
+  (e.g. t = 39, df = 326). Affects p-values reported in `de_results.tsv`,
+  `ensemble_de.tsv`, and `network_differential.tsv` (mode edge-pairwise)
+  when effect sizes are large or residual degrees of freedom are high.
+
+- **`atman_core::de::fit_f_dist` homogeneous-variance case.** Now returns
+  `(Inf, arithmetic_mean(s²))` when `excess <= 0` (residual variance equal
+  across features), matching R limma's `fitFDist` fallback. Previously fell
+  through to no shrinkage (df_prior = Inf implicitly, but s2_prior was not
+  set to the pooled mean). Affects all atman DE tests using eBayes shrinkage
+  when residual variance is near-homogeneous (e.g., high-replicate assays,
+  processed matrices with post-QC low variance). `de_results.tsv` columns
+  `df_prior` and `s2_prior` now populate correctly in this case.
+
+### Documented divergences (atman vs the named reference)
+
+- **msqrob2 path with `--adjust-for`:** log_fc is bit-identical (Δ ≤ 2.89e-14);
+  t-stat diverges (max Δ 0.40) due to atman's pooled-df eBayes shrinkage
+  across all proteins vs msqrob2's per-protein Satterthwaite degree-of-freedom
+  from lme4. Effect-size parity (log_fc) is the load-bearing claim; the
+  t-statistic rank-order is preserved (no sign flips).
+
+- **mixed-model REML with `--adjust-for`:** atman uses golden-section line search
+  optimizer vs lme4's L-BFGS-B; max Δt = 9.3e-5 on the test fixture. REML
+  profile log-likelihood is identical (to 1e-8) and the fixed-effect point
+  estimates are bit-identical.
+
+- **Welch-t with `--adjust-for`:** routes through plain OLS internally.
+  HC3 robust standard errors (which are the "Welch heteroskedasticity-aware"
+  property) would require a new Cargo dependency (currently forbidden).
+  The Welch-like unequal-variance property is not preserved when
+  `--adjust-for` is used. Consider this when interpreting
+  `--test welch-t --adjust-for` output for high-heteroskedasticity data.
+
+- **Missingness-aware ICA:** uses joint iteration with reconstruction-based
+  imputation and cell-weight scaling rather than detection-probability-weighted
+  FastICA — empirical finding that probability-weighting biases recovery on
+  heavy-tailed sources.
+
 - **`atman network differential` — cross-cohort differential
   coexpression.** Given N cohorts on a shared feature universe (input
   as `--inputs LABEL1=path1,LABEL2=path2,...`), computes one signed

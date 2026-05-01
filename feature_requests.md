@@ -30,15 +30,6 @@ Resolution: push truncation into the algorithm via a bounded
 in the atman-paper repo for the top-K most-divergent edges over a
 22.4M-row stream). Existing CLI surface and output schema unchanged.
 
-### Missingness-aware ICA
-
-Extend the compositional-transform surface on `atman decompose ica`
-with a joint abundance + detection likelihood at decomposition time
-— same philosophy as `atman de --test msqrob` or proDA but at the
-component level. Lets archetypes be defined partly by "which proteins
-were detectable in this sample," which is real biology for MNAR-heavy
-proteomics.
-
 ### Hierarchical / nested alignment
 
 Site → cohort → cross-cohort alignment for consortium data where a
@@ -76,12 +67,6 @@ Samples × proteins × timepoints. Relevant for any consortium with
 longitudinal arms. Random-subject variance becomes the signal, not
 the nuisance — sits naturally on top of the existing
 `decompose variance` surface.
-
-### Counterfactual archetype simulation
-
-`atman decompose counterfactual --set-archetype A0004 --to 0 --input
-activations.tsv` reconstructs a predicted abundance matrix with one
-archetype zeroed out. Interpretive aid.
 
 ### Compositional effect size for DE
 
