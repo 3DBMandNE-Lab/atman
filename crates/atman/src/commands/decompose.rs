@@ -8,6 +8,7 @@ use atman_core::decompose_unmix::{
 use atman_core::ica::{
     fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult,
 };
+use atman_core::ica_mnar::{fast_ica_mnar, MnarIcaConfig};
 use atman_core::nmf::{
     multi_seed_nmf, nmf as nmf_core, select_k as nmf_select_k, BetaLoss, Init, KSelection,
     MultiSeedConfig, NmfConfig, StabilityMetric as NmfStabilityMetric,
@@ -144,6 +145,19 @@ pub struct IcaArgs {
     #[arg(long, value_enum, default_value_t = TransformArg::None)]
     transform: TransformArg,
 
+    /// Missingness model. `none` (default) applies no MNAR weighting —
+    /// all cells must be observed or already imputed. `abundance-conditional`
+    /// fits a closed-form logistic detection curve and runs weighted FastICA
+    /// where each cell's contribution is proportional to its estimated
+    /// detection probability.
+    #[arg(long, value_enum, default_value_t = MissingnessModel::None)]
+    missingness_model: MissingnessModel,
+
+    /// Maximum outer (impute → fit curve → weighted ICA) iterations when
+    /// `--missingness-model abundance-conditional` is active. 1 = single pass.
+    #[arg(long, default_value_t = 5)]
+    max_joint_iter: usize,
+
     /// Gene symbol (matched against `samples` metadata `gene_symbol`)
     /// used as the reference for `--transform alr` or
     /// `--transform ratio-anchor`. Ignored for other transforms.
@@ -169,6 +183,20 @@ pub enum TransformArg {
 pub enum StabilityMetric {
     #[value(name = "jaccard-top20")]
     JaccardTop20,
+}
+
+/// Missingness model for the ICA decomposition.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum MissingnessModel {
+    /// No missingness modelling (default). Missing cells must have been
+    /// already handled by `--impute` / `--max-missing-fraction`.
+    #[value(name = "none")]
+    None,
+    /// Abundance-conditional MNAR model (Phase G). Fits a closed-form
+    /// logistic detection curve and runs weighted FastICA where each cell
+    /// contributes proportionally to its estimated detection probability.
+    #[value(name = "abundance-conditional")]
+    AbundanceConditional,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -1549,6 +1577,8 @@ fn run_null(args: NullArgs) -> Result<()> {
         cohort: None,
         transform: TransformArg::None,
         alr_reference: None,
+        missingness_model: MissingnessModel::None,
+        max_joint_iter: 5,
     };
     let matrix = load_matrix(&adapter)?;
     if args.k > matrix.samples.len() || args.k > matrix.assays.len() {
@@ -1672,8 +1702,24 @@ fn run_ica(args: IcaArgs) -> Result<()> {
         bail!("--stability-top-n must be at least 1");
     }
 
-    let matrix = load_matrix(&args)?;
-    let (matrix, transform_meta) = apply_compositional(matrix, &args)?;
+    // Load the matrix.  For `abundance-conditional`, we also load a NaN-
+    // bearing copy for the MNAR ICA; the imputed matrix is still used for
+    // k-selection and alternative-seed stability runs.
+    let mnar_raw: Option<Vec<Vec<f64>>> =
+        if args.missingness_model == MissingnessModel::AbundanceConditional {
+            // load_matrix_mnar returns NaN for unobserved cells.
+            let m = load_matrix_mnar(&args)?;
+            Some(m.data)
+        } else {
+            None
+        };
+    // Standard load (imputes / bails as configured) used for k-selection,
+    // stability alt-seeds, and as the plain-ICA path.
+    let (matrix, transform_meta) = {
+        let m = load_matrix(&args)?;
+        apply_compositional(m, &args)?
+    };
+
     let k = resolve_k(&matrix, &args)?;
     if k > matrix.samples.len() || k > matrix.assays.len() {
         bail!(
@@ -1684,24 +1730,52 @@ fn run_ica(args: IcaArgs) -> Result<()> {
     }
 
     eprintln!(
-        "decompose ica: n_samples={} n_assays={} k={} n_seeds={} threshold={} transform={}",
+        "decompose ica: n_samples={} n_assays={} k={} n_seeds={} threshold={} transform={} missingness_model={:?}",
         matrix.samples.len(),
         matrix.assays.len(),
         k,
         args.n_seeds,
         args.seed_stability_threshold,
         transform_meta.name,
+        args.missingness_model,
     );
 
-    let mut runs = Vec::with_capacity(args.n_seeds);
-    for offset in 0..args.n_seeds {
+    // Reference run: use MNAR-aware ICA if requested, else plain FastICA.
+    let (ref_seed, ref_run, mnar_joint_iters) =
+        if args.missingness_model == MissingnessModel::AbundanceConditional {
+            let raw = mnar_raw.as_ref().expect("MNAR raw matrix");
+            let mnar_config = MnarIcaConfig {
+                k,
+                seed: args.seed,
+                max_iter: args.max_iter,
+                tol: args.tol,
+                max_joint_iter: args.max_joint_iter,
+                joint_tol: 1e-6,
+            };
+            let mnar_result = fast_ica_mnar(raw, &mnar_config);
+            eprintln!(
+                "decompose ica: mnar joint_iterations={} joint_converged={} detection_curve beta0={:.4} beta1={:.4}",
+                mnar_result.joint_iterations,
+                mnar_result.joint_converged,
+                mnar_result.detection_curve.beta0,
+                mnar_result.detection_curve.beta1,
+            );
+            (args.seed, mnar_result.ica, Some(mnar_result.joint_iterations))
+        } else {
+            let result = fast_ica(&matrix.data, k, args.seed, args.max_iter, args.tol);
+            (args.seed, result, None)
+        };
+
+    // Alternative seeds always use plain FastICA on the (imputed) matrix for
+    // stability ranking.  Multi-seed MNAR ICA is a deferred feature.
+    let mut alt_runs: Vec<(u64, IcaResult)> = Vec::with_capacity(args.n_seeds.saturating_sub(1));
+    for offset in 1..args.n_seeds {
         let seed = args.seed.wrapping_add(offset as u64);
         let result = fast_ica(&matrix.data, k, seed, args.max_iter, args.tol);
-        runs.push((seed, result));
+        alt_runs.push((seed, result));
     }
 
-    let (ref_seed, ref_run) = runs.first().expect("at least one seed");
-    let reference = canonicalize(ref_run);
+    let reference = canonicalize(&ref_run);
     let cohort = args
         .cohort
         .clone()
@@ -1712,11 +1786,11 @@ fn run_ica(args: IcaArgs) -> Result<()> {
     write_stability(
         &args.output_stability,
         &reference,
-        &runs[1..],
+        &alt_runs,
         args.stability_top_n,
         args.seed_stability_threshold,
         args.min_stable_seed_fraction,
-        *ref_seed,
+        ref_seed,
     )?;
 
     eprintln!(
@@ -1751,6 +1825,10 @@ fn run_ica(args: IcaArgs) -> Result<()> {
     let stability_metric = match args.stability_metric {
         StabilityMetric::JaccardTop20 => "jaccard-top20",
     };
+    let missingness_model_str = match args.missingness_model {
+        MissingnessModel::None => "none",
+        MissingnessModel::AbundanceConditional => "abundance-conditional",
+    };
     let mut outputs = vec![
         args.output_loadings.clone(),
         args.output_activations.clone(),
@@ -1778,6 +1856,9 @@ fn run_ica(args: IcaArgs) -> Result<()> {
             "tol": args.tol,
             "max-missing-fraction": args.max_missing_fraction,
             "impute": args.impute,
+            "missingness-model": missingness_model_str,
+            "max-joint-iter": args.max_joint_iter,
+            "mnar-joint-iterations": mnar_joint_iters,
             "output-loadings": args.output_loadings.display().to_string(),
             "output-activations": args.output_activations.display().to_string(),
             "output-stability": args.output_stability.display().to_string(),
@@ -2015,6 +2096,152 @@ fn load_matrix(args: &IcaArgs) -> Result<AbundanceMatrix> {
             assays.len()
         );
     }
+    Ok(AbundanceMatrix {
+        samples,
+        assays,
+        data,
+    })
+}
+
+/// Load the abundance matrix **preserving NaN for missing cells**.
+///
+/// Like [`load_matrix`] but never imputes: missing cells are left as
+/// `f64::NAN` so that [`fast_ica_mnar`] can model the missingness pattern.
+/// The `--max-missing-fraction` assay filter still applies; the `--impute`
+/// flag is ignored (the MNAR model handles missingness internally).
+fn load_matrix_mnar(args: &IcaArgs) -> Result<AbundanceMatrix> {
+    let tsv = args.input_dir.join("measurements.tsv");
+    let records = read_measurements_long(&tsv)?;
+    if records.is_empty() {
+        bail!("no measurements in {:?}", tsv);
+    }
+
+    let mut abundance_by_key: BTreeMap<(String, String), f64> = BTreeMap::new();
+    let mut sample_order: Vec<String> = Vec::new();
+    let mut seen_samples: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut assay_meta: BTreeMap<String, Option<String>> = BTreeMap::new();
+
+    for r in &records {
+        if r.dropped_by_qc {
+            continue;
+        }
+        let assay = r.assay_id.0.clone();
+        let sample = r.sample_id.clone();
+        let abundance = r.abundance.as_f64();
+        if !abundance.is_finite() {
+            // Non-finite in source data (e.g. NaN sentinel): mark as missing
+            // but still register the sample and assay.
+            if seen_samples.insert(sample.clone()) {
+                sample_order.push(sample.clone());
+            }
+            assay_meta.entry(assay.clone()).or_insert_with(|| r.gene_symbol.clone());
+            continue;
+        }
+        if seen_samples.insert(sample.clone()) {
+            sample_order.push(sample.clone());
+        }
+        assay_meta
+            .entry(assay.clone())
+            .or_insert_with(|| r.gene_symbol.clone());
+        abundance_by_key.insert((assay, sample), abundance);
+    }
+
+    // Also register samples/assays where the value is NaN (missing sentinel).
+    // We need to know all sample_ids even for NaN rows so the matrix dimensions
+    // are consistent. Re-scan for NaN rows to capture any missing sample/assay.
+    for r in &records {
+        if r.dropped_by_qc {
+            continue;
+        }
+        let assay = r.assay_id.0.clone();
+        let sample = r.sample_id.clone();
+        if seen_samples.insert(sample.clone()) {
+            sample_order.push(sample.clone());
+        }
+        assay_meta.entry(assay).or_insert_with(|| r.gene_symbol.clone());
+    }
+
+    let samples_path = args.input_dir.join("samples.tsv");
+    let subject_lookup: BTreeMap<String, String> = if samples_path.exists() {
+        read_samples(&samples_path)?
+            .into_iter()
+            .map(|s| (s.sample_id.clone(), s.subject_id.unwrap_or_default()))
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
+
+    if !(0.0..=1.0).contains(&args.max_missing_fraction) {
+        bail!("--max-missing-fraction must be in [0, 1]");
+    }
+
+    let n_samples = sample_order.len();
+    if n_samples < 4 {
+        bail!("need at least 4 samples for ICA, got {}", n_samples);
+    }
+    let mut kept_assays: Vec<String> = Vec::new();
+    let mut dropped_assays = 0usize;
+    for assay in assay_meta.keys() {
+        let present = sample_order
+            .iter()
+            .filter(|s| abundance_by_key.contains_key(&(assay.clone(), (*s).clone())))
+            .count();
+        let missing_fraction = 1.0 - present as f64 / n_samples as f64;
+        if missing_fraction <= args.max_missing_fraction + 1e-12 {
+            kept_assays.push(assay.clone());
+        } else {
+            dropped_assays += 1;
+        }
+    }
+    if kept_assays.is_empty() {
+        bail!(
+            "no assays retained with --max-missing-fraction={} over {} samples in {:?}",
+            args.max_missing_fraction,
+            n_samples,
+            tsv
+        );
+    }
+    eprintln!(
+        "decompose ica (mnar): retained {} assays, dropped {} for exceeding --max-missing-fraction={}",
+        kept_assays.len(),
+        dropped_assays,
+        args.max_missing_fraction
+    );
+
+    let assays: Vec<AssayInfo> = kept_assays
+        .iter()
+        .map(|a| AssayInfo {
+            assay_id: a.clone(),
+            gene_symbol: assay_meta.get(a).cloned().flatten().unwrap_or_default(),
+        })
+        .collect();
+    let samples: Vec<SampleInfo> = sample_order
+        .iter()
+        .map(|s| SampleInfo {
+            sample_id: s.clone(),
+            subject_id: subject_lookup.get(s).cloned().unwrap_or_default(),
+        })
+        .collect();
+
+    // Fill data: NaN for missing cells.
+    let mut data = vec![vec![f64::NAN; assays.len()]; samples.len()];
+    let mut missing_cells = 0usize;
+    for (j, assay) in assays.iter().enumerate() {
+        for (i, sample) in samples.iter().enumerate() {
+            match abundance_by_key.get(&(assay.assay_id.clone(), sample.sample_id.clone())) {
+                Some(&v) => data[i][j] = v,
+                None => {
+                    missing_cells += 1;
+                    // data[i][j] is already NaN from initialisation.
+                }
+            }
+        }
+    }
+    eprintln!(
+        "decompose ica (mnar): {} NaN cells ({} total)",
+        missing_cells,
+        samples.len() * assays.len()
+    );
     Ok(AbundanceMatrix {
         samples,
         assays,

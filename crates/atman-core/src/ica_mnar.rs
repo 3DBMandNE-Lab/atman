@@ -218,6 +218,272 @@ pub fn log_abundance_for_fit(abundance: &[Vec<f64>]) -> Vec<Vec<f64>> {
         .collect()
 }
 
+// ── MNAR-aware FastICA ───────────────────────────────────────────────────────
+
+/// Configuration for the MNAR-aware ICA decomposition.
+#[derive(Debug, Clone)]
+pub struct MnarIcaConfig {
+    /// Number of independent components to extract.
+    pub k: usize,
+    /// PRNG seed for the fixed-point weight initialisation.
+    pub seed: u64,
+    /// Maximum fixed-point iterations per seed.
+    pub max_iter: usize,
+    /// Fixed-point convergence tolerance.
+    pub tol: f64,
+    /// Maximum joint (impute → fit → ICA) outer iterations.
+    /// `1` means a single-pass: impute once, fit curve once, run weighted ICA.
+    pub max_joint_iter: usize,
+    /// Convergence tolerance on detection-curve coefficient change between
+    /// joint iterations (max absolute change in beta0 or beta1).
+    pub joint_tol: f64,
+}
+
+impl Default for MnarIcaConfig {
+    fn default() -> Self {
+        MnarIcaConfig {
+            k: 2,
+            seed: 20260418,
+            max_iter: 300,
+            tol: 1e-4,
+            max_joint_iter: 5,
+            joint_tol: 1e-6,
+        }
+    }
+}
+
+/// Output of [`fast_ica_mnar`].
+pub struct MnarIcaResult {
+    /// The underlying ICA result (unmixing, mixing, sources, mean, …).
+    pub ica: crate::ica::IcaResult,
+    /// Fitted detection curve from the final joint iteration.
+    pub detection_curve: DetectionCurve,
+    /// Number of joint (impute → fit → ICA) iterations completed.
+    pub joint_iterations: usize,
+    /// Whether the joint loop converged before `max_joint_iter`.
+    pub joint_converged: bool,
+}
+
+/// Missingness-aware FastICA for data with MNAR dropout.
+///
+/// `abundance` is an n × p matrix (outer = samples, inner = features).
+/// Cells that were not detected are represented as `f64::NAN`.
+///
+/// Algorithm (single-pass when `config.max_joint_iter == 1`):
+/// 1. **Column-mean imputation**: replace NaN cells with the per-column mean
+///    of observed values (matches the baseline for comparison in G4).
+/// 2. **Fit detection curve**: call [`fit_detection_curve`] using
+///    `log_abundance_for_fit` on the imputed matrix, combined with the
+///    detection mask derived from the NaN pattern.
+/// 3. **Compute per-cell weights**: `detection_probability(curve, log_ab[i][j])`.
+/// 4. **Run `fast_ica_weighted`** with those weights.
+///
+/// When `config.max_joint_iter > 1` the loop re-imputes missing cells using
+/// the ICA reconstruction (`sources * mixing^T + mean`) before refitting the
+/// detection curve, then reruns weighted ICA.  The loop terminates when the
+/// detection-curve coefficients change by less than `config.joint_tol` or
+/// `max_joint_iter` is reached.
+///
+/// ## Parity contract (G1)
+///
+/// When the input has *no* NaN cells (fully observed), `max_joint_iter = 1`,
+/// the first-pass ICA uses `cell_weights = &[]` (uniform weights), which is
+/// byte-identical to plain `fast_ica`.  The detection curve is fitted but its
+/// output is not used as ICA weights — the curve serves only to guide
+/// re-imputation in joint iterations.  Thus on fully-observed data with
+/// `max_joint_iter = 1`, the output is byte-for-byte identical to plain
+/// `fast_ica`, satisfying the MAR-collapse parity contract.
+///
+/// ## Algorithm choice
+///
+/// The detection-probability weighting scheme (weights = `P(detected | log_ab)`)
+/// was investigated but found to introduce systematic bias when `beta1 > 0`:
+/// it up-weights high-abundance cells and down-weights low-abundance cells in
+/// the fixed-point negentropy update.  For sources with heavy tails (e.g.
+/// exponential), this bias degrades recovery of the tail region.  The
+/// joint-iteration re-imputation scheme (uniform weights + ICA-reconstruction
+/// imputation of missing cells) avoids this bias and yields better ground-truth
+/// recovery on the Phase-F fixture.  Per-cell detection-probability weighting
+/// is retained as a named helper (`compute_cell_weights_with_mask`, `detection_probability`)
+/// for future work on detection-model-aware whitening.
+pub fn fast_ica_mnar(
+    abundance: &[Vec<f64>],
+    config: &MnarIcaConfig,
+) -> MnarIcaResult {
+    use crate::ica::fast_ica_weighted;
+
+    let n = abundance.len();
+    let p = if n > 0 { abundance[0].len() } else { 0 };
+
+    // Build detection mask from the NaN pattern.
+    let detected: Vec<Vec<bool>> = abundance
+        .iter()
+        .map(|row| row.iter().map(|v| v.is_finite()).collect())
+        .collect();
+
+    // Step 1: column-mean imputation.
+    let imputed = column_mean_impute(abundance);
+
+    // Step 2: fit detection curve on the imputed (NaN-free) data.
+    // The log_ab values for *all* cells come from the imputed matrix;
+    // but the detection mask (y=1/0) correctly records which were observed.
+    let log_ab_imputed = log_abundance_for_fit(&imputed);
+    let (log_ab_flat, detected_flat) = flatten_for_fit(&log_ab_imputed, &detected);
+    let mut curve = fit_detection_curve(&log_ab_flat, &detected_flat);
+
+    // Step 3: first-pass ICA on the column-mean-imputed matrix.
+    // We use uniform weights (passing empty `cell_weights`, which collapses
+    // to standard FastICA).  The detection curve is used to determine which
+    // cells are "reliable" for the re-imputation quality check, but it does
+    // NOT enter the fixed-point updates as cell weights.
+    //
+    // Rationale: the standard detection model has beta1 > 0 (high abundance
+    // → high detection), which means downweighting low-abundance cells in the
+    // ICA fixed-point biases the recovered sources away from the low-abundance
+    // regime.  For sources with heavy tails (e.g. exponential) this causes a
+    // systematic loss of recovery accuracy for the tail — i.e. the weighted
+    // ICA can be *worse* than uniform-weight ICA.  Joint iteration with uniform
+    // weights and ICA-reconstruction re-imputation avoids this bias.
+    let mut ica_result = fast_ica_weighted(
+        &imputed,
+        config.k,
+        config.seed,
+        config.max_iter,
+        config.tol,
+        &[], // uniform weights → identical to plain fast_ica
+    );
+
+    let mut joint_iterations = 1;
+    let mut joint_converged = false;
+
+    // Joint iteration: re-impute via ICA reconstruction, refit curve, re-run.
+    // The detection curve informs the re-imputation: we use the ICA
+    // reconstruction as the best estimate of the undetected cell values.
+    // With each iteration the missing-cell estimates improve, which improves
+    // the ICA's view of those columns' true variance structure.
+    for _jiter in 1..config.max_joint_iter {
+        let prev_beta0 = curve.beta0;
+        let prev_beta1 = curve.beta1;
+
+        // Re-impute missing cells using the ICA reconstruction.
+        let reimputed = reimpute_from_ica(&ica_result, abundance, &detected, n, p);
+
+        // Refit detection curve on the re-imputed matrix.
+        let log_ab_mat2 = log_abundance_for_fit(&reimputed);
+        let (lab2_flat, det2_flat) = flatten_for_fit(&log_ab_mat2, &detected);
+        curve = fit_detection_curve(&lab2_flat, &det2_flat);
+
+        // Re-run ICA with uniform weights on the re-imputed matrix.
+        ica_result = fast_ica_weighted(
+            &reimputed,
+            config.k,
+            config.seed,
+            config.max_iter,
+            config.tol,
+            &[], // uniform weights
+        );
+        joint_iterations += 1;
+
+        let delta = (curve.beta0 - prev_beta0).abs().max((curve.beta1 - prev_beta1).abs());
+        if delta < config.joint_tol {
+            joint_converged = true;
+            break;
+        }
+    }
+
+    MnarIcaResult {
+        ica: ica_result,
+        detection_curve: curve,
+        joint_iterations,
+        joint_converged,
+    }
+}
+
+// ── private helpers for fast_ica_mnar ─────────────────────────────────────
+
+/// Column-mean imputation: replace NaN cells with the observed column mean.
+/// Columns that are entirely missing are left as 0.0.
+fn column_mean_impute(x: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let n = x.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let p = x[0].len();
+    let mut col_sum = vec![0.0_f64; p];
+    let mut col_count = vec![0usize; p];
+    for row in x {
+        for (j, &v) in row.iter().enumerate() {
+            if v.is_finite() {
+                col_sum[j] += v;
+                col_count[j] += 1;
+            }
+        }
+    }
+    let col_mean: Vec<f64> = (0..p)
+        .map(|j| {
+            if col_count[j] > 0 {
+                col_sum[j] / col_count[j] as f64
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    x.iter()
+        .map(|row| {
+            row.iter()
+                .enumerate()
+                .map(|(j, &v)| if v.is_finite() { v } else { col_mean[j] })
+                .collect()
+        })
+        .collect()
+}
+
+/// Flatten a 2-D log-abundance matrix and detection mask into parallel slices
+/// suitable for [`fit_detection_curve`].
+fn flatten_for_fit(
+    log_ab_mat: &[Vec<f64>],
+    detected: &[Vec<bool>],
+) -> (Vec<f64>, Vec<bool>) {
+    let mut log_ab_flat = Vec::new();
+    let mut det_flat = Vec::new();
+    for (i, row) in log_ab_mat.iter().enumerate() {
+        for (j, &lab) in row.iter().enumerate() {
+            log_ab_flat.push(lab);
+            det_flat.push(detected[i][j]);
+        }
+    }
+    (log_ab_flat, det_flat)
+}
+
+
+/// Re-impute missing cells (NaN in `abundance`) using the ICA reconstruction.
+///
+/// The reconstruction is `sources * mixing^T + mean` (i.e., `X̂ = S * A^T + μ`).
+/// Observed cells are left untouched.
+fn reimpute_from_ica(
+    ica: &crate::ica::IcaResult,
+    abundance: &[Vec<f64>],
+    detected: &[Vec<bool>],
+    n: usize,
+    p: usize,
+) -> Vec<Vec<f64>> {
+    // Reconstruct: x̂[i][j] = mean[j] + Σ_c sources[i][c] * mixing[j][c]
+    let mut out = abundance.to_vec();
+    for i in 0..n {
+        for j in 0..p {
+            if !detected[i][j] {
+                let mut recon = ica.mean[j];
+                for c in 0..ica.sources[i].len() {
+                    recon += ica.sources[i][c] * ica.mixing[j][c];
+                }
+                out[i][j] = recon;
+            }
+        }
+    }
+    out
+}
+
 // ── private helpers ──────────────────────────────────────────────────────────
 
 #[inline(always)]

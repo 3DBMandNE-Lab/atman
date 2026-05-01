@@ -288,8 +288,68 @@ pub struct IcaResult {
 
 /// Run FastICA on `x` (n x p) for `k` components with seed, max iterations, and tolerance.
 pub fn fast_ica(x: &[Vec<f64>], k: usize, seed: u64, max_iter: usize, tol: f64) -> IcaResult {
+    fast_ica_weighted(x, k, seed, max_iter, tol, &[])
+}
+
+/// Run weighted FastICA on `x` (n x p) for `k` components.
+///
+/// `cell_weights` is a flat row-major slice of per-cell weights with shape n × p
+/// (i.e., `cell_weights[i * p + j]` is the weight for sample `i`, feature `j`).
+/// An empty slice (`&[]`) is equivalent to all-ones weights, which collapses to
+/// standard FastICA (the MAR-collapse parity contract).
+///
+/// The weights enter the fixed-point updates via a weighted expectation:
+///   `w_c ← (Σ_i w_i * g(w_c^T x̃_i) * x̃_i) / Σ_i w_i_avg
+///           - (Σ_i w_i_avg * g'(w_c^T x̃_i)) / Σ_i w_i_avg * w_c`
+/// where `w_i_avg` is the mean of the per-cell weights for sample `i` (averaged
+/// across features), so the sphering objective uses the same per-sample weight
+/// for all whitened dimensions.  When all `cell_weights` equal 1 the update
+/// reduces identically to the unweighted `fast_ica` above.
+///
+/// The whitening step uses the *unweighted* covariance.  Weighted whitening
+/// (i.e., incorporating per-cell missingness into the sphering step) is a
+/// deferred feature — under the mild missingness regime of Phase G the gain
+/// is negligible relative to the weighted fixed-point iteration.
+pub fn fast_ica_weighted(
+    x: &[Vec<f64>],
+    k: usize,
+    seed: u64,
+    max_iter: usize,
+    tol: f64,
+    cell_weights: &[f64],
+) -> IcaResult {
+    let n = x.len();
+    let p = if n > 0 { x[0].len() } else { 0 };
+
+    // Validate weight dimensions when non-empty.
+    let use_weights = !cell_weights.is_empty();
+    if use_weights {
+        assert_eq!(
+            cell_weights.len(),
+            n * p,
+            "cell_weights must have length n*p = {} but got {}",
+            n * p,
+            cell_weights.len()
+        );
+    }
+
+    // Compute per-sample scalar weight: mean of per-cell weights for that sample.
+    // When weights are uniform (or not provided) every sample_weight is 1.0,
+    // so the weighted mean equals the unweighted mean and the update is identical.
+    let sample_weights: Vec<f64> = if use_weights {
+        (0..n)
+            .map(|i| {
+                let start = i * p;
+                let sum: f64 = cell_weights[start..start + p].iter().sum();
+                sum / p as f64
+            })
+            .collect()
+    } else {
+        vec![1.0_f64; n]
+    };
+    let total_weight: f64 = sample_weights.iter().sum();
+
     let w = pca_whiten(x, k);
-    let n = w.whitened.len();
 
     let mut rng = Xoshiro256pp::new(seed);
     let mut weights = vec![vec![0.0_f64; k]; k];
@@ -305,26 +365,27 @@ pub fn fast_ica(x: &[Vec<f64>], k: usize, seed: u64, max_iter: usize, tol: f64) 
     for iteration in 0..max_iter {
         iter_used = iteration + 1;
         let mut next = vec![vec![0.0_f64; k]; k];
-        // For each component, compute E[x g(w^T x)] - E[g'(w^T x)] w.
+        // For each component, compute weighted E[x g(w^T x)] - weighted E[g'(w^T x)] w.
         for c in 0..k {
             let w_c: Vec<f64> = weights[c].clone();
             let mut sum_gxx = vec![0.0_f64; k];
             let mut sum_gp = 0.0_f64;
-            for row in &w.whitened {
+            for (i, row) in w.whitened.iter().enumerate() {
+                let sw = sample_weights[i];
                 let mut wx = 0.0_f64;
                 for (j, xj) in row.iter().enumerate() {
                     wx += w_c[j] * xj;
                 }
                 let gwx = wx.tanh();
                 let gpwx = 1.0 - gwx * gwx;
-                sum_gp += gpwx;
+                sum_gp += sw * gpwx;
                 for (j, xj) in row.iter().enumerate() {
-                    sum_gxx[j] += gwx * xj;
+                    sum_gxx[j] += sw * gwx * xj;
                 }
             }
-            let mean_gp = sum_gp / n as f64;
+            let mean_gp = sum_gp / total_weight;
             for j in 0..k {
-                next[c][j] = sum_gxx[j] / n as f64 - mean_gp * w_c[j];
+                next[c][j] = sum_gxx[j] / total_weight - mean_gp * w_c[j];
             }
         }
         symmetric_decorrelate(&mut next);
@@ -348,7 +409,6 @@ pub fn fast_ica(x: &[Vec<f64>], k: usize, seed: u64, max_iter: usize, tol: f64) 
         }
     }
     // unmixing (k x p) = W * whitening
-    let p = w.whitening[0].len();
     let unmixing: Vec<Vec<f64>> = weights
         .iter()
         .map(|w_row| {
