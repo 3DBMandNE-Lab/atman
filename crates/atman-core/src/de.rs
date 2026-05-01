@@ -14,6 +14,10 @@
 //!   is (e.g., one comparison × all proteins). This module does not pool
 //!   families together.
 
+use std::collections::BTreeMap;
+use std::io::BufRead;
+use std::path::Path;
+
 use statrs::distribution::{ContinuousCDF, FisherSnedecor, StudentsT};
 
 /// Numerically stable two-sided Student's t p-value.
@@ -1158,6 +1162,179 @@ pub fn bh_fdr(p_values: &[Option<f64>]) -> Vec<Option<f64>> {
     out
 }
 
+/// Read external covariates from a TSV file.
+///
+/// **Format**:
+/// - First line (optional): `#` comment (skipped).
+/// - Second line: tab-delimited headers. First column MUST be `sample_id`;
+///   remaining columns are covariate names.
+/// - Data rows: `sample_id\t<numeric>\t<numeric>\t...`
+///
+/// **Detection of long-format TSV** (for covariate names with repeated values per sample_id):
+/// If the TSV has exactly 3 columns and column 2 has repeated distinct values,
+/// it is treated as long format (`sample_id\tcovariate_name\tvalue`), pivoted
+/// to wide format internally.
+///
+/// **Returns**:
+/// - `Ok(BTreeMap<String, BTreeMap<String, f64>>)` where the outer key is
+///   `sample_id` and the inner map is `{ covariate_name: value }`.
+/// - `Err(String)` if the file format is invalid or a numeric column contains
+///   non-finite (NaN, Inf) or unparseable values.
+pub fn read_external_covariates<P: AsRef<Path>>(
+    path: P,
+) -> Result<BTreeMap<String, BTreeMap<String, f64>>, String> {
+    let file =
+        std::fs::File::open(path.as_ref()).map_err(|e| format!("failed to open file: {}", e))?;
+    let reader = std::io::BufReader::new(file);
+    let mut lines = reader.lines();
+
+    // Skip leading comment line if present.
+    let first = lines
+        .next()
+        .ok_or_else(|| "file is empty".to_string())?
+        .map_err(|e| format!("failed to read line: {}", e))?;
+    let headers_line = if first.starts_with('#') {
+        lines
+            .next()
+            .ok_or_else(|| "file has only a comment line".to_string())?
+            .map_err(|e| format!("failed to read header line: {}", e))?
+    } else {
+        first
+    };
+
+    let headers: Vec<String> = headers_line.split('\t').map(|s| s.to_string()).collect();
+    if headers.is_empty() {
+        return Err("no headers found".to_string());
+    }
+    if headers[0] != "sample_id" {
+        return Err(format!(
+            "first column must be 'sample_id', got '{}'",
+            headers[0]
+        ));
+    }
+
+    // Collect all data rows.
+    let mut rows = Vec::new();
+    for result in lines {
+        let line = result.map_err(|e| format!("failed to read line: {}", e))?;
+        if line.is_empty() {
+            continue; // skip blank lines
+        }
+        let fields: Vec<String> = line.split('\t').map(|s| s.to_string()).collect();
+        rows.push(fields);
+    }
+
+    // Detect format: if exactly 3 columns and column 1 has repeated values per sample_id,
+    // treat as long format and pivot.
+    let is_long_format = headers.len() == 3 && {
+        let mut seen_per_sample: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for row in &rows {
+            if row.len() >= 2 {
+                seen_per_sample
+                    .entry(row[0].clone())
+                    .or_insert_with(Vec::new)
+                    .push(row[1].clone());
+            }
+        }
+        // Long format: each sample has 2+ distinct program/covariate names.
+        seen_per_sample.values().any(|v| v.len() > 1)
+    };
+
+    let mut result: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
+
+    if is_long_format {
+        // Pivot long to wide: sample_id | covariate_name | value.
+        for row in rows {
+            if row.len() < 3 {
+                return Err(format!(
+                    "long-format TSV: expected 3 columns, got {}",
+                    row.len()
+                ));
+            }
+            let sample_id = row[0].clone();
+            let cov_name = row[1].clone();
+            let value_str = &row[2];
+            let value: f64 = value_str
+                .parse()
+                .map_err(|_| format!("failed to parse '{}' as f64", value_str))?;
+            if !value.is_finite() {
+                return Err(format!("non-finite value in long-format TSV: {}", value_str));
+            }
+            result
+                .entry(sample_id)
+                .or_insert_with(BTreeMap::new)
+                .insert(cov_name, value);
+        }
+    } else {
+        // Wide format: each row is sample_id | cov1 | cov2 | ...
+        for row in rows {
+            if row.len() != headers.len() {
+                return Err(format!(
+                    "row has {} columns, expected {}",
+                    row.len(),
+                    headers.len()
+                ));
+            }
+            let sample_id = row[0].clone();
+            let mut covariates = BTreeMap::new();
+            for (col_idx, header) in headers.iter().enumerate().skip(1) {
+                let value_str = &row[col_idx];
+                let value: f64 = value_str
+                    .parse()
+                    .map_err(|_| format!("failed to parse '{}' as f64", value_str))?;
+                if !value.is_finite() {
+                    return Err(format!("non-finite value in column '{}': {}", header, value_str));
+                }
+                covariates.insert(header.clone(), value);
+            }
+            result.insert(sample_id, covariates);
+        }
+    }
+
+    Ok(result)
+}
+
+/// Join external covariates onto sample records by `sample_id`.
+///
+/// **Behavior**:
+/// - Samples in `samples` not in the external TSV → returns `Err` with a list
+///   of missing sample IDs.
+/// - Sample IDs in the external TSV not in `samples` → dropped silently
+///   (no warning issued).
+///
+/// **Returns**:
+/// - `Ok(BTreeMap<String, BTreeMap<String, f64>>)` where each sample_id maps
+///   to its augmented covariate set.
+/// - `Err(String)` if any sample in `samples` is missing from `ext`.
+pub fn join_external_covariates(
+    samples: &[crate::types::Sample],
+    ext: &BTreeMap<String, BTreeMap<String, f64>>,
+) -> Result<BTreeMap<String, BTreeMap<String, f64>>, String> {
+    // Check for missing sample IDs in external data.
+    let mut missing = Vec::new();
+    for sample in samples {
+        if !ext.contains_key(&sample.sample_id) {
+            missing.push(sample.sample_id.clone());
+        }
+    }
+    if !missing.is_empty() {
+        return Err(format!(
+            "missing sample IDs in external covariates: {:?}",
+            missing
+        ));
+    }
+
+    // Build output: only samples from the input, with their external covariates.
+    let mut out: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
+    for sample in samples {
+        if let Some(covs) = ext.get(&sample.sample_id) {
+            out.insert(sample.sample_id.clone(), covs.clone());
+        }
+    }
+
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1874,5 +2051,278 @@ mod tests {
         let a: Vec<Vec<f64>> = Vec::new();
         let l = super::cholesky_lower(&a).expect("empty is OK");
         assert!(l.is_empty());
+    }
+
+    #[test]
+    fn read_external_covariates_wide_format() {
+        use std::io::Write;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(temp_file, "sample_id\tcov1\tcov2").unwrap();
+        writeln!(temp_file, "A\t1.5\t2.5").unwrap();
+        writeln!(temp_file, "B\t3.0\t4.0").unwrap();
+        writeln!(temp_file, "C\t5.5\t6.5").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = super::read_external_covariates(temp_file.path()).unwrap();
+        assert_eq!(result.len(), 3);
+
+        let a = result.get("A").unwrap();
+        assert_eq!(a.get("cov1"), Some(&1.5));
+        assert_eq!(a.get("cov2"), Some(&2.5));
+
+        let b = result.get("B").unwrap();
+        assert_eq!(b.get("cov1"), Some(&3.0));
+        assert_eq!(b.get("cov2"), Some(&4.0));
+
+        let c = result.get("C").unwrap();
+        assert_eq!(c.get("cov1"), Some(&5.5));
+        assert_eq!(c.get("cov2"), Some(&6.5));
+    }
+
+    #[test]
+    fn read_external_covariates_long_format_pivots_to_wide() {
+        use std::io::Write;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(temp_file, "sample_id\tprogram\tactivation").unwrap();
+        writeln!(temp_file, "A\tprog1\t0.1").unwrap();
+        writeln!(temp_file, "A\tprog2\t0.2").unwrap();
+        writeln!(temp_file, "B\tprog1\t0.3").unwrap();
+        writeln!(temp_file, "B\tprog2\t0.4").unwrap();
+        writeln!(temp_file, "C\tprog1\t0.5").unwrap();
+        writeln!(temp_file, "C\tprog2\t0.6").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = super::read_external_covariates(temp_file.path()).unwrap();
+        assert_eq!(result.len(), 3);
+
+        let a = result.get("A").unwrap();
+        assert_eq!(a.get("prog1"), Some(&0.1));
+        assert_eq!(a.get("prog2"), Some(&0.2));
+
+        let b = result.get("B").unwrap();
+        assert_eq!(b.get("prog1"), Some(&0.3));
+        assert_eq!(b.get("prog2"), Some(&0.4));
+
+        let c = result.get("C").unwrap();
+        assert_eq!(c.get("prog1"), Some(&0.5));
+        assert_eq!(c.get("prog2"), Some(&0.6));
+    }
+
+    #[test]
+    fn read_external_covariates_skips_comment_line() {
+        use std::io::Write;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(temp_file, "# generated by decompose nmf").unwrap();
+        writeln!(temp_file, "sample_id\tcov1\tcov2").unwrap();
+        writeln!(temp_file, "A\t1.0\t2.0").unwrap();
+        writeln!(temp_file, "B\t3.0\t4.0").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = super::read_external_covariates(temp_file.path()).unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result.contains_key("A"));
+        assert!(result.contains_key("B"));
+    }
+
+    #[test]
+    fn read_external_covariates_rejects_non_numeric() {
+        use std::io::Write;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(temp_file, "sample_id\tcov1\tcov2").unwrap();
+        writeln!(temp_file, "A\t1.0\t2.0").unwrap();
+        writeln!(temp_file, "B\tnot_a_number\t4.0").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = super::read_external_covariates(temp_file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("failed to parse"));
+    }
+
+    #[test]
+    fn read_external_covariates_rejects_non_finite() {
+        use std::io::Write;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(temp_file, "sample_id\tcov1\tcov2").unwrap();
+        writeln!(temp_file, "A\t1.0\tinf").unwrap();
+        temp_file.flush().unwrap();
+
+        let result = super::read_external_covariates(temp_file.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("non-finite"));
+    }
+
+    #[test]
+    fn join_external_covariates_all_samples_found() {
+        use crate::types::Sample;
+
+        let mut ext = BTreeMap::new();
+        let mut cov_a = BTreeMap::new();
+        cov_a.insert("cov1".to_string(), 1.5);
+        cov_a.insert("cov2".to_string(), 2.5);
+        ext.insert("A".to_string(), cov_a);
+
+        let mut cov_b = BTreeMap::new();
+        cov_b.insert("cov1".to_string(), 3.0);
+        cov_b.insert("cov2".to_string(), 4.0);
+        ext.insert("B".to_string(), cov_b);
+
+        let mut cov_c = BTreeMap::new();
+        cov_c.insert("cov1".to_string(), 5.5);
+        cov_c.insert("cov2".to_string(), 6.5);
+        ext.insert("C".to_string(), cov_c);
+
+        let samples = vec![
+            Sample {
+                sample_id: "A".to_string(),
+                subject_id: None,
+                condition: None,
+                is_control: false,
+                sample_type: None,
+                ingest_order: 0,
+            },
+            Sample {
+                sample_id: "B".to_string(),
+                subject_id: None,
+                condition: None,
+                is_control: false,
+                sample_type: None,
+                ingest_order: 1,
+            },
+            Sample {
+                sample_id: "C".to_string(),
+                subject_id: None,
+                condition: None,
+                is_control: false,
+                sample_type: None,
+                ingest_order: 2,
+            },
+        ];
+
+        let result = super::join_external_covariates(&samples, &ext).unwrap();
+        assert_eq!(result.len(), 3);
+        assert!(result.contains_key("A"));
+        assert!(result.contains_key("B"));
+        assert!(result.contains_key("C"));
+    }
+
+    #[test]
+    fn join_external_covariates_drops_extra_external_ids() {
+        use crate::types::Sample;
+
+        let mut ext = BTreeMap::new();
+        let mut cov_a = BTreeMap::new();
+        cov_a.insert("cov1".to_string(), 1.0);
+        ext.insert("A".to_string(), cov_a);
+
+        let mut cov_b = BTreeMap::new();
+        cov_b.insert("cov1".to_string(), 2.0);
+        ext.insert("B".to_string(), cov_b);
+
+        let mut cov_c = BTreeMap::new();
+        cov_c.insert("cov1".to_string(), 3.0);
+        ext.insert("C".to_string(), cov_c);
+
+        let mut cov_d = BTreeMap::new();
+        cov_d.insert("cov1".to_string(), 4.0);
+        ext.insert("D".to_string(), cov_d);
+
+        let samples = vec![
+            Sample {
+                sample_id: "A".to_string(),
+                subject_id: None,
+                condition: None,
+                is_control: false,
+                sample_type: None,
+                ingest_order: 0,
+            },
+            Sample {
+                sample_id: "B".to_string(),
+                subject_id: None,
+                condition: None,
+                is_control: false,
+                sample_type: None,
+                ingest_order: 1,
+            },
+            Sample {
+                sample_id: "C".to_string(),
+                subject_id: None,
+                condition: None,
+                is_control: false,
+                sample_type: None,
+                ingest_order: 2,
+            },
+        ];
+
+        let result = super::join_external_covariates(&samples, &ext).unwrap();
+        assert_eq!(result.len(), 3); // Only A, B, C; D is dropped
+        assert!(result.contains_key("A"));
+        assert!(result.contains_key("B"));
+        assert!(result.contains_key("C"));
+        assert!(!result.contains_key("D"));
+    }
+
+    #[test]
+    fn join_external_covariates_errs_on_missing_sample_ids() {
+        use crate::types::Sample;
+
+        let mut ext = BTreeMap::new();
+        let mut cov_a = BTreeMap::new();
+        cov_a.insert("cov1".to_string(), 1.0);
+        ext.insert("A".to_string(), cov_a);
+
+        let mut cov_b = BTreeMap::new();
+        cov_b.insert("cov1".to_string(), 2.0);
+        ext.insert("B".to_string(), cov_b);
+
+        let mut cov_c = BTreeMap::new();
+        cov_c.insert("cov1".to_string(), 3.0);
+        ext.insert("C".to_string(), cov_c);
+
+        // Note: D is missing from ext
+        let samples = vec![
+            Sample {
+                sample_id: "A".to_string(),
+                subject_id: None,
+                condition: None,
+                is_control: false,
+                sample_type: None,
+                ingest_order: 0,
+            },
+            Sample {
+                sample_id: "B".to_string(),
+                subject_id: None,
+                condition: None,
+                is_control: false,
+                sample_type: None,
+                ingest_order: 1,
+            },
+            Sample {
+                sample_id: "C".to_string(),
+                subject_id: None,
+                condition: None,
+                is_control: false,
+                sample_type: None,
+                ingest_order: 2,
+            },
+            Sample {
+                sample_id: "D".to_string(),
+                subject_id: None,
+                condition: None,
+                is_control: false,
+                sample_type: None,
+                ingest_order: 3,
+            },
+        ];
+
+        let result = super::join_external_covariates(&samples, &ext);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err();
+        assert!(err_msg.contains("missing sample IDs"));
+        assert!(err_msg.contains("D"));
     }
 }
