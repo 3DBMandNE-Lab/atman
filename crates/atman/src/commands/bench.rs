@@ -16,6 +16,8 @@
 use anyhow::{bail, Context, Result};
 use atman_core::bench_decompose::score_against_planted;
 use atman_core::ica::{canonicalize_ica, fast_ica};
+use atman_core::ica_mnar::{fast_ica_mnar, MnarIcaConfig};
+use atman_core::nmf::{nmf, BetaLoss, Init, NmfConfig};
 use clap::{Args as ClapArgs, Subcommand};
 use csv::ReaderBuilder;
 use serde_json::json;
@@ -120,15 +122,50 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
 
     let mut rows: Vec<ToolRunResult> = Vec::new();
     for tool in &tools {
-        let result = if tool == "atman" {
-            run_atman_native(
-                &abundance,
-                k,
-                args.seed,
-                args.max_iter,
-                args.tol,
-                &protein_labels,
-            )
+        let result = if tool == "atman" || tool.starts_with("atman.") {
+            // Parse the method suffix; bare "atman" defaults to "ica".
+            let suffix = if tool == "atman" {
+                "ica"
+            } else {
+                &tool["atman.".len()..]
+            };
+            match suffix {
+                "ica" => run_atman_native_ica(
+                    &abundance,
+                    k,
+                    args.seed,
+                    args.max_iter,
+                    args.tol,
+                    &protein_labels,
+                    tool,
+                ),
+                "nmf" => run_atman_native_nmf(
+                    &abundance,
+                    k,
+                    args.seed,
+                    &protein_labels,
+                    tool,
+                ),
+                "missingness-ica" => run_atman_native_mnar_ica(
+                    &abundance,
+                    k,
+                    args.seed,
+                    args.max_iter,
+                    args.tol,
+                    &protein_labels,
+                    tool,
+                ),
+                other => {
+                    rows.push(ToolRunResult::unavailable(
+                        tool.clone(),
+                        format!(
+                            "unknown atman method '{}'; expected one of: ica, nmf, missingness-ica",
+                            other
+                        ),
+                    ));
+                    continue;
+                }
+            }
         } else {
             let adapters_dir = match &args.adapters_dir {
                 Some(d) => d.clone(),
@@ -152,16 +189,39 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
 
         if args.check_determinism {
             // Re-run and byte-compare the recovered loadings.
-            let second = if tool == "atman" {
-                run_atman_native(
-                    &abundance,
-                    k,
-                    args.seed,
-                    args.max_iter,
-                    args.tol,
-                    &protein_labels,
-                )
-                .ok()
+            let second = if tool == "atman" || tool.starts_with("atman.") {
+                let suffix = if tool == "atman" { "ica" } else { &tool["atman.".len()..] };
+                match suffix {
+                    "ica" => run_atman_native_ica(
+                        &abundance,
+                        k,
+                        args.seed,
+                        args.max_iter,
+                        args.tol,
+                        &protein_labels,
+                        tool,
+                    )
+                    .ok(),
+                    "nmf" => run_atman_native_nmf(
+                        &abundance,
+                        k,
+                        args.seed,
+                        &protein_labels,
+                        tool,
+                    )
+                    .ok(),
+                    "missingness-ica" => run_atman_native_mnar_ica(
+                        &abundance,
+                        k,
+                        args.seed,
+                        args.max_iter,
+                        args.tol,
+                        &protein_labels,
+                        tool,
+                    )
+                    .ok(),
+                    _ => None,
+                }
             } else if let Some(d) = &args.adapters_dir {
                 run_external_adapter(tool, fixture, d, args.seed, k).ok()
             } else {
@@ -281,13 +341,14 @@ impl ToolRunResult {
     }
 }
 
-fn run_atman_native(
+fn run_atman_native_ica(
     abundance: &[Vec<f64>],
     k: usize,
     seed: u64,
     max_iter: usize,
     tol: f64,
     protein_labels: &[String],
+    tool_label: &str,
 ) -> Result<ToolRunResult> {
     let start = Instant::now();
     let ica = fast_ica(abundance, k, seed, max_iter, tol);
@@ -296,6 +357,142 @@ fn run_atman_native(
     let recovered = canon.loadings.clone();
     // Stable byte representation for determinism-check: concatenate
     // every (archetype, protein, rounded-loading) triple in fixed order.
+    let flat = make_flat_repr(&recovered, protein_labels);
+    Ok(ToolRunResult {
+        tool: tool_label.to_string(),
+        recovered,
+        recovered_flat: flat,
+        runtime_seconds: elapsed,
+        determinism_score: f64::NAN,
+        tool_not_available: false,
+        unavailable_reason: String::new(),
+    })
+}
+
+/// NMF-based native decomposition for bench.
+///
+/// Input must be non-negative for NMF. If the fixture contains negative values
+/// (e.g. real-valued ICA-style mixtures), each column is shifted to be
+/// non-negative by subtracting its column minimum, then adding a small offset
+/// (1e-6) to ensure strict positivity. The shift is applied per-column so that
+/// the relative protein signal is preserved. This shift is noted in the sidecar
+/// via the tool label "atman.nmf".
+///
+/// Recovery scoring is identical to the ICA branch: the H matrix (k × p
+/// feature loadings) is matched against planted archetypes via
+/// `score_against_planted`.
+fn run_atman_native_nmf(
+    abundance: &[Vec<f64>],
+    k: usize,
+    seed: u64,
+    protein_labels: &[String],
+    tool_label: &str,
+) -> Result<ToolRunResult> {
+    let n = abundance.len();
+    if n == 0 {
+        bail!("nmf: abundance matrix is empty");
+    }
+    let p = abundance[0].len();
+
+    // Shift each column to non-negative if needed.
+    // Compute per-column minimum over all rows.
+    let mut col_min = vec![f64::INFINITY; p];
+    for row in abundance {
+        for (j, &v) in row.iter().enumerate() {
+            if v < col_min[j] {
+                col_min[j] = v;
+            }
+        }
+    }
+    let needs_shift = col_min.iter().any(|&m| m < 0.0);
+    let shifted: Vec<Vec<f64>> = if needs_shift {
+        abundance
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .enumerate()
+                    .map(|(j, &v)| {
+                        let shift = if col_min[j] < 0.0 { -col_min[j] + 1e-6 } else { 0.0 };
+                        v + shift
+                    })
+                    .collect()
+            })
+            .collect()
+    } else {
+        abundance.to_vec()
+    };
+
+    let cfg = NmfConfig {
+        k,
+        beta_loss: BetaLoss::Frobenius,
+        init: Init::Nndsvda,
+        max_iter: 200,
+        tol: 1e-4,
+        seed,
+    };
+    let start = Instant::now();
+    let result = nmf(&shifted, &cfg);
+    let elapsed = start.elapsed().as_secs_f64();
+
+    // H is k × p: each row is one component's feature loadings.
+    let recovered = result.h.clone();
+    let flat = make_flat_repr(&recovered, protein_labels);
+    Ok(ToolRunResult {
+        tool: tool_label.to_string(),
+        recovered,
+        recovered_flat: flat,
+        runtime_seconds: elapsed,
+        determinism_score: f64::NAN,
+        tool_not_available: false,
+        unavailable_reason: String::new(),
+    })
+}
+
+/// Missingness-aware ICA native decomposition for bench.
+///
+/// The fixture is fully observed (no NaN), so MNAR routes byte-equivalent to
+/// plain FastICA (the MAR-collapse property: max_joint_iter=1, uniform weights).
+/// Recovery scoring is identical to the ICA branch.
+fn run_atman_native_mnar_ica(
+    abundance: &[Vec<f64>],
+    k: usize,
+    seed: u64,
+    max_iter: usize,
+    tol: f64,
+    protein_labels: &[String],
+    tool_label: &str,
+) -> Result<ToolRunResult> {
+    let config = MnarIcaConfig {
+        k,
+        seed,
+        max_iter,
+        tol,
+        // max_joint_iter = 1: single-pass, no missingness to iterate against
+        // on a fully-observed fixture.  Satisfies the MAR-collapse contract.
+        max_joint_iter: 1,
+        joint_tol: 1e-6,
+    };
+    let start = Instant::now();
+    let result = fast_ica_mnar(abundance, &config);
+    let canon = canonicalize_ica(&result.ica);
+    let elapsed = start.elapsed().as_secs_f64();
+    let recovered = canon.loadings.clone();
+    let flat = make_flat_repr(&recovered, protein_labels);
+    Ok(ToolRunResult {
+        tool: tool_label.to_string(),
+        recovered,
+        recovered_flat: flat,
+        runtime_seconds: elapsed,
+        determinism_score: f64::NAN,
+        tool_not_available: false,
+        unavailable_reason: String::new(),
+    })
+}
+
+/// Build a stable byte representation of recovered loadings for determinism
+/// comparison: concatenate every (archetype_index, protein, rounded-loading)
+/// triple in fixed order.
+fn make_flat_repr(recovered: &[Vec<f64>], protein_labels: &[String]) -> Vec<u8> {
     let mut flat = Vec::with_capacity(recovered.len() * protein_labels.len() * 16);
     for (ai, row) in recovered.iter().enumerate() {
         for (pi, &v) in row.iter().enumerate() {
@@ -304,15 +501,7 @@ fn run_atman_native(
             );
         }
     }
-    Ok(ToolRunResult {
-        tool: "atman".to_string(),
-        recovered,
-        recovered_flat: flat,
-        runtime_seconds: elapsed,
-        determinism_score: f64::NAN,
-        tool_not_available: false,
-        unavailable_reason: String::new(),
-    })
+    flat
 }
 
 fn run_external_adapter(
