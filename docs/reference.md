@@ -77,6 +77,112 @@ genes, three signatures: up-loaded, down-loaded, scattered). All 12
 (set × sample) reference rows match `singscore::simpleScore` within
 `1e-12`. See `singscore_reference.tsv` for the reference values.
 
+## Commands
+
+### atman decompose nmf
+
+Non-negative matrix factorization via multiplicative updates (Brunet et al.
+2004). Recovers *k* non-negative latent protein programs whose product
+reconstructs the log-abundance matrix. Multi-seed stability framework assesses
+robustness across random initializations.
+
+**Flags:**
+- `--k <INT>` — fixed rank (overrides `--k-selection`)
+- `--k-selection <RULE>` — auto-selection rule: `cophenetic-knee` (default) or `rss-knee`
+- `--k-min <INT>` — minimum k for sweep (default 2)
+- `--k-max <INT>` — maximum k for sweep (default 8)
+- `--beta-loss <STR>` — loss function: `frobenius` (default, squared error) or `kullback-leibler`
+- `--init <STR>` — initialization: `random` (default), `nndsvd`, or `nndsvda`
+- `--solver <STR>` — update algorithm: `mu` (default, multiplicative updates)
+- `--max-iter <INT>` — iteration limit (default 500)
+- `--tol <FLOAT>` — convergence tolerance on reconstruction error (default 1e-4)
+- `--seed <INT>` — master PRNG seed for initialization and noise (default 42)
+- `--n-seeds <INT>` — number of independent runs (default 1)
+- `--min-stable-seed-fraction <FLOAT>` — fraction threshold for reporting stability (default 0.7)
+- `--stability-metric <STR>` — reproducibility metric: `cophenetic-correlation` (default) or `sihouette`
+- `--stability-top-n <INT>` — top *n* loadings to use for correlation (default 50)
+- `--output-loadings <PATH>` — protein weights per component (required)
+- `--output-activations <PATH>` — per-sample component activations (required)
+- `--output-stability <PATH>` — cross-seed reproducibility scores
+- `--output-k-sweep <PATH>` — k-selection diagnostic metrics
+
+**Output formats:**
+- `loadings.tsv`: rows are proteins, columns are components (0-indexed), header includes component indices
+- `activations.tsv`: rows are samples, columns are components; long format compatible with `--adjust-for`
+- `stability.tsv`: reproducibility metrics per component across seed pairs
+- `k_sweep.tsv`: k selection metrics (cophenetic, RSS) for each k tested
+
+See `docs/recipes.md` for the canonical Fig 3 admixture-adjusted DE chain.
+
+### atman decompose ica --missingness-model abundance-conditional
+
+FastICA with MNAR (missing-not-at-random) awareness via abundance-conditional
+detection-curve model. On fully-observed data, output is numerically identical
+to standard FastICA (MAR-collapse property). When data contain structured
+missingness (below-LOD entries), the method iterates jointly over component
+estimation and detection-curve fit.
+
+**New flag:**
+- `--max-joint-iter <INT>` — iteration limit for joint MNAR fit (default 50)
+
+Existing `--k-selection`, `--n-seeds`, `--seed`, `--output-loadings`,
+`--output-activations`, `--output-stability` flags work as in standard ICA.
+
+### atman de --adjust-for <PATH>
+
+Admixture-adjusted differential abundance testing. Accepts per-sample
+covariates from an external TSV and composes them into the design matrix
+alongside condition and `samples.tsv` columns.
+
+**Format detection:** `--adjust-for` auto-detects two formats:
+- **Wide:** sample_id column plus covariate columns; one row per sample
+- **Long:** sample_id, program, activation columns; multiple rows per sample (auto-pivoted to wide)
+
+NMF activation outputs use long format and are consumed directly. Both formats
+can be combined: if both `--adjust-for <EXTERNAL_TSV>` and `--covariates
+age,sex,batch` are passed, the design matrix is `~ condition +
+[external_covariates] + age + sex + batch`.
+
+**Implementation:** Wired through `--test` paths:
+- `limma` — design matrix composed and passed to `lmFit` + eBayes
+- `msqrob` — external covariates added to protein-level model
+- `ols` — design formula extended with external covariate columns
+- `mixed` — fixed-effects formula extended
+- `welch-t`, `paired-t` — covariates are silently ignored (unpairable design)
+
+**Sidecar:** `de_results.tsv.run.json` records `inputs_sha256` entry for the
+`--adjust-for` path and its input hash, enabling full reproducibility.
+
+### atman bench decompose --tools atman.<method>
+
+Native dispatch of decomposition methods under `atman bench decompose`. Allowed
+methods: `ica`, `nmf`, `missingness-ica`. The bare `atman` method (no prefix)
+remains an alias for `atman.ica`.
+
+**New flag:**
+- `--fixture-nmf <PATH>` — NMF-appropriate benchmark fixture (defaults to
+  `bench/planted_archetypes_nmf_v1/`)
+
+**Fixture requirements:** NMF fixtures must include a ground-truth component
+matrix (`loadings_truth.tsv`) and expected reconstruction error targets for
+correctness validation.
+
+### atman align programs / bootstrap / project — decomposition method tracking
+
+Sidecars for all `align` subcommands now record:
+
+```json
+{
+  "args": {
+    "decomposition_method": "ica | nmf | mixed | unknown"
+  }
+}
+```
+
+This enables downstream auditing: readers can trace whether a set of aligned
+programs came from ICA, NMF, or a mixed ensemble, and reproduce the exact
+alignment parameters from the sidecar.
+
 ### Reference environment
 
 Reference scripts live alongside the fixtures in

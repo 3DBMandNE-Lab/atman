@@ -348,7 +348,31 @@ atman asymmetry \
 
 Emits per-pair asymmetry metrics (challenge-vs-rest) at the contrast-family level.
 
-## 15. Robustness
+## 15. Decomposition methods: ICA vs NMF vs missingness-aware ICA
+
+Atman provides three orthogonal decomposition approaches for discovering
+latent protein programs:
+
+- **ICA (independent component analysis):** FastICA seeks maximally
+  non-Gaussian (statistically independent) components. Use when you expect
+  heavy-tailed signals or when the number of components is unknown; multi-seed
+  ICA explores stability and lets variance-determined k-selection drive rank.
+
+- **NMF (non-negative matrix factorization):** Multiplicative-update NMF
+  enforces non-negativity and sparsity, yielding interpretable sparse modules
+  with clear membership. Use for compositional signals like tissue-specific
+  secretion or cell-type mixtures in bulk samples, where you specify *k*
+  directly or auto-pick from a k sweep.
+
+- **Missingness-aware ICA:** When data contain structured below-LOD entries,
+  `decompose ica --missingness-model abundance-conditional` jointly estimates
+  components and detection curves. On fully-observed data, output is identical
+  to standard ICA.
+
+For a concrete example combining NMF with downstream DE, see the
+admixture-adjusted workflow in [recipes.md](recipes.md#admixture-adjusted-de-on-bulk-tumor-proteomics).
+
+## 17. Robustness
 
 Robustness consumes the baseline DE table plus one or more rerun DE tables.
 The example below shows the command shape with two leave-one-out DE outputs:

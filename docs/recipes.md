@@ -511,3 +511,92 @@ atman decompose variance \
     --factors "diagnosis + sex + age + (1|batch)" \
     --output out/variance.tsv
 ```
+
+### NMF: biologically-motivated factorization
+
+Non-negative matrix factorization identifies a fixed number of non-negative
+components (latent protein programs) whose product reconstructs the measured
+abundances. Unlike ICA (which seeks statistical independence), NMF produces
+sparse, interpretable loadings and is appropriate when:
+
+- You expect components with **clear membership** (feature either loads or doesn't)
+- Biological signals are **non-Gaussian** in a specific way (sparse positive sources)
+- You want a fixed, interpretable *k* rather than variance-determined dimension
+
+Run multi-seed NMF with stability assessment:
+
+```bash
+atman decompose nmf \
+    --input-dir out \
+    --k-selection cophenetic-knee \
+    --k-min 2 --k-max 8 \
+    --beta-loss frobenius \
+    --n-seeds 10 \
+    --min-stable-seed-fraction 0.9 \
+    --output-loadings out/nmf_loadings.tsv \
+    --output-activations out/nmf_activations.tsv \
+    --output-stability out/nmf_stability.tsv \
+    --output-k-sweep out/nmf_k_sweep.tsv
+```
+
+Outputs:
+- `nmf_loadings.tsv` (protein weights per component)
+- `nmf_activations.tsv` (subject activation per component)
+- `nmf_stability.tsv` (cross-seed reproducibility per component)
+- `nmf_k_sweep.tsv` (cophenetic and RSS metrics across k values)
+
+### Admixture-adjusted DE on bulk tumor proteomics
+
+Workflow combining NMF decomposition with admixture-adjusted differential
+abundance testing. Use this when bulk tumor samples contain unknown mixtures
+of cell types and you want to control for compositional variation without
+explicitly deconvolving. The four-step chain is:
+
+**Step 1. Decompose with NMF to recover compositional programs:**
+
+```bash
+atman decompose nmf --input-dir runs/MY_COHORT \
+    --k-selection cophenetic-knee --k-min 2 --k-max 8 \
+    --beta-loss frobenius --n-seeds 10 \
+    --min-stable-seed-fraction 0.9 \
+    --output-loadings runs/MY_COHORT/nmf_loadings.tsv \
+    --output-activations runs/MY_COHORT/nmf_activations.tsv \
+    --output-stability runs/MY_COHORT/nmf_stability.tsv \
+    --output-k-sweep runs/MY_COHORT/nmf_k_sweep.tsv
+```
+
+**Step 2. Compose NMF activations into a per-sample covariate matrix and run
+adjusted DE:**
+
+```bash
+atman de --test limma --input-dir runs/MY_COHORT \
+    --groups subtype_a-subtype_b \
+    --adjust-for runs/MY_COHORT/nmf_activations.tsv \
+    --output-dir runs/MY_COHORT/de_adjusted/
+```
+
+The `--adjust-for` TSV is auto-detected for format: wide (sample_id × covariate
+columns) or long (sample_id, program, activation). NMF activation outputs use
+long format and are consumed directly. Atman also accepts wide format from
+custom external covariates.
+
+**Step 3. Pre-ranked GSEA on the adjusted results:**
+
+```bash
+atman enrich gsea --de-results runs/MY_COHORT/de_adjusted/de_results.tsv \
+    --gene-sets lib/hallmarks.tsv \
+    --output runs/MY_COHORT/gsea_hallmarks.tsv
+```
+
+**Step 4. (Optional) Null calibration to sanity-check parametric p-values:**
+
+```bash
+atman null --test limma --input-dir runs/MY_COHORT \
+    --groups subtype_a-subtype_b \
+    --n 1000 --output-dir runs/MY_COHORT/null/
+```
+
+**Auditability:** Each step's `*.run.json` sidecar records the SHA-256 of the
+previous step's output as input. A reader can reproduce any figure number by
+replaying the logged commands in sequence. The sidecar `--adjust-for` input path
+and its source hash are recorded for full traceability.
