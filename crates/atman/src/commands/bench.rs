@@ -46,8 +46,17 @@ pub struct DecomposeArgs {
     /// Fixture directory containing `planted_loadings.tsv`
     /// (`archetype_id`, `protein`, `loading`) and `abundance.tsv`
     /// (first column `sample_id`, remaining columns one protein each).
+    /// Used by all tools except `atman.nmf` (see `--fixture-nmf`).
     #[arg(long)]
     fixture: PathBuf,
+
+    /// Fixture directory for `atman.nmf`. NMF requires non-negative
+    /// input; if `atman.nmf` is in `--tools` it will read from this
+    /// fixture instead of `--fixture`. Defaults to
+    /// `bench/planted_archetypes_nmf_v1/` relative to the working
+    /// directory when not set.
+    #[arg(long)]
+    fixture_nmf: Option<PathBuf>,
 
     /// Comma-separated list of tool labels to score. `atman` always
     /// works (native); any other label triggers
@@ -103,6 +112,17 @@ pub fn run(args: Args) -> Result<()> {
 fn run_decompose(args: DecomposeArgs) -> Result<()> {
     let started_at = SystemTime::now();
     let fixture = &args.fixture;
+
+    // Resolve the NMF-specific fixture.  Default to
+    // bench/planted_archetypes_nmf_v1/ relative to the working directory when
+    // not explicitly provided.
+    let nmf_fixture: PathBuf = match &args.fixture_nmf {
+        Some(p) => p.clone(),
+        None => PathBuf::from("bench/planted_archetypes_nmf_v1"),
+    };
+
+    // Read the primary (ICA-family) fixture up front so k is available for
+    // all tools.  NMF reads its own fixture independently.
     let (protein_labels, planted) = read_planted_loadings(fixture)?;
     let (sample_ids, abundance) = read_abundance(fixture, &protein_labels)?;
     let k = args.k.unwrap_or(planted.len());
@@ -120,7 +140,15 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
         bail!("--tools resolved to zero entries");
     }
 
-    let mut rows: Vec<ToolRunResult> = Vec::new();
+    // Per-tool state: (ToolRunResult, planted_loadings_used, abundance_used).
+    // For NMF we track the NMF fixture's planted loadings separately so scoring
+    // is done against the correct ground truth.
+    struct ToolEntry {
+        result: ToolRunResult,
+        planted: Vec<Vec<f64>>,
+    }
+
+    let mut rows: Vec<ToolEntry> = Vec::new();
     for tool in &tools {
         let result = if tool == "atman" || tool.starts_with("atman.") {
             // Parse the method suffix; bare "atman" defaults to "ica".
@@ -130,39 +158,57 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
                 &tool["atman.".len()..]
             };
             match suffix {
-                "ica" => run_atman_native_ica(
-                    &abundance,
-                    k,
-                    args.seed,
-                    args.max_iter,
-                    args.tol,
-                    &protein_labels,
-                    tool,
-                ),
-                "nmf" => run_atman_native_nmf(
-                    &abundance,
-                    k,
-                    args.seed,
-                    &protein_labels,
-                    tool,
-                ),
-                "missingness-ica" => run_atman_native_mnar_ica(
-                    &abundance,
-                    k,
-                    args.seed,
-                    args.max_iter,
-                    args.tol,
-                    &protein_labels,
-                    tool,
-                ),
+                "ica" => {
+                    let tr = run_atman_native_ica(
+                        &abundance,
+                        k,
+                        args.seed,
+                        args.max_iter,
+                        args.tol,
+                        &protein_labels,
+                        tool,
+                    );
+                    tr.map(|r| (r, planted.clone()))
+                }
+                "nmf" => {
+                    // NMF runs against its own non-negative fixture.
+                    match load_nmf_fixture(&nmf_fixture, args.k) {
+                        Ok((nmf_protein_labels, nmf_planted, nmf_abundance, nmf_k)) => {
+                            let tr = run_atman_native_nmf(
+                                &nmf_abundance,
+                                nmf_k,
+                                args.seed,
+                                &nmf_protein_labels,
+                                tool,
+                            );
+                            tr.map(|r| (r, nmf_planted))
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                "missingness-ica" => {
+                    let tr = run_atman_native_mnar_ica(
+                        &abundance,
+                        k,
+                        args.seed,
+                        args.max_iter,
+                        args.tol,
+                        &protein_labels,
+                        tool,
+                    );
+                    tr.map(|r| (r, planted.clone()))
+                }
                 other => {
-                    rows.push(ToolRunResult::unavailable(
-                        tool.clone(),
-                        format!(
-                            "unknown atman method '{}'; expected one of: ica, nmf, missingness-ica",
-                            other
+                    rows.push(ToolEntry {
+                        result: ToolRunResult::unavailable(
+                            tool.clone(),
+                            format!(
+                                "unknown atman method '{}'; expected one of: ica, nmf, missingness-ica",
+                                other
+                            ),
                         ),
-                    ));
+                        planted: Vec::new(),
+                    });
                     continue;
                 }
             }
@@ -170,75 +216,88 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
             let adapters_dir = match &args.adapters_dir {
                 Some(d) => d.clone(),
                 None => {
-                    rows.push(ToolRunResult::unavailable(
-                        tool.clone(),
-                        "missing --adapters-dir".into(),
-                    ));
+                    rows.push(ToolEntry {
+                        result: ToolRunResult::unavailable(
+                            tool.clone(),
+                            "missing --adapters-dir".into(),
+                        ),
+                        planted: Vec::new(),
+                    });
                     continue;
                 }
             };
             run_external_adapter(tool, fixture, &adapters_dir, args.seed, k)
+                .map(|r| (r, planted.clone()))
         };
-        let mut tr = match result {
+
+        let (mut tr, tool_planted) = match result {
             Ok(t) => t,
             Err(e) => {
-                rows.push(ToolRunResult::unavailable(tool.clone(), e.to_string()));
+                rows.push(ToolEntry {
+                    result: ToolRunResult::unavailable(tool.clone(), e.to_string()),
+                    planted: Vec::new(),
+                });
                 continue;
             }
         };
 
         if args.check_determinism {
             // Re-run and byte-compare the recovered loadings.
-            let second = if tool == "atman" || tool.starts_with("atman.") {
-                let suffix = if tool == "atman" { "ica" } else { &tool["atman.".len()..] };
-                match suffix {
-                    "ica" => run_atman_native_ica(
-                        &abundance,
-                        k,
-                        args.seed,
-                        args.max_iter,
-                        args.tol,
-                        &protein_labels,
-                        tool,
-                    )
-                    .ok(),
-                    "nmf" => run_atman_native_nmf(
-                        &abundance,
-                        k,
-                        args.seed,
-                        &protein_labels,
-                        tool,
-                    )
-                    .ok(),
-                    "missingness-ica" => run_atman_native_mnar_ica(
-                        &abundance,
-                        k,
-                        args.seed,
-                        args.max_iter,
-                        args.tol,
-                        &protein_labels,
-                        tool,
-                    )
-                    .ok(),
-                    _ => None,
-                }
-            } else if let Some(d) = &args.adapters_dir {
-                run_external_adapter(tool, fixture, d, args.seed, k).ok()
-            } else {
-                None
-            };
-            tr.determinism_score = match &second {
-                Some(s) if s.recovered_flat == tr.recovered_flat => 1.0,
+            let second_flat: Option<Vec<u8>> =
+                if tool == "atman" || tool.starts_with("atman.") {
+                    let suffix = if tool == "atman" { "ica" } else { &tool["atman.".len()..] };
+                    match suffix {
+                        "ica" => run_atman_native_ica(
+                            &abundance,
+                            k,
+                            args.seed,
+                            args.max_iter,
+                            args.tol,
+                            &protein_labels,
+                            tool,
+                        )
+                        .ok()
+                        .map(|r| r.recovered_flat),
+                        "nmf" => load_nmf_fixture(&nmf_fixture, args.k).ok().and_then(
+                            |(nmf_pl, _, nmf_ab, nmf_k)| {
+                                run_atman_native_nmf(&nmf_ab, nmf_k, args.seed, &nmf_pl, tool)
+                                    .ok()
+                                    .map(|r| r.recovered_flat)
+                            },
+                        ),
+                        "missingness-ica" => run_atman_native_mnar_ica(
+                            &abundance,
+                            k,
+                            args.seed,
+                            args.max_iter,
+                            args.tol,
+                            &protein_labels,
+                            tool,
+                        )
+                        .ok()
+                        .map(|r| r.recovered_flat),
+                        _ => None,
+                    }
+                } else if let Some(d) = &args.adapters_dir {
+                    run_external_adapter(tool, fixture, d, args.seed, k)
+                        .ok()
+                        .map(|r| r.recovered_flat)
+                } else {
+                    None
+                };
+            tr.determinism_score = match second_flat {
+                Some(ref s) if *s == tr.recovered_flat => 1.0,
                 Some(_) => 0.0,
                 None => f64::NAN,
             };
         }
-        rows.push(tr);
+        rows.push(ToolEntry { result: tr, planted: tool_planted });
     }
 
     // Score recovered vs planted per tool.
     let mut result_rows = Vec::new();
-    for tool in &rows {
+    for entry in &rows {
+        let tool = &entry.result;
         if tool.tool_not_available {
             // Emit a single "unavailable" row so the benchmark TSV
             // records every requested tool.
@@ -256,7 +315,7 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
             });
             continue;
         }
-        let scores = score_against_planted(&planted, &tool.recovered, args.top_n);
+        let scores = score_against_planted(&entry.planted, &tool.recovered, args.top_n);
         for s in scores {
             result_rows.push(BenchRow {
                 tool: tool.tool.clone(),
@@ -298,6 +357,7 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
         "bench decompose",
         json!({
             "fixture": args.fixture.display().to_string(),
+            "fixture-nmf": nmf_fixture.display().to_string(),
             "tools": args.tools,
             "adapters-dir": args.adapters_dir.as_ref().map(|p| p.display().to_string()),
             "seed": args.seed,
@@ -315,6 +375,24 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
     )?;
     eprintln!("bench decompose: sidecar={}", sidecar.display());
     Ok(())
+}
+
+/// Load the NMF-specific fixture, returning
+/// `(protein_labels, planted_loadings, abundance, k)`.
+/// `k_override` replaces the planted count when provided.
+fn load_nmf_fixture(
+    fixture: &Path,
+    k_override: Option<usize>,
+) -> Result<(Vec<String>, Vec<Vec<f64>>, Vec<Vec<f64>>, usize)> {
+    let (protein_labels, planted) = read_planted_loadings(fixture)
+        .with_context(|| format!("reading NMF fixture planted_loadings from {:?}", fixture))?;
+    let (_, abundance) = read_abundance(fixture, &protein_labels)
+        .with_context(|| format!("reading NMF fixture abundance from {:?}", fixture))?;
+    let k = k_override.unwrap_or(planted.len());
+    if k == 0 {
+        bail!("NMF fixture has zero planted archetypes");
+    }
+    Ok((protein_labels, planted, abundance, k))
 }
 
 struct ToolRunResult {
@@ -371,12 +449,9 @@ fn run_atman_native_ica(
 
 /// NMF-based native decomposition for bench.
 ///
-/// Input must be non-negative for NMF. If the fixture contains negative values
-/// (e.g. real-valued ICA-style mixtures), each column is shifted to be
-/// non-negative by subtracting its column minimum, then adding a small offset
-/// (1e-6) to ensure strict positivity. The shift is applied per-column so that
-/// the relative protein signal is preserved. This shift is noted in the sidecar
-/// via the tool label "atman.nmf".
+/// The abundance matrix passed here is from the NMF-specific non-negative
+/// fixture (`bench/planted_archetypes_nmf_v1/` by default), so all values are
+/// guaranteed ≥ 0 by construction — no column-shifting is needed or applied.
 ///
 /// Recovery scoring is identical to the ICA branch: the H matrix (k × p
 /// feature loadings) is matched against planted archetypes via
@@ -388,50 +463,20 @@ fn run_atman_native_nmf(
     protein_labels: &[String],
     tool_label: &str,
 ) -> Result<ToolRunResult> {
-    let n = abundance.len();
-    if n == 0 {
+    if abundance.is_empty() {
         bail!("nmf: abundance matrix is empty");
     }
-    let p = abundance[0].len();
-
-    // Shift each column to non-negative if needed.
-    // Compute per-column minimum over all rows.
-    let mut col_min = vec![f64::INFINITY; p];
-    for row in abundance {
-        for (j, &v) in row.iter().enumerate() {
-            if v < col_min[j] {
-                col_min[j] = v;
-            }
-        }
-    }
-    let needs_shift = col_min.iter().any(|&m| m < 0.0);
-    let shifted: Vec<Vec<f64>> = if needs_shift {
-        abundance
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .enumerate()
-                    .map(|(j, &v)| {
-                        let shift = if col_min[j] < 0.0 { -col_min[j] + 1e-6 } else { 0.0 };
-                        v + shift
-                    })
-                    .collect()
-            })
-            .collect()
-    } else {
-        abundance.to_vec()
-    };
 
     let cfg = NmfConfig {
         k,
         beta_loss: BetaLoss::Frobenius,
         init: Init::Nndsvda,
-        max_iter: 200,
+        max_iter: 300,
         tol: 1e-4,
         seed,
     };
     let start = Instant::now();
-    let result = nmf(&shifted, &cfg);
+    let result = nmf(abundance, &cfg);
     let elapsed = start.elapsed().as_secs_f64();
 
     // H is k × p: each row is one component's feature loadings.
