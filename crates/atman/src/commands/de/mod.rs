@@ -366,9 +366,17 @@ pub fn run(args: Args) -> Result<()> {
             "--covariates, --design, --contrast, --per-subject-proxy, --fixed, and --random require --test ols or mixed"
         );
     }
-    if !args.adjust_for.is_empty() && args.test != "limma" && args.test != "msqrob" {
+    if !args.adjust_for.is_empty()
+        && args.test != "limma"
+        && args.test != "msqrob"
+        && args.test != "ols"
+        && args.test != "mixed"
+        && args.test != "welch-t"
+        && args.test != "paired-t"
+    {
         anyhow::bail!(
-            "--adjust-for requires --test limma or --test msqrob; got --test {:?}",
+            "--adjust-for requires --test limma, msqrob, ols, mixed, welch-t, or paired-t; \
+             got --test {:?}",
             args.test
         );
     }
@@ -673,7 +681,14 @@ pub fn run(args: Args) -> Result<()> {
             }
         };
         n_kept_measurements += 1;
-        if args.test == "ols" || args.test == "mixed" {
+        // cells_by_sample is used by OLS, mixed, and any path routing to OLS
+        // (welch-t + adjust-for). paired-t + adjust-for also needs per-sample
+        // lookup to compute paired differences.
+        if args.test == "ols"
+            || args.test == "mixed"
+            || (!args.adjust_for.is_empty()
+                && (args.test == "welch-t" || args.test == "paired-t"))
+        {
             cells_by_sample.insert(
                 (panel.clone(), gene.clone(), m.sample_id.clone()),
                 abundance,
@@ -688,7 +703,12 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let mixed_fixed_formula = args.fixed.as_ref().map(|fixed| format!("~ {fixed}"));
-    let model_setup = if args.test == "ols" || args.test == "mixed" {
+    // welch-t + adjust-for routes to OLS internally (plain OLS SE, not HC3).
+    // paired-t + adjust-for uses a dedicated paired-diff OLS path (see below).
+    let is_ols_routed = args.test == "ols"
+        || args.test == "mixed"
+        || (!args.adjust_for.is_empty() && args.test == "welch-t");
+    let model_setup = if is_ols_routed {
         Some(build_ols_setup(
             &args.input_dir.join("samples.tsv"),
             if args.test == "mixed" {
@@ -787,11 +807,17 @@ pub fn run(args: Args) -> Result<()> {
             // OLS mode: precompute the encoded design matrix (excluding y) for
             // this comparison so every per-protein fit reuses it, only swapping
             // the y vector (with complete-case filtering on non-finite abundance).
-            let model_design: Option<OlsDesign> = if args.test == "ols" || args.test == "mixed" {
+            // welch-t + adjust-for also routes here (plain OLS SE).
+            let model_design: Option<OlsDesign> = if is_ols_routed {
                 let setup = model_setup
                     .as_ref()
-                    .expect("model_setup populated when test=ols or mixed");
-                let design = build_ols_design(&samples, comp_a, comp_b, setup)?;
+                    .expect("model_setup populated when is_ols_routed");
+                let mut design =
+                    build_ols_design(&samples, comp_a, comp_b, setup)?;
+                // Augment with --adjust-for external covariate columns.
+                if let Some(ext) = external_covariates.as_ref() {
+                    augment_ols_design_with_external(&mut design, ext, comp_a, comp_b)?;
+                }
                 design_rows.extend(design.report_rows.clone());
                 Some(design)
             } else {
@@ -846,10 +872,15 @@ pub fn run(args: Args) -> Result<()> {
                         ),
                         RobustStats::default(),
                     )
-                } else if args.test == "ols" {
+                } else if args.test == "ols"
+                    || (is_ols_routed && args.test == "welch-t")
+                {
+                    // OLS path: also handles welch-t + --adjust-for (routed to
+                    // plain OLS; HC3 robust SE is not available without new
+                    // dependencies — documented in DONE_WITH_CONCERNS K6).
                     let design = model_design
                         .as_ref()
-                        .expect("ols_design populated when test=ols");
+                        .expect("ols_design populated when is_ols_routed");
                     // Look up per-sample abundance for this protein; drop
                     // samples where the cell is QC-masked (missing from
                     // cells_by_sample).
@@ -920,6 +951,17 @@ pub fn run(args: Args) -> Result<()> {
                         ),
                         RobustStats::default(),
                     )
+                } else if args.test == "paired-t" && !args.adjust_for.is_empty() {
+                    // paired-t + --adjust-for: paired-difference ANCOVA.
+                    // Computes d_k = abundance_b_k - abundance_a_k per subject,
+                    // covariate_diff_k = cov_b_k - cov_a_k, then fits
+                    // OLS: d ~ 1 + cov_diff_1 + cov_diff_2 + ...
+                    // The intercept is the adjusted mean paired difference.
+                    let ext = external_covariates.as_ref().expect("external_covariates set");
+                    let result = paired_t_covariate_adjusted(
+                        va, vb, ext, &sample_by_id, comp_a, comp_b, args.min_pairs,
+                    );
+                    (result, RobustStats::default())
                 } else if is_unpaired {
                     let a_vals: Vec<f64> = va.iter().map(|(_, v)| *v).collect();
                     let b_vals: Vec<f64> = vb.iter().map(|(_, v)| *v).collect();
@@ -2149,4 +2191,220 @@ pub(super) fn build_two_group_design(
         sample_ids.push(s.sample_id.clone());
     }
     (design, sample_ids)
+}
+
+/// Augment an already-built `OlsDesign` with external covariate columns from
+/// `--adjust-for`. Each covariate is appended as a numeric column to every
+/// design row; samples whose `sample_id` is absent from `ext` are dropped
+/// (with a drop-reason record). The `group_col` index is unchanged because
+/// external columns are appended after the existing columns.
+///
+/// External covariates are always treated as numeric (the caller has already
+/// parsed them as `f64` via `read_external_covariates`).
+fn augment_ols_design_with_external(
+    design: &mut OlsDesign,
+    ext: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>,
+    comp_a: &str,
+    comp_b: &str,
+) -> Result<()> {
+    if ext.is_empty() {
+        return Ok(());
+    }
+
+    // Collect sorted covariate names from the first sample that's in the design.
+    // All samples must have the same covariate names (enforced by join_external_covariates).
+    let ext_cov_names: Vec<String> = {
+        let sample_with_covs = design
+            .rows
+            .iter()
+            .find_map(|(sid, _)| ext.get(sid.as_str()));
+        match sample_with_covs {
+            Some(covs) => covs.keys().cloned().collect(),
+            None => return Ok(()), // no samples in ext — nothing to augment
+        }
+    };
+
+    if ext_cov_names.is_empty() {
+        return Ok(());
+    }
+
+    // Drop rows whose sample_id is missing from ext, keep the rest.
+    let comparison = format!("{comp_a}-{comp_b}");
+    let mut new_rows: Vec<(String, Vec<f64>)> = Vec::new();
+    for (sid, mut row) in design.rows.drain(..) {
+        match ext.get(&sid) {
+            Some(cov_map) => {
+                for name in &ext_cov_names {
+                    let val = cov_map.get(name).copied().unwrap_or(f64::NAN);
+                    row.push(val);
+                }
+                new_rows.push((sid, row));
+            }
+            None => {
+                // Sample missing from external covariate file: drop with report.
+                design.report_rows.push(DesignReportRow {
+                    comparison: comparison.clone(),
+                    sample_id: sid,
+                    condition: String::new(),
+                    included: false,
+                    drop_reason: "missing_external_covariate_row".to_string(),
+                    columns: String::new(),
+                    values: String::new(),
+                });
+            }
+        }
+    }
+    design.rows = new_rows;
+
+    // Append column labels for the external covariates.
+    for name in &ext_cov_names {
+        design.design_labels.push(name.clone());
+    }
+
+    Ok(())
+}
+
+/// Paired-t with covariates via paired-difference ANCOVA.
+///
+/// For each matched subject k: `d_k = abundance_b_k - abundance_a_k`.
+/// For each external covariate c: `dc_k = cov_c(sample_b_k) - cov_c(sample_a_k)`.
+/// Fits OLS: `d ~ 1 + dc_1 + dc_2 + ...` per protein.
+/// The intercept is the adjusted mean paired difference (log_fc).
+/// t and p are from the intercept coefficient with df = n_pairs - (1 + n_cov).
+///
+/// `va` and `vb` are `(subject_id, abundance)` pairs for conditions a and b.
+/// `ext` maps sample_id → covariate_name → value.
+/// `comp_a` and `comp_b` are the condition labels (used to look up sample_ids).
+#[allow(clippy::too_many_arguments)]
+fn paired_t_covariate_adjusted(
+    va: &[(String, f64)],
+    vb: &[(String, f64)],
+    ext: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>,
+    sample_by_id: &HashMap<&str, &atman_core::Sample>,
+    comp_a: &str,
+    comp_b: &str,
+    min_pairs: usize,
+) -> PairedTResult {
+    use atman_core::de::{OlsOutcome, SkipReason};
+
+    // Build subject → abundance maps.
+    let a_by_subj: HashMap<&str, f64> = va.iter().map(|(s, v)| (s.as_str(), *v)).collect();
+    let b_by_subj: HashMap<&str, f64> = vb.iter().map(|(s, v)| (s.as_str(), *v)).collect();
+
+    // Build subject → sample_id lookup for each condition from sample_by_id.
+    let mut subj_to_sid_a: HashMap<&str, &str> = HashMap::new();
+    let mut subj_to_sid_b: HashMap<&str, &str> = HashMap::new();
+    for (sid, s) in sample_by_id.iter() {
+        if s.is_control {
+            continue;
+        }
+        let subj = match s.subject_id.as_deref() {
+            Some(id) => id,
+            None => continue,
+        };
+        match s.condition.as_deref() {
+            Some(c) if c == comp_a => { subj_to_sid_a.insert(subj, sid); }
+            Some(c) if c == comp_b => { subj_to_sid_b.insert(subj, sid); }
+            _ => {}
+        }
+    }
+
+    // Collect sorted covariate names.
+    let ext_cov_names: Vec<String> = {
+        let any = ext.values().next();
+        match any {
+            Some(m) => m.keys().cloned().collect(),
+            None => return PairedTResult::Skipped {
+                reason: SkipReason::InsufficientPairs,
+                n_pairs: 0,
+            },
+        }
+    };
+    let n_cov = ext_cov_names.len();
+
+    // Build per-subject: (d_k, [dc_k_1, dc_k_2, ...]).
+    let mut diffs: Vec<f64> = Vec::new();
+    let mut cov_diffs: Vec<Vec<f64>> = Vec::new();
+
+    let subjects: std::collections::BTreeSet<&str> = a_by_subj
+        .keys()
+        .copied()
+        .filter(|s| b_by_subj.contains_key(s))
+        .collect();
+
+    for subj in &subjects {
+        let abund_a = match a_by_subj.get(subj) { Some(v) => *v, None => continue };
+        let abund_b = match b_by_subj.get(subj) { Some(v) => *v, None => continue };
+        let sid_a = match subj_to_sid_a.get(subj) { Some(s) => *s, None => continue };
+        let sid_b = match subj_to_sid_b.get(subj) { Some(s) => *s, None => continue };
+
+        let cov_a = match ext.get(sid_a) { Some(m) => m, None => continue };
+        let cov_b = match ext.get(sid_b) { Some(m) => m, None => continue };
+
+        let mut cds: Vec<f64> = Vec::with_capacity(n_cov);
+        let mut valid = true;
+        for name in &ext_cov_names {
+            let va_cov = match cov_a.get(name) { Some(v) => *v, None => { valid = false; break; } };
+            let vb_cov = match cov_b.get(name) { Some(v) => *v, None => { valid = false; break; } };
+            // cov_a is the comp_a sample (e.g. condition "b"), cov_b is comp_b (e.g. condition "a").
+            // Covariate diff = comp_a_cov - comp_b_cov, consistent with abundance diff sign.
+            let d = va_cov - vb_cov;
+            if !d.is_finite() { valid = false; break; }
+            cds.push(d);
+        }
+        if !valid { continue; }
+        if !abund_a.is_finite() || !abund_b.is_finite() { continue; }
+
+        // diff = comp_a_value - comp_b_value, consistent with regular paired_t
+        // which computes diffs as a_i - b_i where a = va[subj] (comp_a condition).
+        // With --groups b-a: comp_a = "b", so diff = condition_b - condition_a
+        // (positive when b > a, matching atman sign convention).
+        diffs.push(abund_a - abund_b);
+        cov_diffs.push(cds);
+    }
+
+    let n_pairs = diffs.len();
+    if n_pairs < min_pairs || n_pairs < 2 {
+        return PairedTResult::Skipped {
+            reason: SkipReason::InsufficientPairs,
+            n_pairs,
+        };
+    }
+
+    // Build design matrix for OLS: [1, dc_1, dc_2, ...]
+    // The intercept (column 0) is the adjusted mean paired difference.
+    let p = 1 + n_cov;
+    let design: Vec<Vec<f64>> = diffs
+        .iter()
+        .zip(cov_diffs.iter())
+        .map(|(_, cds)| {
+            let mut row = Vec::with_capacity(p);
+            row.push(1.0);
+            row.extend_from_slice(cds);
+            row
+        })
+        .collect();
+
+    // Use atman_core::de::ols() to fit d ~ 1 + cov_diffs.
+    // The intercept (column 0) is the adjusted mean diff.
+    let fit = match atman_core::de::ols(&design, &diffs, min_pairs) {
+        OlsOutcome::Computed(f) => f,
+        OlsOutcome::Skipped { reason, n } => {
+            return PairedTResult::Skipped { reason, n_pairs: n };
+        }
+    };
+
+    // mean_a / mean_b are not readily available from the paired-diff design
+    // (we only have diffs, not the paired subset's individual abundances).
+    // Report NaN; the key outputs (mean_diff, t, p) are fully determined.
+
+    PairedTResult::Computed {
+        n_pairs,
+        mean_a: f64::NAN,
+        mean_b: f64::NAN,
+        mean_diff: fit.beta[0], // intercept = adjusted mean diff
+        t: fit.t[0],
+        df: fit.df,
+        p_value: fit.p_value[0],
+    }
 }
