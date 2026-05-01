@@ -17,6 +17,7 @@ pub mod ensemble;
 pub mod fold_change;
 pub mod gsea;
 pub mod ica;
+pub mod ica_mnar;
 pub mod ica_null;
 pub mod limma;
 pub mod matrix;
