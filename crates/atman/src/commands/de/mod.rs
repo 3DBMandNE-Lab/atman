@@ -366,9 +366,9 @@ pub fn run(args: Args) -> Result<()> {
             "--covariates, --design, --contrast, --per-subject-proxy, --fixed, and --random require --test ols or mixed"
         );
     }
-    if !args.adjust_for.is_empty() && args.test != "limma" {
+    if !args.adjust_for.is_empty() && args.test != "limma" && args.test != "msqrob" {
         anyhow::bail!(
-            "--adjust-for requires --test limma; got --test {:?}",
+            "--adjust-for requires --test limma or --test msqrob; got --test {:?}",
             args.test
         );
     }
@@ -722,46 +722,48 @@ pub fn run(args: Args) -> Result<()> {
     let mut omnibus_rows: Vec<OmnibusRow> = Vec::new();
     let mut design_rows: Vec<DesignReportRow> = Vec::new();
 
-    if args.test == "limma" {
-        // Load and merge all --adjust-for external covariate files.
-        // Each file is wide-format: sample_id | cov1 | cov2 | …
-        // Multiple files are joined; overlapping covariate names are an error.
-        let external_covariates: Option<std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>> =
-            if args.adjust_for.is_empty() {
-                None
-            } else {
-                use atman_core::de::{join_external_covariates, read_external_covariates};
-                let mut merged: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>> =
-                    std::collections::BTreeMap::new();
-                for path in &args.adjust_for {
-                    let ext = read_external_covariates(path)
-                        .map_err(|e| anyhow::anyhow!("--adjust-for {:?}: {}", path, e))?;
-                    // Merge into `merged`: for each sample, add its covariate columns.
-                    for (sample_id, covs) in ext {
-                        let entry = merged.entry(sample_id).or_default();
-                        for (cov_name, cov_val) in covs {
-                            if entry.contains_key(&cov_name) {
-                                anyhow::bail!(
-                                    "--adjust-for: duplicate covariate name {:?} found in {:?}",
-                                    cov_name,
-                                    path
-                                );
-                            }
-                            entry.insert(cov_name, cov_val);
+    // Load and merge all --adjust-for external covariate files.
+    // Each file is wide-format: sample_id | cov1 | cov2 | …
+    // Multiple files are joined; overlapping covariate names are an error.
+    // Supported for --test limma and --test msqrob (gate enforced above).
+    let external_covariates: Option<std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>> =
+        if args.adjust_for.is_empty() {
+            None
+        } else {
+            use atman_core::de::{join_external_covariates, read_external_covariates};
+            let mut merged: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>> =
+                std::collections::BTreeMap::new();
+            for path in &args.adjust_for {
+                let ext = read_external_covariates(path)
+                    .map_err(|e| anyhow::anyhow!("--adjust-for {:?}: {}", path, e))?;
+                // Merge into `merged`: for each sample, add its covariate columns.
+                for (sample_id, covs) in ext {
+                    let entry = merged.entry(sample_id).or_default();
+                    for (cov_name, cov_val) in covs {
+                        if entry.contains_key(&cov_name) {
+                            anyhow::bail!(
+                                "--adjust-for: duplicate covariate name {:?} found in {:?}",
+                                cov_name,
+                                path
+                            );
                         }
+                        entry.insert(cov_name, cov_val);
                     }
                 }
-                // Validate: every non-control sample with a condition must be in the merged map.
-                let relevant_samples: Vec<&atman_core::Sample> = samples
-                    .iter()
-                    .filter(|s| !s.is_control && s.condition.is_some())
-                    .collect();
-                let ref_samples: Vec<atman_core::Sample> =
-                    relevant_samples.iter().map(|s| (*s).clone()).collect();
-                join_external_covariates(&ref_samples, &merged)
-                    .map_err(|e| anyhow::anyhow!("--adjust-for join failed: {}", e))?;
-                Some(merged)
-            };
+            }
+            // Validate: every non-control sample with a condition must be in the merged map.
+            let relevant_samples: Vec<&atman_core::Sample> = samples
+                .iter()
+                .filter(|s| !s.is_control && s.condition.is_some())
+                .collect();
+            let ref_samples: Vec<atman_core::Sample> =
+                relevant_samples.iter().map(|s| (*s).clone()).collect();
+            join_external_covariates(&ref_samples, &merged)
+                .map_err(|e| anyhow::anyhow!("--adjust-for join failed: {}", e))?;
+            Some(merged)
+        };
+
+    if args.test == "limma" {
         let (limma_rows, limma_reports) =
             run_limma(&args, &samples, &proteins, &measurements, &comparisons, external_covariates.as_ref())?;
         all_rows.extend(limma_rows);
@@ -769,7 +771,8 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     if args.test == "msqrob" {
-        let (msqrob_rows, msqrob_reports) = run_msqrob(&args, &samples, &proteins, &comparisons)?;
+        let (msqrob_rows, msqrob_reports) =
+            run_msqrob(&args, &samples, &proteins, &comparisons, external_covariates.as_ref())?;
         all_rows.extend(msqrob_rows);
         report_rows.extend(msqrob_reports);
     }

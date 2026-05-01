@@ -81,7 +81,16 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
                 sub.adjust_for = vec![];
             }
             "limma" => {
-                // --adjust-for is limma-specific; keep it on the limma sub-call.
+                // --adjust-for is supported for limma; keep it on this call.
+                sub.fixed = None;
+                sub.random = None;
+                sub.covariates = None;
+                sub.design = None;
+                sub.contrast = None;
+                sub.per_subject_proxy = None;
+            }
+            "msqrob" => {
+                // --adjust-for is supported for msqrob; keep it on this call.
                 sub.fixed = None;
                 sub.random = None;
                 sub.covariates = None;

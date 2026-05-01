@@ -5,26 +5,33 @@
 //! per-protein fitting, residual variances are empirically Bayes
 //! shrunk across proteins (`squeeze_variance`) and the test statistic
 //! is recomputed under the shrunk degrees of freedom.
+//!
+//! When `--adjust-for` covariates are provided, they are appended to
+//! the design matrix after the group-b indicator column, matching the
+//! convention in `limma.rs`. The condition contrast is `[0, -1, 0, …, 0]`
+//! so covariate columns do not enter the reported effect.
 
 use anyhow::{Context, Result};
 use atman_core::msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
 use atman_core::Sample;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use super::Args;
+use super::{limma::ExternalCovariates, Args};
 use crate::io::{read_peptide_measurements, read_peptides, DeReportRow, DeResultRow};
 
 /// Dispatch for `--test msqrob`. One ridge-regularized linear mixed
 /// model per protein, fit over its peptide-level observations in the
-/// two-group comparison. The design matrix is `[intercept, group_b]`;
-/// the reported effect is `mean_a − mean_b`, matching the sign
-/// convention used by the paired-t, welch-t, and ols dispatches
-/// (contrast = −β_group_b).
+/// two-group comparison. The base design matrix is `[intercept, group_b]`;
+/// when `external_covariates` is provided, one column per covariate is
+/// appended in deterministic `BTreeMap` order. The reported effect is
+/// `mean_a − mean_b`, matching the sign convention used by the paired-t,
+/// welch-t, and ols dispatches (contrast = −β_group_b).
 pub(super) fn run_msqrob(
     args: &Args,
     samples: &[Sample],
     proteins: &[atman_core::ProteinIdentity],
     comparisons: &[(String, String)],
+    external_covariates: Option<&ExternalCovariates>,
 ) -> Result<(Vec<DeResultRow>, Vec<DeReportRow>)> {
     let pep_meas_path = args
         .peptide_measurements
@@ -128,6 +135,21 @@ pub(super) fn run_msqrob(
         let mut computed_ctx_index: Vec<usize> = Vec::new();
         let mut skipped_rows: Vec<(String, MsqrobRow)> = Vec::new();
 
+        // Determine covariate column names in stable order from the first
+        // sample's covariate map. All samples are guaranteed to have the
+        // same names because join_external_covariates validated this at
+        // call-site (in mod.rs). We compute the name list once per
+        // comparison and reuse it for every protein.
+        let cov_names: Vec<String> = if let Some(ext) = external_covariates {
+            sample_group
+                .first()
+                .and_then(|(sid, _)| ext.get(sid))
+                .map(|m| m.keys().cloned().collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
         for (assay_id, peptide_ids) in &peptides_by_protein {
             let (panel, gene, uniprot) = protein_meta
                 .get(assay_id)
@@ -151,7 +173,18 @@ pub(super) fn run_msqrob(
                 for pid in peptide_ids {
                     let key = (sample_id.clone(), pid.clone());
                     if let Some(&abund) = pep_cells.get(&key) {
-                        design.push(vec![1.0, *group_b]);
+                        // Base design row: [intercept, group_b_indicator].
+                        // Append one column per external covariate (same order
+                        // as cov_names, which is stable BTreeMap key order).
+                        let mut row = vec![1.0, *group_b];
+                        if let Some(ext) = external_covariates {
+                            if let Some(covs) = ext.get(sample_id) {
+                                for name in &cov_names {
+                                    row.push(*covs.get(name).unwrap_or(&0.0));
+                                }
+                            }
+                        }
+                        design.push(row);
                         y.push(abund);
                         peptide_obs.push(pep_index[pid]);
                         used_peptides.insert(pid.clone());
