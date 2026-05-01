@@ -14,12 +14,16 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use super::{build_two_group_design, Args};
 use crate::io::{read_peptides, DeReportRow, DeResultRow};
 
+/// External covariates map: sample_id → {covariate_name → value}.
+pub(super) type ExternalCovariates = BTreeMap<String, BTreeMap<String, f64>>;
+
 pub(super) fn run_limma(
     args: &Args,
     samples: &[Sample],
     proteins: &[ProteinIdentity],
     measurements: &[MeasurementRecord],
     comparisons: &[(String, String)],
+    external_covariates: Option<&ExternalCovariates>,
 ) -> Result<(Vec<DeResultRow>, Vec<DeReportRow>)> {
     let mut all_result_rows: Vec<DeResultRow> = Vec::new();
     let mut all_report_rows: Vec<DeReportRow> = Vec::new();
@@ -106,12 +110,41 @@ pub(super) fn run_limma(
         let comparison_label = format!("{}-{}", a, b);
 
         // (i) Design matrix: rows = non-control samples with condition in {a, b}.
-        let (design, sample_ids) = build_two_group_design(samples, a, b);
-        if design.is_empty() {
+        // Base columns: [intercept, group_b_indicator].
+        // When external_covariates is provided, append one column per
+        // covariate (in deterministic BTreeMap order) after the group column.
+        let (base_design, sample_ids) = build_two_group_design(samples, a, b);
+        if base_design.is_empty() {
             // No samples in either group — skip this comparison silently;
             // no rows, no report.
             continue;
         }
+        // Augment with external covariates if provided.
+        let design: Vec<Vec<f64>> = if let Some(ext) = external_covariates {
+            // Determine covariate names in stable order from the first sample's map.
+            // All samples are guaranteed to have the same covariate names because
+            // join_external_covariates validated this at call-site.
+            let cov_names: Vec<String> = sample_ids
+                .first()
+                .and_then(|sid| ext.get(sid))
+                .map(|m| m.keys().cloned().collect())
+                .unwrap_or_default();
+            base_design
+                .iter()
+                .zip(sample_ids.iter())
+                .map(|(row, sid)| {
+                    let mut augmented = row.clone();
+                    if let Some(covs) = ext.get(sid) {
+                        for name in &cov_names {
+                            augmented.push(*covs.get(name).unwrap_or(&0.0));
+                        }
+                    }
+                    augmented
+                })
+                .collect()
+        } else {
+            base_design
+        };
 
         // Feature set = (panel, gene_symbol) pairs observed in
         // measurements that have at least one retained-sample value in
@@ -173,7 +206,14 @@ pub(super) fn run_limma(
         // (matching welch-t and paired-t paths). Use contrast −β_1 to
         // produce `mean_a − mean_b`. TREAT p-values use |t|, so the sign
         // flip doesn't affect p-values or f-statistics.
-        let contrast_matrix: Vec<Vec<f64>> = vec![vec![0.0], vec![-1.0]];
+        // When external covariates are present, the design has p > 2
+        // columns; the contrast for the non-group columns is 0.
+        let n_design_cols = design.first().map(|r| r.len()).unwrap_or(2);
+        let mut contrast_col = vec![0.0_f64; n_design_cols];
+        if n_design_cols >= 2 {
+            contrast_col[1] = -1.0; // negate group-B coefficient
+        }
+        let contrast_matrix: Vec<Vec<f64>> = contrast_col.into_iter().map(|v| vec![v]).collect();
 
         // (iv) Limma fit. When --peptide-metadata is supplied on the
         // limma path, count peptides per feature and switch the trend
@@ -312,9 +352,15 @@ pub(super) fn run_limma(
 
         // (vi) Map LimmaRow → DeResultRow and accumulate per-panel
         // summary state for the report.
-        let t_crit = StudentsT::new(0.0, 1.0, output.df_total)
-            .ok()
-            .map(|d| d.inverse_cdf(0.975));
+        // When df_total = Inf (prior fully pooled), use the z-score 1.96 as
+        // the critical value (normal approximation).
+        let t_crit: Option<f64> = if output.df_total.is_infinite() {
+            Some(1.959963985)  // qnorm(0.975)
+        } else {
+            StudentsT::new(0.0, 1.0, output.df_total)
+                .ok()
+                .map(|d| d.inverse_cdf(0.975))
+        };
 
         #[derive(Default)]
         struct PanelAcc {

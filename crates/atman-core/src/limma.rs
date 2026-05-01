@@ -181,11 +181,17 @@ pub struct SqueezeVarOutput {
 pub fn squeeze_var(s2: &[f64], df_res: f64, prior: Option<(f64, f64)>) -> SqueezeVarOutput {
     match prior {
         Some((df_prior, s2_prior)) => {
-            let denom = df_prior + df_res;
-            let s2_posterior: Vec<f64> = s2
-                .iter()
-                .map(|v| (df_prior * s2_prior + df_res * v) / denom)
-                .collect();
+            // When df_prior = Inf, the limit of (df_prior * s2_prior + df_res * s2) /
+            // (df_prior + df_res) is s2_prior (L'Hôpital: Inf/Inf → s2_prior).
+            // Compute this limit directly to avoid NaN from Inf/Inf arithmetic.
+            let s2_posterior: Vec<f64> = if df_prior.is_infinite() {
+                vec![s2_prior; s2.len()]
+            } else {
+                let denom = df_prior + df_res;
+                s2.iter()
+                    .map(|v| (df_prior * s2_prior + df_res * v) / denom)
+                    .collect()
+            };
             SqueezeVarOutput {
                 s2_posterior,
                 df_prior,
@@ -573,15 +579,27 @@ pub fn moderated_f(
 /// of `t` (a test statistic of `+t` and `−t` yield identical p-values),
 /// as required for a two-sided test.
 pub fn treat_p_value(t: f64, se: f64, df_total: f64, lfc_threshold: f64) -> f64 {
-    if !t.is_finite() || !se.is_finite() || se <= 0.0 || !df_total.is_finite() || df_total <= 0.0 {
+    if !t.is_finite() || !se.is_finite() || se <= 0.0 || df_total <= 0.0 {
         return f64::NAN;
+    }
+    // When df_total = Inf the t-distribution is the standard normal.
+    // Use the normal distribution so the computation stays valid.
+    let abs_t = t.abs();
+    let shift = lfc_threshold.abs() / se;
+    if df_total.is_infinite() {
+        use statrs::distribution::{ContinuousCDF, Normal};
+        let dist = match Normal::new(0.0, 1.0) {
+            Ok(d) => d,
+            Err(_) => return f64::NAN,
+        };
+        let upper = dist.sf(abs_t - shift);
+        let lower = dist.cdf(-abs_t - shift);
+        return (upper + lower).clamp(0.0, 1.0);
     }
     let dist = match StudentsT::new(0.0, 1.0, df_total) {
         Ok(d) => d,
         Err(_) => return f64::NAN,
     };
-    let abs_t = t.abs();
-    let shift = lfc_threshold.abs() / se;
     let upper = dist.sf(abs_t - shift);
     let lower = dist.cdf(-abs_t - shift);
     (upper + lower).clamp(0.0, 1.0)
@@ -797,12 +815,39 @@ pub fn limma_fit(
         .collect();
 
     // eBayes prior fit.
+    // When `fit_f_dist` finds no evidence of between-feature variance
+    // heterogeneity (Var(log s²) ≤ trigamma(df_res/2)), it returns `None`.
+    // R's limma handles this case by setting df_prior = Inf and
+    // s2_prior = geometric_mean(s²) — i.e. all features are assigned the
+    // same pooled posterior variance, and t-statistics are computed under
+    // a normal (df = Inf) distribution. Mirror that: compute the geometric
+    // mean fallback and pass it as a finite prior with df = Inf so that
+    // squeeze_var assigns s2_post = s2_prior uniformly.
+    // When fit_f_dist finds no evidence of between-feature variance
+    // heterogeneity, R's fitFDist sets df2 = Inf and s20 = mean(s²)
+    // (arithmetic mean of the sample variances). Mirror this exactly:
+    // use the arithmetic mean as the pooled prior variance, not the
+    // geometric mean which would diverge from R's output.
+    let arithmetic_mean_fallback = |ratios: &[f64]| -> Option<f64> {
+        let valid: Vec<f64> = ratios
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .collect();
+        if valid.is_empty() {
+            return None;
+        }
+        let am = valid.iter().sum::<f64>() / valid.len() as f64;
+        if am.is_finite() && am > 0.0 { Some(am) } else { None }
+    };
     let prior = if options.robust {
         fit_f_dist_robust(&ratios, df_res, options.winsor_lower, options.winsor_upper)
             .map(|o| (o.df_prior, o.s2_prior))
             .or_else(|| fit_f_dist(&ratios, df_res))
+            .or_else(|| arithmetic_mean_fallback(&ratios).map(|am| (f64::INFINITY, am)))
     } else {
         fit_f_dist(&ratios, df_res)
+            .or_else(|| arithmetic_mean_fallback(&ratios).map(|am| (f64::INFINITY, am)))
     };
     // `trend_fallback_used` reflects whether the trend fit itself was
     // requested-and-unfit. A successful trend fit that subsequently finds
@@ -813,10 +858,13 @@ pub fn limma_fit(
     let squeeze = squeeze_var(&ratios, df_res, prior);
     let df_prior = squeeze.df_prior;
     let s2_prior = squeeze.s2_prior;
+    // When df_prior = Inf, R limma uses df.total = Inf (normal distribution
+    // for t-statistics). Here we propagate Inf so that p-values are computed
+    // from the normal limit of the t-distribution.
     let df_total = if df_prior.is_finite() {
         df_res + df_prior
     } else {
-        df_res
+        f64::INFINITY
     };
 
     // Per-feature statistics.

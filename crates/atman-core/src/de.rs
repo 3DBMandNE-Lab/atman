@@ -26,8 +26,16 @@ use statrs::distribution::{ContinuousCDF, FisherSnedecor, StudentsT};
 /// `2 * (1 - cdf(|t|))`; the subtraction path rounds to zero for large but
 /// still representable tails such as `t = 39, df = 326`.
 pub fn two_sided_t_p_value(t: f64, df: f64) -> Option<f64> {
-    if !t.is_finite() || !df.is_finite() || df <= 0.0 {
+    if !t.is_finite() || df <= 0.0 {
         return None;
+    }
+    // When df = Inf the t-distribution converges to the standard normal.
+    // Use the normal distribution directly so statrs::StudentsT doesn't
+    // receive a non-finite df argument.
+    if df.is_infinite() {
+        use statrs::distribution::Normal;
+        let dist = Normal::new(0.0, 1.0).ok()?;
+        return Some((2.0 * dist.sf(t.abs())).clamp(0.0, 1.0));
     }
     let dist = StudentsT::new(0.0, 1.0, df).ok()?;
     Some((2.0 * dist.sf(t.abs())).clamp(0.0, 1.0))

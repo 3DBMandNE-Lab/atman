@@ -8,10 +8,11 @@
 //!   - `tests/fixtures/de_adjust_for_limma_reference.tsv`  — R ground truth
 //!
 //! Sign convention note:
-//!   R's "conditionb" coefficient is mean_b − mean_a.
-//!   atman's A-B comparison (contrast [0, -1, 0, 0]) is mean_a − mean_b.
-//!   Both the reference t_stat and log_fc must be sign-negated before
-//!   comparison with atman's output.
+//!   R's "conditionb" coefficient is mean_b − mean_a (condition b is the second level).
+//!   atman with --groups b-a: A="b", B="a". build_two_group_design uses group_b_indicator=1
+//!   for samples in the B group (condition "a"). β_group_b = mean_a − mean_b.
+//!   contrast [0, -1, 0, 0] negates that, giving mean_b − mean_a. Same sign as R.
+//!   No sign correction needed when comparing atman b-a to R conditionb.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -118,9 +119,8 @@ fn limma_adjusted_de_matches_r_reference() {
             .get(gene)
             .unwrap_or_else(|| panic!("no R reference for gene {gene}"));
 
-        // atman: mean_a − mean_b  (contrast [0, -1, 0, 0])
-        // R ref: mean_b − mean_a  (conditionb coefficient)
-        // → negate R values before comparing.
+        // atman --groups b-a: effect = mean_b − mean_a (same sign as R's conditionb).
+        // No sign correction needed.
         let atman_lfc: f64 = row
             .get("mean_diff")
             .or_else(|| row.get("effect_size"))
@@ -128,7 +128,6 @@ fn limma_adjusted_de_matches_r_reference() {
             .parse()
             .unwrap_or_else(|_| panic!("cannot parse effect for gene {gene}"));
         let ref_lfc: f64 = r["log_fc"].parse().expect("ref log_fc");
-        let ref_lfc_negated = -ref_lfc;
 
         let atman_t: f64 = row
             .get("t")
@@ -136,21 +135,20 @@ fn limma_adjusted_de_matches_r_reference() {
             .parse()
             .unwrap_or_else(|_| panic!("cannot parse t for gene {gene}"));
         let ref_t: f64 = r["t_stat"].parse().expect("ref t_stat");
-        let ref_t_negated = -ref_t;
 
-        let lfc_delta = (atman_lfc - ref_lfc_negated).abs();
-        let t_delta   = (atman_t   - ref_t_negated).abs();
+        let lfc_delta = (atman_lfc - ref_lfc).abs();
+        let t_delta   = (atman_t   - ref_t).abs();
 
         if lfc_delta > max_lfc_delta { max_lfc_delta = lfc_delta; }
         if t_delta   > max_t_delta   { max_t_delta   = t_delta;   }
 
         assert!(
             lfc_delta <= TOL,
-            "gene={gene}: log_fc delta {lfc_delta:.2e} > {TOL:.0e}\n  atman={atman_lfc}  R={ref_lfc_negated}"
+            "gene={gene}: log_fc delta {lfc_delta:.2e} > {TOL:.0e}\n  atman={atman_lfc}  R={ref_lfc}"
         );
         assert!(
             t_delta <= TOL,
-            "gene={gene}: t_stat delta {t_delta:.2e} > {TOL:.0e}\n  atman={atman_t}  R={ref_t_negated}"
+            "gene={gene}: t_stat delta {t_delta:.2e} > {TOL:.0e}\n  atman={atman_t}  R={ref_t}"
         );
     }
 

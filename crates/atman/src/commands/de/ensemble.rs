@@ -71,8 +71,19 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
             "ols" => {
                 sub.fixed = None;
                 sub.random = None;
+                sub.adjust_for = vec![];
             }
             "mixed" => {
+                sub.covariates = None;
+                sub.design = None;
+                sub.contrast = None;
+                sub.per_subject_proxy = None;
+                sub.adjust_for = vec![];
+            }
+            "limma" => {
+                // --adjust-for is limma-specific; keep it on the limma sub-call.
+                sub.fixed = None;
+                sub.random = None;
                 sub.covariates = None;
                 sub.design = None;
                 sub.contrast = None;
@@ -85,6 +96,7 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
                 sub.per_subject_proxy = None;
                 sub.fixed = None;
                 sub.random = None;
+                sub.adjust_for = vec![];
             }
         }
         match run(sub.clone()) {

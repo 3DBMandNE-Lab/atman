@@ -28,9 +28,9 @@ use std::time::SystemTime;
 
 use super::parse_comparisons;
 use crate::io::{
-    atomic_write, hash_canonical_inputs, read_measurements_long, read_proteins, read_samples,
-    sidecar_path_for, write_de_report, write_de_results, write_run_sidecar, DeReportRow,
-    DeResultRow,
+    atomic_write, hash_canonical_inputs, hash_labeled_inputs, read_measurements_long,
+    read_proteins, read_samples, sidecar_path_for, write_de_report, write_de_results,
+    write_run_sidecar, DeReportRow, DeResultRow,
 };
 
 #[derive(ClapArgs, Debug, Clone)]
@@ -250,6 +250,16 @@ pub struct Args {
     /// in `(0, 1)`.
     #[arg(long, default_value_t = 0.05)]
     proxy_p_threshold: f64,
+
+    /// External covariate TSV(s) for `--test limma`. Wide format:
+    /// `sample_id` column followed by one column per numeric covariate.
+    /// Multiple paths append all covariates (joined by sample_id; error
+    /// on missing sample IDs). Covariate columns from each file must not
+    /// overlap each other or the samples.tsv columns.
+    /// Distinct from `--covariates` (which reads from samples.tsv).
+    /// Sidecar records each path and its SHA-256.
+    #[arg(long, action = clap::ArgAction::Append)]
+    adjust_for: Vec<PathBuf>,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -354,6 +364,12 @@ pub fn run(args: Args) -> Result<()> {
     {
         anyhow::bail!(
             "--covariates, --design, --contrast, --per-subject-proxy, --fixed, and --random require --test ols or mixed"
+        );
+    }
+    if !args.adjust_for.is_empty() && args.test != "limma" {
+        anyhow::bail!(
+            "--adjust-for requires --test limma; got --test {:?}",
+            args.test
         );
     }
     if args.covariates.is_some() && args.design.is_some() {
@@ -707,8 +723,47 @@ pub fn run(args: Args) -> Result<()> {
     let mut design_rows: Vec<DesignReportRow> = Vec::new();
 
     if args.test == "limma" {
+        // Load and merge all --adjust-for external covariate files.
+        // Each file is wide-format: sample_id | cov1 | cov2 | …
+        // Multiple files are joined; overlapping covariate names are an error.
+        let external_covariates: Option<std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>> =
+            if args.adjust_for.is_empty() {
+                None
+            } else {
+                use atman_core::de::{join_external_covariates, read_external_covariates};
+                let mut merged: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>> =
+                    std::collections::BTreeMap::new();
+                for path in &args.adjust_for {
+                    let ext = read_external_covariates(path)
+                        .map_err(|e| anyhow::anyhow!("--adjust-for {:?}: {}", path, e))?;
+                    // Merge into `merged`: for each sample, add its covariate columns.
+                    for (sample_id, covs) in ext {
+                        let entry = merged.entry(sample_id).or_default();
+                        for (cov_name, cov_val) in covs {
+                            if entry.contains_key(&cov_name) {
+                                anyhow::bail!(
+                                    "--adjust-for: duplicate covariate name {:?} found in {:?}",
+                                    cov_name,
+                                    path
+                                );
+                            }
+                            entry.insert(cov_name, cov_val);
+                        }
+                    }
+                }
+                // Validate: every non-control sample with a condition must be in the merged map.
+                let relevant_samples: Vec<&atman_core::Sample> = samples
+                    .iter()
+                    .filter(|s| !s.is_control && s.condition.is_some())
+                    .collect();
+                let ref_samples: Vec<atman_core::Sample> =
+                    relevant_samples.iter().map(|s| (*s).clone()).collect();
+                join_external_covariates(&ref_samples, &merged)
+                    .map_err(|e| anyhow::anyhow!("--adjust-for join failed: {}", e))?;
+                Some(merged)
+            };
         let (limma_rows, limma_reports) =
-            run_limma(&args, &samples, &proteins, &measurements, &comparisons)?;
+            run_limma(&args, &samples, &proteins, &measurements, &comparisons, external_covariates.as_ref())?;
         all_rows.extend(limma_rows);
         report_rows.extend(limma_reports);
     }
@@ -1143,7 +1198,7 @@ pub fn run(args: Args) -> Result<()> {
     );
 
     let finished_at = SystemTime::now();
-    let inputs_sha256 = hash_canonical_inputs(
+    let mut inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &[
             "measurements.tsv",
@@ -1152,6 +1207,17 @@ pub fn run(args: Args) -> Result<()> {
             "proteins.tsv",
         ],
     )?;
+    // Hash each --adjust-for file and add to inputs so the sidecar
+    // captures full chained-input provenance.
+    for path in &args.adjust_for {
+        let label = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("adjust_for");
+        let labeled_entries: Vec<(&str, &std::path::Path)> = vec![(label, path.as_path())];
+        let extra = hash_labeled_inputs(&labeled_entries)?;
+        inputs_sha256.extend(extra);
+    }
     let sidecar = sidecar_path_for(&results_path);
     let mut extras = JsonMap::new();
     extras.insert(
@@ -1208,6 +1274,7 @@ pub fn run(args: Args) -> Result<()> {
             "report-q-strict": args.report_q_strict,
             "report-q-relaxed": args.report_q_relaxed,
             "proxy-p-threshold": args.proxy_p_threshold,
+            "adjust-for": args.adjust_for.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
         }),
         &inputs_sha256,
         &outputs,
