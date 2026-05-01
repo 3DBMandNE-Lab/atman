@@ -14,6 +14,72 @@ use crate::io::{
     atomic_write, hash_labeled_inputs, read_measurements_long, sidecar_path_for, write_run_sidecar,
 };
 
+/// Sniff the `command` field of the neighboring `*.run.json` sidecar for a
+/// loadings TSV and map it to a decomposition method label.
+///
+/// Returns `"nmf"`, `"ica"`, or `"unknown"` for a single loadings file.
+/// When multiple files are provided, returns `"mixed"` if they disagree,
+/// otherwise the common method. Emits a warning to stderr when no sidecar
+/// is readable.
+fn sniff_decomposition_method(loadings_paths: &[PathBuf]) -> String {
+    let mut methods: Vec<String> = Vec::new();
+    for path in loadings_paths {
+        let sidecar = sidecar_path_for(path);
+        let method = match std::fs::read_to_string(&sidecar) {
+            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(json) => {
+                    let cmd = json["command"].as_str().unwrap_or("");
+                    if cmd.contains("decompose nmf") {
+                        "nmf".to_string()
+                    } else if cmd.contains("decompose ica") {
+                        "ica".to_string()
+                    } else if cmd.is_empty() {
+                        eprintln!(
+                            "align: warning: sidecar {:?} has no 'command' field; \
+                             recording decomposition_method=unknown",
+                            sidecar
+                        );
+                        "unknown".to_string()
+                    } else {
+                        eprintln!(
+                            "align: warning: sidecar {:?} has unrecognised command {:?}; \
+                             recording decomposition_method=unknown",
+                            sidecar, cmd
+                        );
+                        "unknown".to_string()
+                    }
+                }
+                Err(_) => {
+                    eprintln!(
+                        "align: warning: could not parse sidecar {:?}; \
+                         recording decomposition_method=unknown",
+                        sidecar
+                    );
+                    "unknown".to_string()
+                }
+            },
+            Err(_) => {
+                eprintln!(
+                    "align: warning: no sidecar found at {:?}; \
+                     recording decomposition_method=unknown",
+                    sidecar
+                );
+                "unknown".to_string()
+            }
+        };
+        methods.push(method);
+    }
+    if methods.is_empty() {
+        return "unknown".to_string();
+    }
+    let first = methods[0].clone();
+    if methods.iter().all(|m| *m == first) {
+        first
+    } else {
+        "mixed".to_string()
+    }
+}
+
 #[derive(ClapArgs, Debug)]
 pub struct Args {
     #[command(subcommand)]
@@ -342,6 +408,8 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
             "impute": args.impute,
             "ci-alpha": args.ci_alpha,
             "output": args.output.display().to_string(),
+            // bootstrap always runs FastICA internally — no external loadings TSV to sniff.
+            "decomposition_method": "ica",
         }),
         &inputs_sha256,
         std::slice::from_ref(&args.output),
@@ -660,6 +728,7 @@ fn run_programs(args: ProgramsArgs) -> Result<()> {
         SingleMetric::Cosine => "cosine",
         SingleMetric::Spearman => "spearman",
     };
+    let decomposition_method = sniff_decomposition_method(&paths);
     write_run_sidecar(
         &sidecar,
         "align programs",
@@ -678,6 +747,7 @@ fn run_programs(args: ProgramsArgs) -> Result<()> {
             "metrics": args.metrics,
             "compare-constrained-vs-unconstrained": args.compare_constrained_vs_unconstrained,
             "output-matrix": args.output_matrix.as_ref().map(|p| p.display().to_string()),
+            "decomposition_method": decomposition_method,
         }),
         &inputs_sha256,
         std::slice::from_ref(&primary_output),
@@ -1440,6 +1510,8 @@ fn run_project(args: ProjectArgs) -> Result<()> {
         .collect();
     let inputs_sha256 = hash_labeled_inputs(&refs)?;
     let sidecar = sidecar_path_for(&activations_path);
+    let atlas_loadings_paths: Vec<PathBuf> = loadings_spec.iter().map(|(_, p)| p.clone()).collect();
+    let decomposition_method = sniff_decomposition_method(&atlas_loadings_paths);
     write_run_sidecar(
         &sidecar,
         "align project",
@@ -1457,6 +1529,7 @@ fn run_project(args: ProjectArgs) -> Result<()> {
             "atlas-proteins-missing-in-cohort": result.atlas_proteins_missing_in_cohort,
             "atlas-k": atlas.archetype_ids.len(),
             "atlas-p": atlas.protein_labels.len(),
+            "decomposition_method": decomposition_method,
         }),
         &inputs_sha256,
         &[activations_path.clone(), qc_path.clone()],
