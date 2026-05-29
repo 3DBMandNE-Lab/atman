@@ -451,7 +451,35 @@ fn measurements_from_proteins_rows(
         bail!("no matrix columns matched sample IDs from samples table");
     }
 
+    // Strict-failure: every non-metadata matrix column should map to a known
+    // sample. Columns that match neither a declared metadata column nor a
+    // sample ID would otherwise be silently dropped. Warn loudly so the
+    // operator can reconcile the matrix header against the samples table.
+    let unmatched: Vec<&str> = matrix
+        .headers
+        .iter()
+        .map(String::as_str)
+        .filter(|h| !meta_cols.contains(h) && !sample_set.contains(h))
+        .collect();
+    if !unmatched.is_empty() {
+        eprintln!(
+            "ingest-matrix: WARNING {} matrix value column(s) matched no sample ID and were \
+ignored: {}. Reconcile the matrix header against the samples table, or declare them via the \
+metadata column flags.",
+            unmatched.len(),
+            unmatched.join(", ")
+        );
+    }
+
     let proteins = protein_rows_from_table(args, matrix)?;
+    if proteins.len() != matrix.rows.len() {
+        bail!(
+            "matrix has {} data rows but {} protein rows were derived from it; \
+proteins/measurements would be silently truncated",
+            matrix.rows.len(),
+            proteins.len()
+        );
+    }
     let mut out = Vec::new();
     let mut order = 1_u64;
     for (protein, row) in proteins.iter().zip(&matrix.rows) {
@@ -516,7 +544,15 @@ struct MeasurementRow {
     gene_symbol: String,
     panel: String,
     source: String,
+    /// Working abundance: log2-transformed (if requested) and then mutated
+    /// in place by `apply_normalization`. Emitted in the `abundance` column.
     abundance: Option<f64>,
+    /// Pre-normalization copy of `abundance`, at the same scale the
+    /// `abundance_unit` declares (i.e. post-`--log2-transform`). Set once at
+    /// construction and NEVER mutated by normalization; emitted in the
+    /// `abundance_raw` column. The verbatim pre-transform input string is
+    /// preserved separately in `source` (the `npx_source_str` column).
+    abundance_raw: Option<f64>,
     dropped_by_qc: bool,
     ingest_order: u64,
 }
@@ -538,6 +574,9 @@ fn measurement_row(
         panel: protein.panel.clone(),
         source: source.to_string(),
         dropped_by_qc: abundance.is_none(),
+        // abundance_raw is the pre-normalization copy of the working value;
+        // normalization mutates `abundance` but must never touch this.
+        abundance_raw: abundance,
         abundance,
         ingest_order,
     })
@@ -586,6 +625,7 @@ fn write_measurements(path: &Path, rows: &[MeasurementRow], abundance_unit: &str
     buf.push('\n');
     for r in rows {
         let abundance = r.abundance.map(format_float).unwrap_or_default();
+        let abundance_raw = r.abundance_raw.map(format_float).unwrap_or_default();
         buf.push_str(r.platform.as_str());
         buf.push('\t');
         buf.push_str(&r.sample_id);
@@ -600,7 +640,7 @@ fn write_measurements(path: &Path, rows: &[MeasurementRow], abundance_unit: &str
         buf.push('\t');
         buf.push_str(&abundance);
         buf.push('\t');
-        buf.push_str(&abundance);
+        buf.push_str(&abundance_raw);
         buf.push('\t');
         buf.push_str(abundance_unit);
         buf.push_str("\tPASS\tPASS\t\t0\t");
