@@ -5,7 +5,7 @@
 **Owner:** orchestrator
 **Branch:** (pending)
 **Started:** 2026-05-29T09:49:45+00:00
-**Updated:** 2026-05-29T10:28:07+00:00
+**Updated:** 2026-05-29T10:36:16+00:00
 <!-- kanban-status:end -->
 
 ## Plan
@@ -64,3 +64,7 @@ Codex flagged two issues on the -dirty logic:
 - HIGH (staleness): cargo would not re-run build.rs on uncommitted *tracked source* edits (rerun-if-changed only watched build.rs/Cargo.lock/HEAD), so a dev rebuild after editing-without-committing could keep the clean SHA. Fixed by adding `cargo:rerun-if-changed=src` so this crate's source edits re-trigger the dirty check, and documented the residual limitation (an uncommitted edit to a *different* crate that doesn't rebuild atman can still leave a stale clean SHA; for guaranteed provenance build from a clean checkout, as CI/release does).
 - MEDIUM (untracked): switched from `git status --porcelain --untracked-files=no` to plain `--porcelain` so untracked non-ignored files (a new uncommitted source file = non-reproducible build) also flag -dirty. .gitignore'd artifacts (target/, etc.) are not reported, so they don't spuriously trip it.
 Verified: built binary bakes `<sha>-dirty` in this dirty worktree; clean checkout yields a bare SHA. Build + tests green.
+
+### Codex re-review fix #2 (orchestrator)
+
+Codex (re-review, HIGH): build.rs assumed `../../.git/HEAD` is a directory path, but in a LINKED git worktree `.git` is a FILE (`gitdir: <path>`), so the HEAD/ref rerun triggers were silently skipped — and the kanban system builds entirely in worktrees, so the baked SHA could go stale across commits there. Fixed: added `resolve_git_dir()` (handles both the directory and the `gitdir:` file form) and `read_commondir()` (resolves shared refs via the worktree `commondir`). Verified in this worktree the emitted triggers now correctly point at `.git/worktrees/<name>/HEAD` and the resolved `refs/heads/<branch>`; in a normal checkout it falls back to `.git/HEAD` + `.git/refs/...`. Simplified an initial trait-based helper to two plain functions.

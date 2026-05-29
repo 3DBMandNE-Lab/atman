@@ -14,7 +14,10 @@
 //!   normal build, but `cargo install` from a git dep can).
 //! - `ATMAN_PROFILE` — `debug` / `release`, from Cargo.
 
-use std::{path::Path, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn main() {
     let sha = git_sha_with_dirty();
@@ -59,15 +62,52 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=../../Cargo.lock");
-    let head = Path::new("../../.git/HEAD");
-    if head.exists() {
-        println!("cargo:rerun-if-changed=../../.git/HEAD");
-        if let Ok(text) = std::fs::read_to_string(head) {
-            if let Some(rest) = text.trim().strip_prefix("ref: ") {
-                println!("cargo:rerun-if-changed=../../.git/{rest}");
+    // Resolve the git directory. In a normal checkout `../../.git` is a
+    // directory; in a LINKED git worktree it is a FILE containing
+    // `gitdir: <path-to-per-worktree-gitdir>`. The kanban build system runs
+    // entirely in linked worktrees, so we must handle the file form — otherwise
+    // the HEAD rerun trigger is silently skipped and the baked SHA goes stale
+    // across commits in a worktree.
+    if let Some(git_dir) = resolve_git_dir(Path::new("../../.git")) {
+        let head = git_dir.join("HEAD");
+        if head.exists() {
+            println!("cargo:rerun-if-changed={}", head.display());
+            if let Ok(text) = std::fs::read_to_string(&head) {
+                if let Some(rest) = text.trim().strip_prefix("ref: ") {
+                    // Branch refs are shared via the common dir (worktrees
+                    // record it in a `commondir` file); resolve against it so
+                    // the watched ref path is correct in both layouts.
+                    let base = read_commondir(&git_dir).unwrap_or_else(|| git_dir.clone());
+                    println!("cargo:rerun-if-changed={}", base.join(rest).display());
+                }
             }
         }
     }
+}
+
+/// Resolve the real git directory for `marker` (`<repo>/.git`). Returns the
+/// directory itself for a normal checkout, or the `gitdir:` target when
+/// `marker` is the file form used by linked worktrees. `None` if neither.
+fn resolve_git_dir(marker: &Path) -> Option<PathBuf> {
+    if marker.is_dir() {
+        return Some(marker.to_path_buf());
+    }
+    if marker.is_file() {
+        let text = std::fs::read_to_string(marker).ok()?;
+        let dir = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("gitdir: ").map(str::trim))?;
+        return Some(PathBuf::from(dir));
+    }
+    None
+}
+
+/// In a linked worktree the shared refs live in the common git dir, recorded
+/// in `<git_dir>/commondir` as a path relative to `git_dir`. Returns that
+/// resolved common dir, or `None` for a normal checkout (no `commondir` file).
+fn read_commondir(git_dir: &Path) -> Option<PathBuf> {
+    let rel = std::fs::read_to_string(git_dir.join("commondir")).ok()?;
+    Some(git_dir.join(rel.trim()))
 }
 
 /// Resolve the build-time git SHA, appending a `-dirty` suffix when the
