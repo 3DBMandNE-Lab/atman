@@ -1,12 +1,11 @@
 //! Null calibration command.
 
 use anyhow::{bail, Context, Result};
-use atman_core::de::{bh_fdr, paired_t, welch_t, PairedTResult, SkipReason};
+use atman_core::de::{bh_fdr, paired_t, two_sided_t_p_value, welch_t, PairedTResult, SkipReason};
 use atman_core::stats::mean;
 use atman_core::Sample;
 use clap::Args as ClapArgs;
 use serde_json::json;
-use statrs::distribution::{ContinuousCDF, StudentsT};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -245,12 +244,7 @@ pub fn run(args: Args) -> Result<()> {
     let finished_at = SystemTime::now();
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
-        &[
-            "measurements.tsv",
-            "measurements.tsv",
-            "samples.tsv",
-            "proteins.tsv",
-        ],
+        &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     )?;
     let sidecar = sidecar_path_for(&summary_path);
     write_run_sidecar(
@@ -573,12 +567,16 @@ fn t_from_diffs(diffs: &[f64], min_pairs: usize) -> TestStat {
     if !t.is_finite() || df <= 0.0 {
         return TestStat::skipped();
     }
-    let Ok(dist) = StudentsT::new(0.0, 1.0, df) else {
+    // Use the numerically stable survival-function helper so null p-values match
+    // the observed path (paired_t/welch_t in atman_core). The naive
+    // `2 * (1 - cdf(|t|))` underflows to exactly 0.0 for large |t|, which would
+    // bias null_p -> bh_fdr -> null_q -> empirical_fdr in the tail.
+    let Some(p_value) = two_sided_t_p_value(t, df) else {
         return TestStat::skipped();
     };
     TestStat {
         t: Some(t),
-        p_value: Some(2.0 * (1.0 - dist.cdf(t.abs()))),
+        p_value: Some(p_value),
     }
 }
 
@@ -712,5 +710,40 @@ impl Rng64 {
 
     fn gen_range(&mut self, upper: usize) -> usize {
         (self.next_u64() as usize) % upper
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use statrs::distribution::{ContinuousCDF, StudentsT};
+
+    /// Regression: the null permutation path must use the stable survival
+    /// function for the two-sided p-value. The old `2 * (1 - cdf(|t|))`
+    /// formula underflows to exactly 0.0 for large |t|, putting null p-values
+    /// on a different numerical scale than the observed path and biasing
+    /// null_q / empirical_fdr in the tail.
+    #[test]
+    fn t_from_diffs_large_t_returns_nonzero_p() {
+        // Strong, low-variance signal -> very large |t|.
+        let diffs = [
+            10.0, 10.0001, 9.9999, 10.0002, 9.9998, 10.0001, 9.9999, 10.0,
+        ];
+        let stat = t_from_diffs(&diffs, 2);
+        let t = stat.t.expect("t computed");
+        let p = stat.p_value.expect("p computed");
+
+        // |t| is large enough that the naive cdf-subtraction underflows to 0.0.
+        let df = (diffs.len() - 1) as f64;
+        let dist = StudentsT::new(0.0, 1.0, df).unwrap();
+        let naive_p = 2.0 * (1.0 - dist.cdf(t.abs()));
+        assert_eq!(naive_p, 0.0, "test fixture must trigger the underflow case");
+
+        // The stable helper returns a strictly positive p-value.
+        assert!(p > 0.0, "stable two-sided p must be > 0, got {p}");
+        assert!(p < 1e-6, "p should be tiny for this extreme t, got {p}");
+
+        // And it must match the canonical core helper exactly.
+        assert_eq!(p, two_sided_t_p_value(t, df).unwrap());
     }
 }
