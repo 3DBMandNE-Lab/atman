@@ -174,7 +174,7 @@ pub fn run(args: Args) -> Result<()> {
         out.push('\n');
     }
 
-    std::fs::write(&args.output, out.as_bytes())
+    crate::io::atomic_write(&args.output, out.as_bytes())
         .with_context(|| format!("writing {:?}", args.output))?;
     eprintln!("asymmetry: wrote {:?}", args.output);
 
