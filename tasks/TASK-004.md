@@ -1,11 +1,11 @@
 # TASK-004 — null: use numerically stable two-sided p-value
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-a7f43436fe4ec7450
 **Started:** 2026-05-29T06:43:48+00:00
-**Updated:** 2026-05-29T06:47:31Z
+**Updated:** 2026-05-29T07:37:11+00:00
 <!-- kanban-status:end -->
 
 ## Plan
