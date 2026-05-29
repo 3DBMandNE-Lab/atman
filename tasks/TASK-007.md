@@ -1,11 +1,11 @@
 # TASK-007 — limma: BH-adjust the per-feature F-test p-values
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-a043039f9c58886ee
 **Started:** 2026-05-29T07:53:57+00:00
-**Updated:** 2026-05-29T07:55:53Z
+**Updated:** 2026-05-29T08:08:40+00:00
 <!-- kanban-status:end -->
 
 ## Plan
