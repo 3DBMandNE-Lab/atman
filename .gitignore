@@ -11,6 +11,3 @@ mdpdf.log
 
 # Internal planning docs / probe findings — never committed
 docs/superpowers/
-
-# Kanban orchestration operator event log (not git-committed; see scripts/kanban_server.py)
-tasks/.events.log
