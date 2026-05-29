@@ -41,6 +41,12 @@ pub struct Args {
     #[arg(long, default_value_t = 3)]
     min_detected: usize,
 
+    /// Minimum detected observations required in EACH condition before an abundance
+    /// effect is reported. Guards against one-sided splits (e.g. 3-vs-0) where the
+    /// condition coefficient carries no between-group contrast.
+    #[arg(long, default_value_t = 2)]
+    min_detected_per_condition: usize,
+
     /// Minimum non-detected observations required for logistic detection testing.
     #[arg(long, default_value_t = 3)]
     min_missing: usize,
@@ -180,6 +186,7 @@ pub fn run(args: Args) -> Result<()> {
             "summary-output": summary_path.display().to_string(),
             "min-samples": args.min_samples,
             "min-detected": args.min_detected,
+            "min-detected-per-condition": args.min_detected_per_condition,
             "min-missing": args.min_missing,
             "q-threshold": args.q_threshold,
             "max-iter": args.max_iter,
@@ -221,6 +228,9 @@ fn compute_rows(
             .or_default()
             .insert(m.sample_id.clone(), m.clone());
     }
+
+    // Built once; reused for every protein's detection z-test.
+    let standard_normal = Normal::new(0.0, 1.0).expect("standard normal");
 
     let mut out = Vec::new();
     for (a, b) in comparisons {
@@ -316,7 +326,7 @@ fn compute_rows(
                             let log_or = fit.beta[1];
                             let se = fit.se[1];
                             let z = log_or / se;
-                            let p = normal_two_sided_p(z);
+                            let p = normal_two_sided_p(&standard_normal, z);
                             (Some(log_or), Some(log_or.exp()), Some(z), Some(p))
                         }
                         _ => {
@@ -331,6 +341,14 @@ fn compute_rows(
                     if !skip.contains(&"insufficient_detected") {
                         skip.push("insufficient_detected_abundance");
                     }
+                    (None, None, None)
+                } else if n_detected_a < args.min_detected_per_condition
+                    || n_detected_b < args.min_detected_per_condition
+                {
+                    // One-sided detection (e.g. all detected samples in a single
+                    // condition): the OLS condition coefficient has no real
+                    // between-group contrast even if the rank guard passes.
+                    skip.push("one_sided_detection");
                     (None, None, None)
                 } else {
                     match ols(&abundance_design, &y_abundance, args.min_detected) {
@@ -521,11 +539,10 @@ fn inverse_from_cholesky(l: &[Vec<f64>]) -> Vec<Vec<f64>> {
     out
 }
 
-fn normal_two_sided_p(z: f64) -> f64 {
+fn normal_two_sided_p(dist: &Normal, z: f64) -> f64 {
     if !z.is_finite() {
         return f64::NAN;
     }
-    let dist = Normal::new(0.0, 1.0).expect("standard normal");
     (2.0 * dist.sf(z.abs())).clamp(0.0, 1.0)
 }
 
