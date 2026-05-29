@@ -114,8 +114,8 @@ cargo install --path crates/atman
 Or build a container:
 
 ```bash
-docker build -t atman:1.0.0 .
-docker run --rm atman:1.0.0 --help
+docker build -t atman:1.1.0 .
+docker run --rm atman:1.1.0 --help
 ```
 
 ## Commands
