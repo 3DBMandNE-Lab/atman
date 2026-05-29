@@ -1,11 +1,11 @@
 # TASK-009 — detectability: per-condition minimum + dead-code cleanup
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-a81e1655881c39b4a
 **Started:** 2026-05-29T07:53:57+00:00
-**Updated:** 2026-05-29T07:58:13+00:00
+**Updated:** 2026-05-29T08:08:41+00:00
 <!-- kanban-status:end -->
 
 ## Plan
