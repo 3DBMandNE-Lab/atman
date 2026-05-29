@@ -60,6 +60,7 @@ fn parse_contrast_list(list: &str) -> Result<Vec<(String, String)>> {
 /// the contrast list in its observed levels.
 pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()> {
     use atman_core::de::{contrast_inference, ols, OlsOutcome};
+    use statrs::distribution::{ContinuousCDF, StudentsT};
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
@@ -246,6 +247,16 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
         let contrast_label_for = |(a, b): &(String, String)| format!("{a}-{b}");
         match ols(&design_cc, &y_cc, args.min_pairs) {
             OlsOutcome::Computed(fit) => {
+                // Per-contrast CI critical value must match the t-based
+                // raw p-value (from `contrast_inference`): use the two-sided
+                // 97.5% quantile of Student's t at the fit's df, not a fixed
+                // 1.96 z-multiplier (which disagrees at small df). The Sidak
+                // ADJUSTED p (1−(1−p)^m) is a per-contrast single-step family
+                // correction and is unchanged; only ci_low/ci_high move.
+                let t_crit = StudentsT::new(0.0, 1.0, fit.df)
+                    .ok()
+                    .map(|d| d.inverse_cdf(0.975))
+                    .unwrap_or(1.959963985);
                 let mut raw_ps: Vec<f64> = Vec::with_capacity(m_contrasts);
                 let mut ests: Vec<f64> = Vec::with_capacity(m_contrasts);
                 let mut ses: Vec<f64> = Vec::with_capacity(m_contrasts);
@@ -314,12 +325,12 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
                         },
                         effect_size_method: "ols-posthoc-sidak".into(),
                         ci_low: if ests[i].is_finite() && ses[i].is_finite() {
-                            Some(ests[i] - 1.96 * ses[i])
+                            Some(ests[i] - t_crit * ses[i])
                         } else {
                             None
                         },
                         ci_high: if ests[i].is_finite() && ses[i].is_finite() {
-                            Some(ests[i] + 1.96 * ses[i])
+                            Some(ests[i] + t_crit * ses[i])
                         } else {
                             None
                         },
