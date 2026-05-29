@@ -167,14 +167,18 @@ pub struct MeasurementRecord {
 }
 
 impl MeasurementRecord {
-    /// Returns `None` when the record has been masked by QC, otherwise the
-    /// f64 abundance. Every downstream consumer that needs the *effective*
-    /// value should go through this accessor.
+    /// Returns `None` when the record has been masked by QC or carries a
+    /// non-finite abundance, otherwise the f64 abundance. Every downstream
+    /// consumer that needs the *effective* value should go through this
+    /// accessor. The finiteness guard mirrors
+    /// `PeptideMeasurementRecord::effective_abundance` and prevents NaN/inf
+    /// (which `f64::parse` accepts) from propagating into downstream models.
     pub fn effective_abundance(&self) -> Option<f64> {
-        if self.dropped_by_qc {
+        let value = self.abundance.as_f64();
+        if self.dropped_by_qc || !value.is_finite() {
             None
         } else {
-            Some(self.abundance.as_f64())
+            Some(value)
         }
     }
 }

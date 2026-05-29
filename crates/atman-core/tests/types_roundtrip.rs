@@ -46,6 +46,29 @@ fn effective_abundance_accessor_honors_qc() {
 }
 
 #[test]
+fn effective_abundance_rejects_non_finite_on_non_dropped_row() {
+    // `f64::parse` accepts the literal strings "NaN"/"inf", so a non-dropped
+    // row can carry a non-finite abundance. The accessor must return `None`
+    // rather than leaking NaN/inf into downstream models, matching
+    // `PeptideMeasurementRecord::effective_abundance`.
+    let mut rec = make_record();
+    assert!(!rec.dropped_by_qc);
+
+    rec.abundance = Abundance::Log2Npx(f64::NAN);
+    assert_eq!(rec.effective_abundance(), None);
+
+    rec.abundance = Abundance::Log2Npx(f64::INFINITY);
+    assert_eq!(rec.effective_abundance(), None);
+
+    rec.abundance = Abundance::Log2Npx(f64::NEG_INFINITY);
+    assert_eq!(rec.effective_abundance(), None);
+
+    // A finite value on the same non-dropped row still passes through.
+    rec.abundance = Abundance::Log2Npx(2.5);
+    assert_eq!(rec.effective_abundance(), Some(2.5));
+}
+
+#[test]
 fn qc_flag_warn_carries_reason() {
     let f = QcFlag::Warn("plate deviation".to_string());
     match f {
