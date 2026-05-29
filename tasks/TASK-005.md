@@ -1,11 +1,11 @@
 # TASK-005 — ensemble: stop treating correlated method p-values as independent
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-a6183a81b19082def
 **Started:** 2026-05-29T06:43:48+00:00
-**Updated:** 2026-05-29T07:44:57+00:00
+**Updated:** 2026-05-29T07:53:20+00:00
 <!-- kanban-status:end -->
 
 ## Plan
