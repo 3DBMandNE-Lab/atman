@@ -1,11 +1,11 @@
 # TASK-023 — post-hoc Sidak: t-based critical value for CI
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-ae80512b0311fe4b9
 **Started:** 2026-05-29T21:42:28+00:00
-**Updated:** 2026-05-29T21:44:22Z
+**Updated:** 2026-05-29T21:46:55+00:00
 <!-- kanban-status:end -->
 
 ## Plan
