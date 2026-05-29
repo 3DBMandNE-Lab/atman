@@ -13,6 +13,7 @@ pub mod enrich;
 pub mod enrich_gprofiler;
 pub mod fold_change;
 pub mod ingest_matrix;
+pub mod jaccard_cluster;
 pub mod matrix;
 pub mod meta;
 pub mod module_de;
