@@ -1,8 +1,13 @@
 //! Cross-method consensus dispatcher (`atman de --test ensemble`).
 //!
 //! Fans out to every requested DE method in a tempdir, aggregates
-//! per (comparison, protein) into a Stouffer-combined ensemble
-//! p / q, and assigns a VALIDATED / PROVISIONAL / INSUFFICIENT grade.
+//! per (comparison, protein), and assigns a VALIDATED / PROVISIONAL /
+//! INSUFFICIENT grade from method agreement (how many methods clear
+//! per-method significance) and effect-sign consistency. A
+//! Stouffer-combined `ensemble_p`/`ensemble_q` is also reported but
+//! is a heuristic ranking column only — it assumes independence the
+//! methods do not have (they share one abundance matrix) and does NOT
+//! drive the grade (see `atman_core::ensemble` docs).
 //! Methods that fail (e.g. `msqrob` without `--peptide-measurements`)
 //! are collected into `methods_skipped` rather than aborting the
 //! whole run.
@@ -179,8 +184,14 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
             methods_skipped: methods_skipped_str.clone(),
         });
     }
-    // BH on ensemble_p within each comparison, then assign grade per
-    // protein from (ensemble_q, sign consistency).
+    // The grade is assigned from method-agreement quantities that do
+    // NOT assume independence: how many methods individually clear
+    // per-method significance (`n_significant`) and how consistent
+    // their effect sign is (`n_sign_consistent`). The Stouffer
+    // `ensemble_p` is anti-conservative here (all methods share one
+    // abundance matrix) so it is demoted to a heuristic ranking
+    // column only — BH-adjusted into `ensemble_q` for convenience but
+    // never fed into the grade. See atman_core::ensemble docs.
     for indices in by_comparison.values() {
         let ps: Vec<Option<f64>> = indices
             .iter()
@@ -191,7 +202,7 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
             ensemble_rows[i].ensemble_q = qs[j];
             let row = &ensemble_rows[i];
             let grade = assign_grade(
-                row.ensemble_q,
+                row.n_significant,
                 row.n_applied,
                 row.n_sign_consistent,
                 thresholds,
@@ -228,12 +239,7 @@ pub(super) fn run_ensemble(args: Args, started_at: SystemTime) -> Result<()> {
     let finished_at = SystemTime::now();
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
-        &[
-            "measurements.tsv",
-            "measurements.tsv",
-            "samples.tsv",
-            "proteins.tsv",
-        ],
+        &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     )?;
     let outputs: Vec<PathBuf> = vec![results_path.clone(), ensemble_path.clone()];
     let sidecar = sidecar_path_for(&results_path);

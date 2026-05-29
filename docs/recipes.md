@@ -146,19 +146,39 @@ atman de \
 
 ## Cross-method ensemble consensus
 
-Runs every listed method on the same canonical inputs, Stouffer-combines
-per-method p-values within each `(comparison, protein)`, BH-FDRs across
-proteins, and assigns a VALIDATED / PROVISIONAL / INSUFFICIENT grade
-based on ensemble q + sign consistency. Methods with missing inputs
-(msqrob without `--peptide-measurements`, etc.) are auto-skipped, not an
-error.
+Runs every listed method on the same canonical inputs and, within each
+`(comparison, protein)`, assigns a VALIDATED / PROVISIONAL /
+INSUFFICIENT grade from method agreement — how many of the fitted
+methods individually clear per-method BH-q significance
+(`n_significant`) and how consistent their effect sign is
+(`n_sign_consistent`). Methods with missing inputs (msqrob without
+`--peptide-measurements`, etc.) are auto-skipped, not an error.
+
+The grade is:
+
+- **VALIDATED** — every applied method is individually significant and
+  agrees on the effect direction.
+- **PROVISIONAL** — a majority of applied methods are significant and
+  agree on direction.
+- **INSUFFICIENT** — otherwise.
+
+(The exact fractions are tunable via `--ensemble-sign-fraction` and
+`--ensemble-provisional-fraction`; the same fraction gates both the
+significant-method fraction and the sign-consistency fraction.)
+
+**`ensemble_p` / `ensemble_q` are a heuristic, not a calibrated
+p-value.** The `de_ensemble.tsv` columns `ensemble_p` (Stouffer-combined
+per-method p) and `ensemble_q` (BH-adjusted across proteins) are emitted
+as a convenience for ranking only. Stouffer's method assumes the
+combined p-values are independent; `paired-t`, `welch-t`, `ols`,
+`mixed`, `limma`, and `msqrob` all share most of their signal on the
+same measurement matrix, so these combined p-values are
+anti-conservative. They do NOT drive the grade and must not be read as
+statistical significance.
 
 **Interpretive caveat.** Ensemble is a within-dataset robustness check,
-not independent-study meta-analysis. `paired-t`, `welch-t`, `ols`,
-`mixed`, `limma`, and `msqrob` all share most of their signal on the
-same measurement matrix, so Stouffer p-values do not combine independent
-evidence. Read VALIDATED as "the finding survives method swap on this
-dataset," not "independently replicated."
+not independent-study meta-analysis. Read VALIDATED as "the finding
+survives method swap on this dataset," not "independently replicated."
 
 ```bash
 atman de \
