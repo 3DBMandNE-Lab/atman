@@ -356,9 +356,7 @@ fn read_ranked_genes(
 }
 
 fn write_gsea_rows(path: &Path, rows: &[GseaWriteRow]) -> Result<()> {
-    let mut out = String::from(
-        "set_name\tset_size\tes\tnes\tp_value\tbh_q\tleading_edge\n",
-    );
+    let mut out = String::from("set_name\tset_size\tes\tnes\tp_value\tbh_q\tleading_edge\n");
     for row in rows {
         out.push_str(&format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",

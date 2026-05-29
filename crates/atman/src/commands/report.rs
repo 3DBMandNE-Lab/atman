@@ -60,6 +60,11 @@ fn run_qc(args: QcArgs) -> Result<()> {
 
     let report = QcReport::build(&samples, &proteins, &measurements);
     report.write(&args.output_dir)?;
+    let missingness_summary = build_missingness_summary(&samples, &proteins, &measurements);
+    write_missingness_summary(
+        &args.output_dir.join("missingness_summary.tsv"),
+        &missingness_summary,
+    )?;
 
     let warnings = report.emit_warnings(args.min_subjects, args.sparse_threshold);
     eprintln!(
@@ -75,14 +80,10 @@ fn run_qc(args: QcArgs) -> Result<()> {
     let sample_qc_path = args.output_dir.join("sample_qc.tsv");
     let protein_qc_path = args.output_dir.join("protein_qc.tsv");
     let condition_counts_path = args.output_dir.join("condition_counts.tsv");
+    let missingness_summary_path = args.output_dir.join("missingness_summary.tsv");
     let inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
-        &[
-            "measurements.tsv",
-            "measurements.tsv",
-            "samples.tsv",
-            "proteins.tsv",
-        ],
+        &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     )?;
     let sidecar = sidecar_path_for(&qc_summary_path);
     write_run_sidecar(
@@ -100,6 +101,7 @@ fn run_qc(args: QcArgs) -> Result<()> {
             sample_qc_path.clone(),
             protein_qc_path.clone(),
             condition_counts_path.clone(),
+            missingness_summary_path.clone(),
         ],
         started_at,
         finished_at,
@@ -160,6 +162,20 @@ struct ConditionCountRow {
     n_effective_samples: usize,
     n_effective_subjects: usize,
     n_effective_measurements: usize,
+}
+
+struct MissingnessSummaryRow {
+    scope: String,
+    id: String,
+    n_samples: usize,
+    n_proteins: usize,
+    n_expected_pairs: usize,
+    n_observed_pairs: usize,
+    n_absent_pairs: usize,
+    fraction_absent_pairs: f64,
+    n_qc_masked_observed: usize,
+    n_below_lod_observed: usize,
+    n_effective_observed: usize,
 }
 
 impl QcReport {
@@ -375,6 +391,103 @@ impl QcReport {
     }
 }
 
+fn build_missingness_summary(
+    samples: &[Sample],
+    proteins: &[ProteinIdentity],
+    measurements: &[MeasurementRecord],
+) -> Vec<MissingnessSummaryRow> {
+    let mut rows = Vec::new();
+    let all_sample_ids: BTreeSet<String> = samples.iter().map(|s| s.sample_id.clone()).collect();
+    let all_protein_keys: BTreeSet<String> = proteins
+        .iter()
+        .map(|p| protein_key(p.platform.as_str(), &p.assay_id.0))
+        .collect();
+    rows.push(missingness_row(
+        "all",
+        "all",
+        &all_sample_ids,
+        &all_protein_keys,
+        measurements,
+    ));
+
+    let mut condition_samples: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for sample in samples.iter().filter(|s| !s.is_control) {
+        if let Some(condition) = &sample.condition {
+            condition_samples
+                .entry(condition.clone())
+                .or_default()
+                .insert(sample.sample_id.clone());
+        }
+    }
+    for (condition, sample_ids) in condition_samples {
+        rows.push(missingness_row(
+            "condition",
+            &condition,
+            &sample_ids,
+            &all_protein_keys,
+            measurements,
+        ));
+    }
+
+    rows
+}
+
+fn missingness_row(
+    scope: &str,
+    id: &str,
+    sample_ids: &BTreeSet<String>,
+    protein_keys: &BTreeSet<String>,
+    measurements: &[MeasurementRecord],
+) -> MissingnessSummaryRow {
+    let mut observed_pairs = BTreeSet::new();
+    let mut n_qc_masked_observed = 0usize;
+    let mut n_below_lod_observed = 0usize;
+    let mut n_effective_observed = 0usize;
+    for measurement in measurements {
+        if !sample_ids.contains(&measurement.sample_id) {
+            continue;
+        }
+        let key = protein_key(measurement.platform.as_str(), &measurement.assay_id.0);
+        if !protein_keys.contains(&key) {
+            continue;
+        }
+        observed_pairs.insert((measurement.sample_id.clone(), key));
+        if measurement.dropped_by_qc {
+            n_qc_masked_observed += 1;
+        }
+        if measurement.below_lod {
+            n_below_lod_observed += 1;
+        }
+        if measurement.effective_abundance().is_some() {
+            n_effective_observed += 1;
+        }
+    }
+    let n_expected_pairs = sample_ids.len() * protein_keys.len();
+    let n_observed_pairs = observed_pairs.len();
+    let n_absent_pairs = n_expected_pairs.saturating_sub(n_observed_pairs);
+    MissingnessSummaryRow {
+        scope: scope.to_string(),
+        id: id.to_string(),
+        n_samples: sample_ids.len(),
+        n_proteins: protein_keys.len(),
+        n_expected_pairs,
+        n_observed_pairs,
+        n_absent_pairs,
+        fraction_absent_pairs: if n_expected_pairs == 0 {
+            f64::NAN
+        } else {
+            n_absent_pairs as f64 / n_expected_pairs as f64
+        },
+        n_qc_masked_observed,
+        n_below_lod_observed,
+        n_effective_observed,
+    }
+}
+
+fn protein_key(platform: &str, assay_id: &str) -> String {
+    format!("{platform}\t{assay_id}")
+}
+
 fn add_count(count: &mut Count, m: &MeasurementRecord, effective: bool) {
     count.total += 1;
     if effective {
@@ -446,6 +559,41 @@ fn write_condition_counts(path: &Path, rows: &[ConditionCountRow]) -> Result<()>
         buf.push_str(&r.n_effective_subjects.to_string());
         buf.push('\t');
         buf.push_str(&r.n_effective_measurements.to_string());
+        buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+fn write_missingness_summary(path: &Path, rows: &[MissingnessSummaryRow]) -> Result<()> {
+    let mut buf = String::from(
+        "scope\tid\tn_samples\tn_proteins\tn_expected_pairs\tn_observed_pairs\t\
+         n_absent_pairs\tfraction_absent_pairs\tn_qc_masked_observed\t\
+         n_below_lod_observed\tn_effective_observed\n",
+    );
+    for r in rows {
+        buf.push_str(&r.scope);
+        buf.push('\t');
+        buf.push_str(&r.id);
+        buf.push('\t');
+        buf.push_str(&r.n_samples.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_proteins.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_expected_pairs.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_observed_pairs.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_absent_pairs.to_string());
+        buf.push('\t');
+        if r.fraction_absent_pairs.is_finite() {
+            buf.push_str(&format_float(r.fraction_absent_pairs));
+        }
+        buf.push('\t');
+        buf.push_str(&r.n_qc_masked_observed.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_below_lod_observed.to_string());
+        buf.push('\t');
+        buf.push_str(&r.n_effective_observed.to_string());
         buf.push('\n');
     }
     atomic_write(path, buf.as_bytes())

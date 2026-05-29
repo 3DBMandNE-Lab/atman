@@ -1,6 +1,6 @@
 //! `atman de --test paired-t` must accept the canonical
-//! `--paired-by subject_id` (default) and reject other values with an
-//! informative error pointing at the canonical name.
+//! `--paired-by subject_id` (default), legacy `participant`, and arbitrary
+//! explicit pairing columns when present.
 
 use std::process::{Command, Output};
 
@@ -14,15 +14,15 @@ fn write_paired_fixture(dir: &std::path::Path) {
     std::fs::write(
         dir.join("samples.tsv"),
         "\
-sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n\
-A1\tP1\tCase\t0\tcsf\t1\n\
-B1\tP1\tControl\t0\tcsf\t2\n\
-A2\tP2\tCase\t0\tcsf\t3\n\
-B2\tP2\tControl\t0\tcsf\t4\n\
-A3\tP3\tCase\t0\tcsf\t5\n\
-B3\tP3\tControl\t0\tcsf\t6\n\
-A4\tP4\tCase\t0\tcsf\t7\n\
-B4\tP4\tControl\t0\tcsf\t8\n",
+sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\tparticipant\n\
+A1\tP1\tCase\t0\tcsf\t1\tL1\n\
+B1\tP1\tControl\t0\tcsf\t2\tL1\n\
+A2\tP2\tCase\t0\tcsf\t3\tL2\n\
+B2\tP2\tControl\t0\tcsf\t4\tL2\n\
+A3\tP3\tCase\t0\tcsf\t5\tL3\n\
+B3\tP3\tControl\t0\tcsf\t6\tL3\n\
+A4\tP4\tCase\t0\tcsf\t7\tL4\n\
+B4\tP4\tControl\t0\tcsf\t8\tL4\n",
     )
     .unwrap();
     std::fs::write(
@@ -103,19 +103,14 @@ fn paired_t_works_with_explicit_subject_id() {
 }
 
 #[test]
-fn paired_t_rejects_legacy_participant_alias() {
+fn paired_t_accepts_legacy_participant_alias() {
     let tmp = tempfile::tempdir().unwrap();
     write_paired_fixture(tmp.path());
     let out = run_paired_t(tmp.path(), Some("participant"));
     assert!(
-        !out.status.success(),
-        "--paired-by participant must be rejected; the legacy alias was removed. stderr:\n{}",
+        out.status.success(),
+        "--paired-by participant must use the participant column; stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("subject_id"),
-        "rejection message should point at the canonical `subject_id`; stderr:\n{stderr}"
     );
 }
 
@@ -126,12 +121,12 @@ fn paired_t_rejects_arbitrary_paired_by_with_helpful_error() {
     let out = run_paired_t(tmp.path(), Some("not_a_real_column"));
     assert!(
         !out.status.success(),
-        "unsupported --paired-by must be rejected; stderr:\n{}",
+        "missing --paired-by column must be rejected; stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("subject_id"),
-        "rejection message should mention `subject_id` so the user knows what to use; stderr:\n{stderr}"
+        stderr.contains("not_a_real_column"),
+        "rejection message should mention the missing pairing column; stderr:\n{stderr}"
     );
 }

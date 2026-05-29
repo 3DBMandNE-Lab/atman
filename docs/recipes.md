@@ -209,6 +209,130 @@ atman null \
     --seed 1
 ```
 
+## Detection-aware proteomics
+
+`atman detectability` keeps abundance and detection as separate outcomes.
+For each requested comparison it fits a logistic detection model
+(`detected ~ condition + covariates`) and, separately, a detected-only
+abundance model (`abundance ~ condition + covariates`). Missing or
+below-LOD values are not imputed.
+
+```bash
+atman detectability \
+    --input-dir out \
+    --groups "Case-Control" \
+    --design "~ age + sex + batch" \
+    --min-samples 5 \
+    --min-detected 3 \
+    --min-missing 3 \
+    --output out/detectability.tsv
+```
+
+Output columns include detection counts by group, `detection_or`,
+`detection_q`, `abundance_effect_detected_only`, `abundance_q`, and a
+classification: `detection_shifted`, `abundance_shifted`,
+`coupled_shift`, `not_significant`, or `uninformative_sparse`. A companion
+`*_summary.tsv` flags designs where the detection layer is structurally
+uninformative, for example plex-balanced TMT data where almost every protein
+has identical detected/missing counts across conditions.
+
+## TMT plex recovery from absence pattern
+
+`atman recover-plex` reconstructs the TMT plex assignment when ingest dropped
+`plate_id`. It exploits the fact that on TMT data a peptide that fails to
+quantify is missing for *every* sample in its plex — so plex membership is
+latent in the per-sample absence pattern. Sample-sample Jaccard distance on
+the binary absence vector clusters samples back into their plexes via
+connected-components at a strict threshold (default 0.05).
+
+```bash
+atman recover-plex \
+    --input-dir out \
+    --output out/recovered_plex.tsv \
+    --augmented-samples-output out/samples_with_plex.tsv
+```
+
+Outputs:
+
+- `recovered_plex.tsv` — per-sample `recovered_plex_id`, cluster size, mean
+  within-cluster Jaccard distance.
+- `recovered_plex_quality.tsv` — global metrics including
+  `mean_within_jaccard_distance`, `mean_between_jaccard_distance`,
+  `separation_ratio`, and a `diagnostic` of `plex_coherent`,
+  `weak_plex_signal`, `atypical_cluster_size`, or
+  `absence_not_plex_coherent`.
+- Optional `--augmented-samples-output` writes a copy of `samples.tsv` with
+  a new `recovered_plex_id` column. Only emitted when
+  `diagnostic == plex_coherent`, to avoid downstream poisoning.
+
+Use the recovered id as a covariate in any downstream design, e.g.
+`atman detectability --design "~ recovered_plex_id"` or
+`atman de --design "~ recovered_plex_id"`. On non-TMT (or any data where
+absence is not plex-categorical) the `diagnostic` will fail honestly and the
+augmented samples file is suppressed.
+
+When the cohort has a paired design (e.g. tumor / paired_non_tumor) but the
+canonical schema doesn't carry a real patient id, `--infer-pairs A-B` matches
+each sample of condition A to its nearest-stem-distance partner of condition
+B *within the same recovered plex*. Inference succeeds only when every A has
+a unique B partner at distance ≤ `--pair-stem-distance` (default 1); on
+success the augmented samples file gains a `patient_id` column and a
+companion `*_pairs.tsv` lists the pairs and their stem distances. Use the
+recovered patient id as the pairing covariate in DE, e.g.
+`atman detectability --design "~ patient_id"`.
+
+## Protein absence topology
+
+`atman absence-topology` is the protein-side dual of `recover-plex`: it
+clusters proteins by the set of samples in which they fail to quantify.
+Two proteins that go missing in the same samples (e.g. share a peptide-level
+fragility, or always drop out of the same plexes) end up in the same
+cluster. Proteins with fewer than `--min-absent` (default 5) absences are
+reported as the single `complete` group.
+
+```bash
+atman absence-topology \
+    --input-dir out \
+    --output out/absence_topology.tsv \
+    --min-absent 5
+```
+
+Outputs:
+
+- `absence_topology.tsv` — per-protein `cluster_id`, `cluster_size`,
+  `n_absent`, `mean_within_jaccard_distance`.
+- `absence_topology_quality.tsv` — global metrics including
+  `separation_ratio`, `n_complete`, `n_singletons`, and a `diagnostic` of
+  `protein_coherent`, `weak_signal`, or `absence_not_protein_coherent`.
+
+On CPTAC TMT data the dominant pattern is per-protein-unique fragility
+(most clusterable proteins land in singletons), but small fragility cliques
+do emerge — typically 2-30 proteins that all fail in exactly the same plex.
+
+## Leave-one-pair-out robustness for paired DE
+
+`atman robust-paired` runs a paired t on the full set of pairs and on every
+n-1 jackknife replicate (one pair dropped). For each protein it reports
+`loso_sign_stability` (fraction of replicates retaining the sign of
+`mean_diff`), `loso_p_lt_05_stability` (fraction with `p < 0.05`),
+`loso_min_t` / `loso_max_t`, `loso_max_abs_t_delta`, and
+`most_influential_pair_id` (the pair whose deletion changes |t| most).
+
+```bash
+atman robust-paired \
+    --input-dir out \
+    --groups "tumor-paired_non_tumor" \
+    --paired-by patient_id \
+    --output out/robust_paired.tsv
+```
+
+Pairing comes from a column in `samples.tsv` (default `patient_id`) — for
+example, the column emitted by `atman recover-plex --infer-pairs`. The
+companion `*_summary.tsv` reports how many proteins are simultaneously
+significant under the full test (q < 0.05) and robust under jackknife
+(`sign_stability ≥ 0.999` AND `p_lt_05_stability ≥ 0.95`); the gap exposes
+calls that depend on a small number of subjects.
+
 ## Module discovery (WGCNA soft-threshold)
 
 Data-driven module discovery from canonical measurements, written as a

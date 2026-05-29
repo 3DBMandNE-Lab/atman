@@ -78,4 +78,9 @@ spectronaut_report\tC1\tP00002\tGENE2\tspectronaut\t8.0\t8.0\t8.0\tlog2_intensit
 
     let conditions = std::fs::read_to_string(output_dir.join("condition_counts.tsv")).unwrap();
     assert!(conditions.contains("Control\t2\t2\t2\t2\t3\n"));
+
+    let missingness = std::fs::read_to_string(output_dir.join("missingness_summary.tsv")).unwrap();
+    assert!(missingness.contains("all\tall\t4\t2\t8\t4\t4\t0.5\t1\t1\t3\n"));
+    assert!(missingness.contains("condition\tControl\t2\t2\t4\t3\t1\t0.25\t0\t1\t3\n"));
+    assert!(missingness.contains("condition\tCase\t1\t2\t2\t1\t1\t0.5\t1\t0\t0\n"));
 }

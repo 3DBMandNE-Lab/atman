@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 
+pub mod absence_topology;
 pub mod align;
 pub mod asymmetry;
 pub mod bench;
@@ -7,6 +8,7 @@ pub mod bootstrap;
 pub mod coupling;
 pub mod de;
 pub mod decompose;
+pub mod detectability;
 pub mod enrich;
 pub mod enrich_gprofiler;
 pub mod fold_change;
@@ -21,8 +23,10 @@ pub mod null;
 pub mod programs;
 pub mod qc;
 pub mod ratio;
+pub mod recover_plex;
 pub mod report;
 pub mod residuals;
+pub mod robust_paired;
 pub mod robustness;
 pub mod run;
 pub mod score;

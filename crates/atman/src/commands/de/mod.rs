@@ -291,13 +291,10 @@ pub fn run(args: Args) -> Result<()> {
         || args.test == "limma"
         || args.test == "msqrob"
         || args.test == "ensemble";
-    if !is_unpaired && args.paired_by != "subject_id" {
-        anyhow::bail!(
-            "paired-by {:?} not supported for paired tests; pairing currently uses the \
-             canonical `subject_id` column from samples.tsv.",
-            args.paired_by
-        );
-    }
+    // `--paired-by` accepts any column in samples.tsv; the value of that column
+    // overrides the in-memory `subject_id` field below. The canonical default
+    // remains `subject_id`. The legacy alias `participant` is handled the same
+    // way when that column is present.
     if args.min_pairs < 2 {
         anyhow::bail!("min-pairs must be >= 2");
     }
@@ -581,7 +578,14 @@ pub fn run(args: Args) -> Result<()> {
 
     // Read inputs.
     let measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
-    let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
+    let mut samples = read_samples(&args.input_dir.join("samples.tsv"))?;
+    if args.paired_by != "subject_id" {
+        override_subject_id(
+            &mut samples,
+            &args.input_dir.join("samples.tsv"),
+            &args.paired_by,
+        )?;
+    }
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
     let comparisons = resolve_comparisons(
         args.groups.as_deref(),
@@ -686,8 +690,7 @@ pub fn run(args: Args) -> Result<()> {
         // lookup to compute paired differences.
         if args.test == "ols"
             || args.test == "mixed"
-            || (!args.adjust_for.is_empty()
-                && (args.test == "welch-t" || args.test == "paired-t"))
+            || (!args.adjust_for.is_empty() && (args.test == "welch-t" || args.test == "paired-t"))
         {
             cells_by_sample.insert(
                 (panel.clone(), gene.clone(), m.sample_id.clone()),
@@ -746,53 +749,67 @@ pub fn run(args: Args) -> Result<()> {
     // Each file is wide-format: sample_id | cov1 | cov2 | …
     // Multiple files are joined; overlapping covariate names are an error.
     // Supported for --test limma and --test msqrob (gate enforced above).
-    let external_covariates: Option<std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>> =
-        if args.adjust_for.is_empty() {
-            None
-        } else {
-            use atman_core::de::{join_external_covariates, read_external_covariates};
-            let mut merged: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>> =
-                std::collections::BTreeMap::new();
-            for path in &args.adjust_for {
-                let ext = read_external_covariates(path)
-                    .map_err(|e| anyhow::anyhow!("--adjust-for {:?}: {}", path, e))?;
-                // Merge into `merged`: for each sample, add its covariate columns.
-                for (sample_id, covs) in ext {
-                    let entry = merged.entry(sample_id).or_default();
-                    for (cov_name, cov_val) in covs {
-                        if entry.contains_key(&cov_name) {
-                            anyhow::bail!(
-                                "--adjust-for: duplicate covariate name {:?} found in {:?}",
-                                cov_name,
-                                path
-                            );
-                        }
-                        entry.insert(cov_name, cov_val);
+    let external_covariates: Option<
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>,
+    > = if args.adjust_for.is_empty() {
+        None
+    } else {
+        use atman_core::de::{join_external_covariates, read_external_covariates};
+        let mut merged: std::collections::BTreeMap<
+            String,
+            std::collections::BTreeMap<String, f64>,
+        > = std::collections::BTreeMap::new();
+        for path in &args.adjust_for {
+            let ext = read_external_covariates(path)
+                .map_err(|e| anyhow::anyhow!("--adjust-for {:?}: {}", path, e))?;
+            // Merge into `merged`: for each sample, add its covariate columns.
+            for (sample_id, covs) in ext {
+                let entry = merged.entry(sample_id).or_default();
+                for (cov_name, cov_val) in covs {
+                    if entry.contains_key(&cov_name) {
+                        anyhow::bail!(
+                            "--adjust-for: duplicate covariate name {:?} found in {:?}",
+                            cov_name,
+                            path
+                        );
                     }
+                    entry.insert(cov_name, cov_val);
                 }
             }
-            // Validate: every non-control sample with a condition must be in the merged map.
-            let relevant_samples: Vec<&atman_core::Sample> = samples
-                .iter()
-                .filter(|s| !s.is_control && s.condition.is_some())
-                .collect();
-            let ref_samples: Vec<atman_core::Sample> =
-                relevant_samples.iter().map(|s| (*s).clone()).collect();
-            join_external_covariates(&ref_samples, &merged)
-                .map_err(|e| anyhow::anyhow!("--adjust-for join failed: {}", e))?;
-            Some(merged)
-        };
+        }
+        // Validate: every non-control sample with a condition must be in the merged map.
+        let relevant_samples: Vec<&atman_core::Sample> = samples
+            .iter()
+            .filter(|s| !s.is_control && s.condition.is_some())
+            .collect();
+        let ref_samples: Vec<atman_core::Sample> =
+            relevant_samples.iter().map(|s| (*s).clone()).collect();
+        join_external_covariates(&ref_samples, &merged)
+            .map_err(|e| anyhow::anyhow!("--adjust-for join failed: {}", e))?;
+        Some(merged)
+    };
 
     if args.test == "limma" {
-        let (limma_rows, limma_reports) =
-            run_limma(&args, &samples, &proteins, &measurements, &comparisons, external_covariates.as_ref())?;
+        let (limma_rows, limma_reports) = run_limma(
+            &args,
+            &samples,
+            &proteins,
+            &measurements,
+            &comparisons,
+            external_covariates.as_ref(),
+        )?;
         all_rows.extend(limma_rows);
         report_rows.extend(limma_reports);
     }
 
     if args.test == "msqrob" {
-        let (msqrob_rows, msqrob_reports) =
-            run_msqrob(&args, &samples, &proteins, &comparisons, external_covariates.as_ref())?;
+        let (msqrob_rows, msqrob_reports) = run_msqrob(
+            &args,
+            &samples,
+            &proteins,
+            &comparisons,
+            external_covariates.as_ref(),
+        )?;
         all_rows.extend(msqrob_rows);
         report_rows.extend(msqrob_reports);
     }
@@ -812,8 +829,7 @@ pub fn run(args: Args) -> Result<()> {
                 let setup = model_setup
                     .as_ref()
                     .expect("model_setup populated when is_ols_routed");
-                let mut design =
-                    build_ols_design(&samples, comp_a, comp_b, setup)?;
+                let mut design = build_ols_design(&samples, comp_a, comp_b, setup)?;
                 // Augment with --adjust-for external covariate columns.
                 if let Some(ext) = external_covariates.as_ref() {
                     augment_ols_design_with_external(&mut design, ext, comp_a, comp_b)?;
@@ -872,9 +888,7 @@ pub fn run(args: Args) -> Result<()> {
                         ),
                         RobustStats::default(),
                     )
-                } else if args.test == "ols"
-                    || (is_ols_routed && args.test == "welch-t")
-                {
+                } else if args.test == "ols" || (is_ols_routed && args.test == "welch-t") {
                     // OLS path: also handles welch-t + --adjust-for (routed to
                     // plain OLS; HC3 robust SE is not available without new
                     // dependencies — documented in DONE_WITH_CONCERNS K6).
@@ -957,9 +971,17 @@ pub fn run(args: Args) -> Result<()> {
                     // covariate_diff_k = cov_b_k - cov_a_k, then fits
                     // OLS: d ~ 1 + cov_diff_1 + cov_diff_2 + ...
                     // The intercept is the adjusted mean paired difference.
-                    let ext = external_covariates.as_ref().expect("external_covariates set");
+                    let ext = external_covariates
+                        .as_ref()
+                        .expect("external_covariates set");
                     let result = paired_t_covariate_adjusted(
-                        va, vb, ext, &sample_by_id, comp_a, comp_b, args.min_pairs,
+                        va,
+                        vb,
+                        ext,
+                        &sample_by_id,
+                        comp_a,
+                        comp_b,
+                        args.min_pairs,
                     );
                     (result, RobustStats::default())
                 } else if is_unpaired {
@@ -1328,6 +1350,38 @@ pub fn run(args: Args) -> Result<()> {
         Some(extras),
     )?;
     eprintln!("de: sidecar={}", sidecar.display());
+    Ok(())
+}
+
+fn override_subject_id(
+    samples: &mut [Sample],
+    samples_path: &std::path::Path,
+    column: &str,
+) -> Result<()> {
+    use crate::io::need_col;
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(samples_path)
+        .with_context(|| format!("opening {:?}", samples_path))?;
+    let headers = reader.headers()?.clone();
+    let c_sample = need_col(&headers, "sample_id", samples_path)?;
+    let c_pair = need_col(&headers, column, samples_path)
+        .with_context(|| format!("--paired-by column {column:?} not found in samples.tsv"))?;
+    let mut by_sample: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for row in reader.records() {
+        let row = row?;
+        by_sample.insert(row[c_sample].to_string(), row[c_pair].to_string());
+    }
+    for s in samples.iter_mut() {
+        if let Some(v) = by_sample.get(&s.sample_id) {
+            if v.is_empty() {
+                s.subject_id = None;
+            } else {
+                s.subject_id = Some(v.clone());
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2303,8 +2357,12 @@ fn paired_t_covariate_adjusted(
             None => continue,
         };
         match s.condition.as_deref() {
-            Some(c) if c == comp_a => { subj_to_sid_a.insert(subj, sid); }
-            Some(c) if c == comp_b => { subj_to_sid_b.insert(subj, sid); }
+            Some(c) if c == comp_a => {
+                subj_to_sid_a.insert(subj, sid);
+            }
+            Some(c) if c == comp_b => {
+                subj_to_sid_b.insert(subj, sid);
+            }
             _ => {}
         }
     }
@@ -2314,10 +2372,12 @@ fn paired_t_covariate_adjusted(
         let any = ext.values().next();
         match any {
             Some(m) => m.keys().cloned().collect(),
-            None => return PairedTResult::Skipped {
-                reason: SkipReason::InsufficientPairs,
-                n_pairs: 0,
-            },
+            None => {
+                return PairedTResult::Skipped {
+                    reason: SkipReason::InsufficientPairs,
+                    n_pairs: 0,
+                }
+            }
         }
     };
     let n_cov = ext_cov_names.len();
@@ -2333,27 +2393,64 @@ fn paired_t_covariate_adjusted(
         .collect();
 
     for subj in &subjects {
-        let abund_a = match a_by_subj.get(subj) { Some(v) => *v, None => continue };
-        let abund_b = match b_by_subj.get(subj) { Some(v) => *v, None => continue };
-        let sid_a = match subj_to_sid_a.get(subj) { Some(s) => *s, None => continue };
-        let sid_b = match subj_to_sid_b.get(subj) { Some(s) => *s, None => continue };
+        let abund_a = match a_by_subj.get(subj) {
+            Some(v) => *v,
+            None => continue,
+        };
+        let abund_b = match b_by_subj.get(subj) {
+            Some(v) => *v,
+            None => continue,
+        };
+        let sid_a = match subj_to_sid_a.get(subj) {
+            Some(s) => *s,
+            None => continue,
+        };
+        let sid_b = match subj_to_sid_b.get(subj) {
+            Some(s) => *s,
+            None => continue,
+        };
 
-        let cov_a = match ext.get(sid_a) { Some(m) => m, None => continue };
-        let cov_b = match ext.get(sid_b) { Some(m) => m, None => continue };
+        let cov_a = match ext.get(sid_a) {
+            Some(m) => m,
+            None => continue,
+        };
+        let cov_b = match ext.get(sid_b) {
+            Some(m) => m,
+            None => continue,
+        };
 
         let mut cds: Vec<f64> = Vec::with_capacity(n_cov);
         let mut valid = true;
         for name in &ext_cov_names {
-            let va_cov = match cov_a.get(name) { Some(v) => *v, None => { valid = false; break; } };
-            let vb_cov = match cov_b.get(name) { Some(v) => *v, None => { valid = false; break; } };
+            let va_cov = match cov_a.get(name) {
+                Some(v) => *v,
+                None => {
+                    valid = false;
+                    break;
+                }
+            };
+            let vb_cov = match cov_b.get(name) {
+                Some(v) => *v,
+                None => {
+                    valid = false;
+                    break;
+                }
+            };
             // cov_a is the comp_a sample (e.g. condition "b"), cov_b is comp_b (e.g. condition "a").
             // Covariate diff = comp_a_cov - comp_b_cov, consistent with abundance diff sign.
             let d = va_cov - vb_cov;
-            if !d.is_finite() { valid = false; break; }
+            if !d.is_finite() {
+                valid = false;
+                break;
+            }
             cds.push(d);
         }
-        if !valid { continue; }
-        if !abund_a.is_finite() || !abund_b.is_finite() { continue; }
+        if !valid {
+            continue;
+        }
+        if !abund_a.is_finite() || !abund_b.is_finite() {
+            continue;
+        }
 
         // diff = comp_a_value - comp_b_value, consistent with regular paired_t
         // which computes diffs as a_i - b_i where a = va[subj] (comp_a condition).

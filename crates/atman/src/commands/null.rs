@@ -50,6 +50,12 @@ pub struct Args {
     /// Comma-separated BH-q thresholds to summarize.
     #[arg(long, default_value = "0.05,0.10")]
     q_thresholds: String,
+
+    /// Column in samples.tsv to use as the pairing key for `--test paired-t`.
+    /// Defaults to the canonical `subject_id` column. Set this to e.g.
+    /// `patient_id` when using a column emitted by `atman recover-plex --infer-pairs`.
+    #[arg(long, default_value = "subject_id")]
+    paired_by: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -116,7 +122,14 @@ pub fn run(args: Args) -> Result<()> {
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
-    let samples = read_samples(&args.input_dir.join("samples.tsv"))?;
+    let mut samples = read_samples(&args.input_dir.join("samples.tsv"))?;
+    if args.paired_by != "subject_id" {
+        override_subject_id(
+            &mut samples,
+            &args.input_dir.join("samples.tsv"),
+            &args.paired_by,
+        )?;
+    }
     validate_design(&samples, &comparisons, &args.test, args.min_pairs)?;
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
     let measurements_path = args.input_dir.join("measurements.tsv");
@@ -260,6 +273,34 @@ pub fn run(args: Args) -> Result<()> {
         None,
     )?;
     eprintln!("null: sidecar={}", sidecar.display());
+    Ok(())
+}
+
+fn override_subject_id(samples: &mut [Sample], samples_path: &Path, column: &str) -> Result<()> {
+    use crate::io::need_col;
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(samples_path)
+        .with_context(|| format!("opening {:?}", samples_path))?;
+    let headers = reader.headers()?.clone();
+    let c_sample = need_col(&headers, "sample_id", samples_path)?;
+    let c_pair = need_col(&headers, column, samples_path)
+        .with_context(|| format!("--paired-by column {column:?} not found in samples.tsv"))?;
+    let mut by_sample: HashMap<String, String> = HashMap::new();
+    for row in reader.records() {
+        let row = row?;
+        by_sample.insert(row[c_sample].to_string(), row[c_pair].to_string());
+    }
+    for s in samples.iter_mut() {
+        if let Some(v) = by_sample.get(&s.sample_id) {
+            if v.is_empty() {
+                s.subject_id = None;
+            } else {
+                s.subject_id = Some(v.clone());
+            }
+        }
+    }
     Ok(())
 }
 

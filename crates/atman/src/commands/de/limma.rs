@@ -355,7 +355,7 @@ pub(super) fn run_limma(
         // When df_total = Inf (prior fully pooled), use the z-score 1.96 as
         // the critical value (normal approximation).
         let t_crit: Option<f64> = if output.df_total.is_infinite() {
-            Some(1.959963985)  // qnorm(0.975)
+            Some(1.959963985) // qnorm(0.975)
         } else {
             StudentsT::new(0.0, 1.0, output.df_total)
                 .ok()

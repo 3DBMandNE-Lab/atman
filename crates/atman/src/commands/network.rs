@@ -251,8 +251,8 @@ fn load_cohort(
     let samples_path = dir.join("samples.tsv");
     let records = read_measurements_long(&measurements_path)
         .with_context(|| format!("reading {measurements_path:?}"))?;
-    let _samples = read_samples(&samples_path)
-        .with_context(|| format!("reading {samples_path:?}"))?;
+    let _samples =
+        read_samples(&samples_path).with_context(|| format!("reading {samples_path:?}"))?;
     let FeatureMatrix {
         features: _,
         per_sample,
@@ -284,7 +284,10 @@ fn load_cohort(
     })
 }
 
-fn shared_feature_universe(cohort_dirs: &[(String, PathBuf)], feature_col: &str) -> Result<Vec<String>> {
+fn shared_feature_universe(
+    cohort_dirs: &[(String, PathBuf)],
+    feature_col: &str,
+) -> Result<Vec<String>> {
     let mut intersection: Option<BTreeSet<String>> = None;
     for (label, dir) in cohort_dirs {
         let measurements_path = dir.join("measurements.tsv");
@@ -362,7 +365,12 @@ fn run_differential(args: DifferentialArgs) -> Result<()> {
 
     let mut loaded: Vec<LoadedCohort> = Vec::with_capacity(cohort_dirs.len());
     for (label, dir) in &cohort_dirs {
-        loaded.push(load_cohort(label, dir, &shared_features, &args.feature_col)?);
+        loaded.push(load_cohort(
+            label,
+            dir,
+            &shared_features,
+            &args.feature_col,
+        )?);
     }
     let mut correlations: Vec<CohortCorrelations> = Vec::with_capacity(loaded.len());
     for c in &loaded {
@@ -433,10 +441,7 @@ fn run_differential(args: DifferentialArgs) -> Result<()> {
             rows.len()
         }
     };
-    eprintln!(
-        "network differential: mode={:?} rows={n_rows}",
-        args.mode
-    );
+    eprintln!("network differential: mode={:?} rows={n_rows}", args.mode);
 
     let finished_at = SystemTime::now();
     let mut labeled: Vec<(&str, &Path)> = Vec::with_capacity(2 * cohort_dirs.len() + 1);

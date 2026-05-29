@@ -191,7 +191,8 @@ pub fn run(args: Args) -> Result<()> {
                 .context("--orientation samples-rows requires --proteins")?;
             let protein_meta = read_table(protein_path)?;
             let proteins = protein_rows_from_table(&args, &protein_meta)?;
-            let measurements = measurements_from_samples_rows(&args, &platform, &matrix, &proteins)?;
+            let measurements =
+                measurements_from_samples_rows(&args, &platform, &matrix, &proteins)?;
             (proteins, measurements)
         }
     };

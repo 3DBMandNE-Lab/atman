@@ -243,55 +243,61 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
 
         if args.check_determinism {
             // Re-run and byte-compare the recovered loadings.
-            let second_flat: Option<Vec<u8>> =
-                if tool == "atman" || tool.starts_with("atman.") {
-                    let suffix = if tool == "atman" { "ica" } else { &tool["atman.".len()..] };
-                    match suffix {
-                        "ica" => run_atman_native_ica(
-                            &abundance,
-                            k,
-                            args.seed,
-                            args.max_iter,
-                            args.tol,
-                            &protein_labels,
-                            tool,
-                        )
-                        .ok()
-                        .map(|r| r.recovered_flat),
-                        "nmf" => load_nmf_fixture(&nmf_fixture, args.k).ok().and_then(
-                            |(nmf_pl, _, nmf_ab, nmf_k)| {
-                                run_atman_native_nmf(&nmf_ab, nmf_k, args.seed, &nmf_pl, tool)
-                                    .ok()
-                                    .map(|r| r.recovered_flat)
-                            },
-                        ),
-                        "missingness-ica" => run_atman_native_mnar_ica(
-                            &abundance,
-                            k,
-                            args.seed,
-                            args.max_iter,
-                            args.tol,
-                            &protein_labels,
-                            tool,
-                        )
-                        .ok()
-                        .map(|r| r.recovered_flat),
-                        _ => None,
-                    }
-                } else if let Some(d) = &args.adapters_dir {
-                    run_external_adapter(tool, fixture, d, args.seed, k)
-                        .ok()
-                        .map(|r| r.recovered_flat)
+            let second_flat: Option<Vec<u8>> = if tool == "atman" || tool.starts_with("atman.") {
+                let suffix = if tool == "atman" {
+                    "ica"
                 } else {
-                    None
+                    &tool["atman.".len()..]
                 };
+                match suffix {
+                    "ica" => run_atman_native_ica(
+                        &abundance,
+                        k,
+                        args.seed,
+                        args.max_iter,
+                        args.tol,
+                        &protein_labels,
+                        tool,
+                    )
+                    .ok()
+                    .map(|r| r.recovered_flat),
+                    "nmf" => load_nmf_fixture(&nmf_fixture, args.k).ok().and_then(
+                        |(nmf_pl, _, nmf_ab, nmf_k)| {
+                            run_atman_native_nmf(&nmf_ab, nmf_k, args.seed, &nmf_pl, tool)
+                                .ok()
+                                .map(|r| r.recovered_flat)
+                        },
+                    ),
+                    "missingness-ica" => run_atman_native_mnar_ica(
+                        &abundance,
+                        k,
+                        args.seed,
+                        args.max_iter,
+                        args.tol,
+                        &protein_labels,
+                        tool,
+                    )
+                    .ok()
+                    .map(|r| r.recovered_flat),
+                    _ => None,
+                }
+            } else if let Some(d) = &args.adapters_dir {
+                run_external_adapter(tool, fixture, d, args.seed, k)
+                    .ok()
+                    .map(|r| r.recovered_flat)
+            } else {
+                None
+            };
             tr.determinism_score = match second_flat {
                 Some(ref s) if *s == tr.recovered_flat => 1.0,
                 Some(_) => 0.0,
                 None => f64::NAN,
             };
         }
-        rows.push(ToolEntry { result: tr, planted: tool_planted });
+        rows.push(ToolEntry {
+            result: tr,
+            planted: tool_planted,
+        });
     }
 
     // Score recovered vs planted per tool.

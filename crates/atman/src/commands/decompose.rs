@@ -9,11 +9,11 @@ use atman_core::ica::{
     fast_ica, jaccard_top_n, pca_whiten, select_k_cumulative_variance, IcaResult,
 };
 use atman_core::ica_mnar::{fast_ica_mnar, MnarIcaConfig};
+use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
 use atman_core::nmf::{
     multi_seed_nmf, nmf as nmf_core, select_k as nmf_select_k, BetaLoss, Init, KSelection,
     MultiSeedConfig, NmfConfig, StabilityMetric as NmfStabilityMetric,
 };
-use atman_core::ica_null::{archetype_null, ArchetypeNullRow, NullMode, NullParams};
 use atman_core::variance_decomposition::{decompose_archetype_variance, FixedFactor, VarianceRow};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use csv::ReaderBuilder;
@@ -349,10 +349,7 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
     let init = match args.init.as_str() {
         "nndsvda" => Init::Nndsvda,
         "random" => Init::Random,
-        other => bail!(
-            "--init {:?}: expected `nndsvda` or `random`",
-            other
-        ),
+        other => bail!("--init {:?}: expected `nndsvda` or `random`", other),
     };
 
     match args.solver.as_str() {
@@ -467,7 +464,8 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
                 None => bail!(
                     "NMF: missing value for sample={} assay={}; NMF requires a complete matrix. \
                      Drop incomplete assays upstream or impute before running decompose nmf.",
-                    sample, assay
+                    sample,
+                    assay
                 ),
             }
         }
@@ -504,20 +502,25 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
     }
     let nmf_stability_metric = match args.stability_metric.as_str() {
         "jaccard-top20" | "jaccard-topn" | "jaccard" => NmfStabilityMetric::JaccardTopN,
-        other => bail!(
-            "--stability-metric {:?}: expected `jaccard-top20`",
-            other
-        ),
+        other => bail!("--stability-metric {:?}: expected `jaccard-top20`", other),
     };
 
     // ── build NmfConfig base (k will be finalised after k-selection) ─────────
     let nmf_cfg_base = NmfConfig {
-        k: if k_sel == KSelection::Fixed { k_fixed } else { k_min }, // temp; overridden below
+        k: if k_sel == KSelection::Fixed {
+            k_fixed
+        } else {
+            k_min
+        }, // temp; overridden below
         beta_loss,
         init,
         max_iter: args.max_iter,
         tol: args.tol,
-        seed: if args.n_seeds == 1 { args.seed } else { args.seed_base },
+        seed: if args.n_seeds == 1 {
+            args.seed
+        } else {
+            args.seed_base
+        },
     };
 
     // ── run k-selection (or Fixed pass-through) ───────────────────────────────
@@ -536,10 +539,7 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
             args.k_selection, k_min, k_max, args.n_seeds,
         );
         let sel_result = nmf_select_k(&data, &nmf_cfg_base, &ms_cfg_for_sel, k_min, k_max, k_sel);
-        eprintln!(
-            "decompose nmf: selected_k={}",
-            sel_result.selected_k,
-        );
+        eprintln!("decompose nmf: selected_k={}", sel_result.selected_k,);
         let sk = sel_result.selected_k;
         (sk, Some(sel_result))
     };
@@ -567,8 +567,8 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
     // stability_rows: Some only in multi-seed mode.
 
     struct SingleResult {
-        h: Vec<Vec<f64>>,      // k × p
-        w: Vec<Vec<f64>>,      // n × k
+        h: Vec<Vec<f64>>, // k × p
+        w: Vec<Vec<f64>>, // n × k
         n_iter: usize,
         converged: bool,
         final_error: f64,
@@ -644,12 +644,20 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
             let mean_x: f64 = {
                 let total: f64 = data.iter().flat_map(|r| r.iter()).sum();
                 let cnt = (n_samples * n_assays) as f64;
-                if cnt > 0.0 { total / cnt } else { 1.0 }
+                if cnt > 0.0 {
+                    total / cnt
+                } else {
+                    1.0
+                }
             };
             let scale = (mean_x / k_surv.max(1) as f64).sqrt().max(1e-9);
             let mut rng = atman_core::ica::Xoshiro256pp::new(args.seed_base.wrapping_add(9999));
             let mut w: Vec<Vec<f64>> = (0..n_samples)
-                .map(|_| (0..k_surv).map(|_| rng.next_normal().abs() * scale).collect())
+                .map(|_| {
+                    (0..k_surv)
+                        .map(|_| rng.next_normal().abs() * scale)
+                        .collect()
+                })
                 .collect();
 
             const EPS: f64 = 1e-9;
@@ -687,14 +695,20 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
                         let num = xht[i][a];
                         let den = whht[i][a] + EPS;
                         w[i][a] *= num / den;
-                        if w[i][a] < 0.0 { w[i][a] = 0.0; }
+                        if w[i][a] < 0.0 {
+                            w[i][a] = 0.0;
+                        }
                     }
                 }
             }
             w
         };
 
-        RunOutput::MultiSeed { all_rows, surviving, w_refit }
+        RunOutput::MultiSeed {
+            all_rows,
+            surviving,
+            w_refit,
+        }
     };
 
     // ── write loadings TSV ───────────────────────────────────────────────────
@@ -723,7 +737,11 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
                     }
                 }
             }
-            RunOutput::MultiSeed { all_rows, surviving, .. } => {
+            RunOutput::MultiSeed {
+                all_rows,
+                surviving,
+                ..
+            } => {
                 for (out_idx, &surv_idx) in surviving.iter().enumerate() {
                     let row = &all_rows[surv_idx];
                     let prog = program_name(out_idx);
@@ -791,14 +809,18 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
     }
 
     // ── write stability TSV (multi-seed only) ────────────────────────────────
-    if let RunOutput::MultiSeed { ref all_rows, ref surviving, .. } = run_output {
+    if let RunOutput::MultiSeed {
+        ref all_rows,
+        ref surviving,
+        ..
+    } = run_output
+    {
         if let Some(ref stab_path) = args.output_stability {
             if let Some(parent) = stab_path.parent() {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("creating stability dir {:?}", parent))?;
             }
-            let mut out =
-                String::from("program\tstable_seed_fraction\tn_seeds_present\n");
+            let mut out = String::from("program\tstable_seed_fraction\tn_seeds_present\n");
             for row in all_rows {
                 let n_seeds_present =
                     (row.stable_seed_fraction * args.n_seeds as f64).round() as usize;
@@ -834,7 +856,11 @@ fn nmf_run(args: NmfArgs) -> Result<()> {
                     .mean_kl
                     .map(|v| format_float(v))
                     .unwrap_or_else(|| "NA".to_string());
-                let selected = if row.k == sweep_result.selected_k { "1" } else { "0" };
+                let selected = if row.k == sweep_result.selected_k {
+                    "1"
+                } else {
+                    "0"
+                };
                 out.push_str(&row.k.to_string());
                 out.push('\t');
                 out.push_str(&cophenetic_str);
@@ -1741,30 +1767,35 @@ fn run_ica(args: IcaArgs) -> Result<()> {
     );
 
     // Reference run: use MNAR-aware ICA if requested, else plain FastICA.
-    let (ref_seed, ref_run, mnar_joint_iters) =
-        if args.missingness_model == MissingnessModel::AbundanceConditional {
-            let raw = mnar_raw.as_ref().expect("MNAR raw matrix");
-            let mnar_config = MnarIcaConfig {
-                k,
-                seed: args.seed,
-                max_iter: args.max_iter,
-                tol: args.tol,
-                max_joint_iter: args.max_joint_iter,
-                joint_tol: 1e-6,
-            };
-            let mnar_result = fast_ica_mnar(raw, &mnar_config);
-            eprintln!(
+    let (ref_seed, ref_run, mnar_joint_iters) = if args.missingness_model
+        == MissingnessModel::AbundanceConditional
+    {
+        let raw = mnar_raw.as_ref().expect("MNAR raw matrix");
+        let mnar_config = MnarIcaConfig {
+            k,
+            seed: args.seed,
+            max_iter: args.max_iter,
+            tol: args.tol,
+            max_joint_iter: args.max_joint_iter,
+            joint_tol: 1e-6,
+        };
+        let mnar_result = fast_ica_mnar(raw, &mnar_config);
+        eprintln!(
                 "decompose ica: mnar joint_iterations={} joint_converged={} detection_curve beta0={:.4} beta1={:.4}",
                 mnar_result.joint_iterations,
                 mnar_result.joint_converged,
                 mnar_result.detection_curve.beta0,
                 mnar_result.detection_curve.beta1,
             );
-            (args.seed, mnar_result.ica, Some(mnar_result.joint_iterations))
-        } else {
-            let result = fast_ica(&matrix.data, k, args.seed, args.max_iter, args.tol);
-            (args.seed, result, None)
-        };
+        (
+            args.seed,
+            mnar_result.ica,
+            Some(mnar_result.joint_iterations),
+        )
+    } else {
+        let result = fast_ica(&matrix.data, k, args.seed, args.max_iter, args.tol);
+        (args.seed, result, None)
+    };
 
     // Alternative seeds always use plain FastICA on the (imputed) matrix for
     // stability ranking.  Multi-seed MNAR ICA is a deferred feature.
@@ -2134,7 +2165,9 @@ fn load_matrix_mnar(args: &IcaArgs) -> Result<AbundanceMatrix> {
             if seen_samples.insert(sample.clone()) {
                 sample_order.push(sample.clone());
             }
-            assay_meta.entry(assay.clone()).or_insert_with(|| r.gene_symbol.clone());
+            assay_meta
+                .entry(assay.clone())
+                .or_insert_with(|| r.gene_symbol.clone());
             continue;
         }
         if seen_samples.insert(sample.clone()) {
@@ -2158,7 +2191,9 @@ fn load_matrix_mnar(args: &IcaArgs) -> Result<AbundanceMatrix> {
         if seen_samples.insert(sample.clone()) {
             sample_order.push(sample.clone());
         }
-        assay_meta.entry(assay).or_insert_with(|| r.gene_symbol.clone());
+        assay_meta
+            .entry(assay)
+            .or_insert_with(|| r.gene_symbol.clone());
     }
 
     let samples_path = args.input_dir.join("samples.tsv");

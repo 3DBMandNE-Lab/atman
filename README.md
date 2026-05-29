@@ -128,6 +128,7 @@ atman report qc          summarize QC, missingness, and condition support
 atman matrix             canonical long TSV → per-panel wide NPX CSVs
 atman fold-change        compute per-panel log2 fold-change tables
 atman de                 paired, Welch, OLS, mixed, limma, msqrob, or ensemble DE
+atman detectability      model detected/not-detected proteins alongside abundance
 atman bootstrap protein  subject-level bootstrap intervals for protein effects
 atman bootstrap module   subject-level bootstrap intervals for module effects
 atman null               permutation/sign-flip null calibration for DE effects

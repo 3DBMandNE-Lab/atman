@@ -34,6 +34,8 @@ enum Command {
     Align(commands::align::Args),
     /// Multi-seed ICA decomposition with stability reporting.
     Decompose(commands::decompose::Args),
+    /// Joint abundance-detection analysis for censored proteomics measurements.
+    Detectability(commands::detectability::Args),
     /// Combine DE results across cohorts.
     Meta(commands::meta::Args),
     /// Compute log2 fold change per panel for the given comparisons.
@@ -68,6 +70,12 @@ enum Command {
     Network(commands::network::Args),
     /// Test subject-level log-ratios between two protein or module classes.
     Ratio(commands::ratio::Args),
+    /// Recover TMT plex assignment from condition-invariant absence pattern.
+    RecoverPlex(commands::recover_plex::Args),
+    /// Cluster proteins by absence pattern (protein-side dual of recover-plex).
+    AbsenceTopology(commands::absence_topology::Args),
+    /// Leave-one-pair-out robustness diagnostic for paired DE.
+    RobustPaired(commands::robust_paired::Args),
     /// Validate canonical Atman TSV inputs.
     Validate(commands::validate::Args),
     /// Generate compact reports from canonical Atman outputs.
@@ -88,6 +96,7 @@ fn main() -> Result<()> {
         Command::Matrix(args) => commands::matrix::run(args),
         Command::Align(args) => commands::align::run(args),
         Command::Decompose(args) => commands::decompose::run(args),
+        Command::Detectability(args) => commands::detectability::run(args),
         Command::Meta(args) => commands::meta::run(args),
         Command::FoldChange(args) => commands::fold_change::run(args),
         Command::De(args) => commands::de::run(*args),
@@ -105,6 +114,9 @@ fn main() -> Result<()> {
         Command::Null(args) => commands::null::run(args),
         Command::Network(args) => commands::network::run(args),
         Command::Ratio(args) => commands::ratio::run(args),
+        Command::RecoverPlex(args) => commands::recover_plex::run(args),
+        Command::AbsenceTopology(args) => commands::absence_topology::run(args),
+        Command::RobustPaired(args) => commands::robust_paired::run(args),
         Command::Validate(args) => commands::validate::run(args),
         Command::Report(args) => commands::report::run(args),
         Command::Residuals(args) => commands::residuals::run(args),
