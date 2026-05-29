@@ -5,7 +5,7 @@
 **Owner:** orchestrator
 **Branch:** (pending)
 **Started:** 2026-05-29T06:43:48+00:00
-**Updated:** 2026-05-29T07:26:42Z
+**Updated:** 2026-05-29T07:44:57+00:00
 <!-- kanban-status:end -->
 
 ## Plan
@@ -110,3 +110,7 @@ code.
   columns only — do not treat as calibrated significance.
 - Follow-up (optional, separate task): make `ensemble_p` accumulation
   order-stable to restore full byte-identity on those two columns.
+
+### Codex adversarial-review fix (orchestrator)
+
+Codex flagged (LOW): `docs/analytical-roadmap.md` §16 still described the OLD Stouffer-`ensemble_q`-gated grade and claimed the Dube HSPs were all VALIDATED — contradicting the implemented honest grade. Updated §16: the description, the grading-logic bullets (now anchored to `n_significant`/`n_applied` + sign fraction, not the combined p), the `ensemble_p`/`ensemble_q` output description (marked non-calibrated heuristic), and the Dube acceptance bullet (HSPs show consistent sign but are NOT VALIDATED at this n because no method clears its own BH-q). No code change.

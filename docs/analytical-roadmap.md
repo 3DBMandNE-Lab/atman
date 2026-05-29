@@ -468,13 +468,18 @@ Follow-ons this unlocks:
 
 ### 16. Ensemble DE dispatcher (`atman de --test ensemble`) (implemented)
 
-Runs every applicable DE method on the same canonical inputs,
-Stouffer-combines per-method p-values within each (comparison,
-protein), BH-FDRs ensemble p-values across proteins, and assigns a
-VALIDATED / PROVISIONAL / INSUFFICIENT grade from the combined
-evidence plus cross-method sign agreement. Directly answers the
-"is this hit a model-choice artifact?" reviewer question that every
-proteomics paper faces — no other bulk-proteomics tool ships this.
+Runs every applicable DE method on the same canonical inputs and, for
+each (comparison, protein), counts how many methods individually clear
+their own per-method BH-q (`n_significant`) and how many agree on the
+`mean_diff` sign (`n_sign_consistent`). The VALIDATED / PROVISIONAL /
+INSUFFICIENT grade is assigned from that method agreement — NOT from a
+combined p-value. A Stouffer `ensemble_p`/`ensemble_q` is still emitted
+as a non-calibrated ranking convenience (Stouffer assumes independent
+p-values, but the methods share one abundance matrix and are positively
+correlated, so the combined p is anti-conservative and must not gate a
+grade). Directly answers the "is this hit a model-choice artifact?"
+reviewer question that every proteomics paper faces — no other
+bulk-proteomics tool ships this.
 
 Command:
 
@@ -487,19 +492,23 @@ atman de --input-dir out --output-dir out_ensemble \
   --groups "PT2-PR2" --min-pairs 5
 ```
 
-Grading logic (post-BH):
+Grading logic (anchored to per-method significance, not the combined p):
 
-- **VALIDATED:** `ensemble_q < q_threshold` AND 100% of methods
-  agree on mean_diff sign.
-- **PROVISIONAL:** `ensemble_q < q_threshold` AND
-  `≥ provisional_sign_fraction` (default 0.50) agree on sign.
-- **INSUFFICIENT:** otherwise.
+- **VALIDATED:** every applied method is individually significant
+  (`n_significant / n_applied ≥ validated_sign_fraction`, default 1.0)
+  AND the same fraction agree on `mean_diff` sign.
+- **PROVISIONAL:** a majority of methods are individually significant
+  (`≥ provisional_sign_fraction`, default 0.50) AND the same fraction
+  agree on sign.
+- **INSUFFICIENT:** otherwise (including when no method clears its own
+  significance, regardless of how small the Stouffer `ensemble_q` is).
 
 Acceptance:
 
 - `de_ensemble.tsv` emits one row per (comparison, protein) with
   `n_applied`, `n_significant`, `n_sign_consistent`, `majority_sign`,
-  `ensemble_p` (Stouffer), `ensemble_q` (BH within comparison),
+  `ensemble_p` (Stouffer — non-calibrated heuristic, not a grade
+  input), `ensemble_q` (BH within comparison, same caveat),
   `grade`, `methods_applied`, `methods_skipped`.
 - `de_results.tsv` gains a `method` column for bucketing per-method
   rows.
@@ -512,8 +521,12 @@ Acceptance:
 - Integration tests cover (i) grade assignment on a synthetic 3-protein
   fixture (UP/DN/ST known ground truth); (ii) auto-skip behaviour
   when msqrob inputs are absent; (iii) real-data grading on the
-  bundled Dube heat-acclimation cohort — HSPA1A, HSPB1, DNAJB1 all
-  graded VALIDATED in PT2-PR2.
+  bundled Dube heat-acclimation cohort — the canonical HSPs (HSPA1A,
+  HSPB1, DNAJB1) show consistent positive sign, but at n≈9–20 paired
+  subjects no single method clears its own BH-q, so honest grading does
+  NOT mark them VALIDATED. The test asserts sign consistency and that
+  the grade never exceeds per-method significance support (the prior
+  VALIDATED label came only from the anti-conservative combined p).
 
 ## Phase 8: Decomposition Rigor
 
