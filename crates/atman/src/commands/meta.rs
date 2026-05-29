@@ -453,7 +453,11 @@ fn summarize_module(key: ModuleKey, effects: &[CohortEffect]) -> Result<ModuleRo
     let n_positive = effects.iter().filter(|e| e.effect > 0.0).count();
     let n_negative = effects.iter().filter(|e| e.effect < 0.0).count();
     let sign_consistency = n_positive.max(n_negative) as f64 / effects.len() as f64;
-    let sign_binomial_p = binomial_upper_tail(n_positive.max(n_negative), effects.len());
+    // Trial count excludes zero-effect cohorts so that k (= max(n_positive,
+    // n_negative)) and n (= n_positive + n_negative) are drawn from the same
+    // population. Using effects.len() here would count zero-effect cohorts in n
+    // but not in k, deflating the binomial tail.
+    let sign_binomial_p = binomial_upper_tail(n_positive.max(n_negative), n_positive + n_negative);
     Ok(ModuleRow {
         key,
         n_cohorts: effects.len(),

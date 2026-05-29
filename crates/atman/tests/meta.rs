@@ -143,3 +143,63 @@ fn meta_module_reports_program_sign_consistency() {
     assert_eq!(fields[17], "1");
     assert!((fields[15].parse::<f64>().unwrap() - (2.0 / 3.0)).abs() < 1e-12);
 }
+
+#[test]
+fn meta_module_sign_binomial_excludes_zero_effect_cohorts() {
+    // Four cohorts on program A01: three positive, one with effect == 0.0.
+    // Zero-effect cohorts must be excluded from BOTH the success count k and
+    // the trial count n. So k = 3, n = 3 (not 4).
+    //   corrected: binomial_upper_tail(3, 3) = C(3,3)/2^3       = 1/8  = 0.125
+    //   old (bug): binomial_upper_tail(3, 4) = (C(4,3)+C(4,4))/2^4 = 5/16 = 0.3125
+    let tmp = tempfile::tempdir().unwrap();
+    let c1 = tmp.path().join("program1.tsv");
+    let c2 = tmp.path().join("program2.tsv");
+    let c3 = tmp.path().join("program3.tsv");
+    let c4 = tmp.path().join("program4.tsv");
+    let out = tmp.path().join("module_meta.tsv");
+    write_program_de(&c1, &[("c1", "A01", "humoral", 1.0, 0.5, 1.5)]);
+    write_program_de(&c2, &[("c2", "A01", "humoral", 0.8, 0.3, 1.3)]);
+    write_program_de(&c3, &[("c3", "A01", "humoral", 1.2, 0.7, 1.7)]);
+    write_program_de(&c4, &[("c4", "A01", "humoral", 0.0, -0.5, 0.5)]);
+
+    let output = run_atman(&[
+        "meta",
+        "--inputs",
+        &format!(
+            "{},{},{},{}",
+            c1.display(),
+            c2.display(),
+            c3.display(),
+            c4.display()
+        ),
+        "--level",
+        "module",
+        "--report",
+        "sign-consistency",
+        "--output",
+        out.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = std::fs::read_to_string(out).unwrap();
+    let row = text.lines().nth(1).unwrap();
+    let fields: Vec<&str> = row.split('\t').collect();
+    assert_eq!(fields[0], "A01");
+    assert_eq!(fields[2], "4", "n_cohorts counts all four cohorts");
+    assert_eq!(fields[16], "3", "n_positive");
+    assert_eq!(fields[17], "0", "n_negative");
+    let sign_binomial_p: f64 = fields[18].parse().unwrap();
+    // Corrected value: trials = n_positive + n_negative = 3.
+    assert!(
+        (sign_binomial_p - 0.125).abs() < 1e-12,
+        "expected corrected p=0.125, got {sign_binomial_p}"
+    );
+    // Confirm the fix changed behavior: the old buggy value was 0.3125.
+    assert!(
+        (sign_binomial_p - 0.3125).abs() > 1e-9,
+        "p-value still matches the old buggy behavior"
+    );
+}
