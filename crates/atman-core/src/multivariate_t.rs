@@ -36,6 +36,7 @@
 //! Parity target: `|pdunnett_atman − (1 − p_R_emmeans)| ≤ 3e-3`
 //! at canonical `(m, ν)` pairs.
 
+use crate::rng::Xoshiro256pp;
 use statrs::distribution::{ContinuousCDF, Normal};
 use statrs::function::gamma::ln_gamma;
 
@@ -186,46 +187,6 @@ fn cholesky_factor(r: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     Some(l)
 }
 
-/// Local Xoshiro256++ for MC draws inside this module.
-struct McRng(u64, u64, u64, u64);
-impl McRng {
-    fn new(seed: u64) -> Self {
-        let mut s = seed;
-        let mut out = [0_u64; 4];
-        for v in &mut out {
-            s = s.wrapping_add(0x9E3779B97F4A7C15);
-            let mut z = s;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-            *v = z ^ (z >> 31);
-        }
-        McRng(out[0], out[1], out[2], out[3])
-    }
-    fn next_u64(&mut self) -> u64 {
-        let result = self
-            .0
-            .wrapping_add(self.3)
-            .rotate_left(23)
-            .wrapping_add(self.0);
-        let t = self.1 << 17;
-        self.2 ^= self.0;
-        self.3 ^= self.1;
-        self.1 ^= self.2;
-        self.0 ^= self.3;
-        self.2 ^= t;
-        self.3 = self.3.rotate_left(45);
-        result
-    }
-    fn next_u01(&mut self) -> f64 {
-        (self.next_u64() >> 11) as f64 * (1.0 / (1_u64 << 53) as f64)
-    }
-    fn next_standard_normal(&mut self) -> f64 {
-        let u1 = self.next_u01().max(1e-300);
-        let u2 = self.next_u01();
-        (-2.0_f64 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
-    }
-}
-
 /// Monte-Carlo two-sided `P(max_i |T_i| ≤ q)` under a multivariate-t
 /// with an **arbitrary** correlation matrix `R` (m × m) and residual
 /// degrees of freedom `ν`. This is the unbalanced Dunnett-Hsu variant:
@@ -261,12 +222,12 @@ pub fn pdunnett_hsu(q: f64, df: f64, correlation: &[Vec<f64>], n_mc: usize, seed
     if df_ceil == 0 {
         return f64::NAN;
     }
-    let mut rng = McRng::new(seed);
+    let mut rng = Xoshiro256pp::new(seed);
     let mut count = 0_usize;
     for _ in 0..n_mc {
         let mut z = vec![0.0_f64; m];
         for v in z.iter_mut() {
-            *v = rng.next_standard_normal();
+            *v = rng.next_normal();
         }
         let mut t = vec![0.0_f64; m];
         for i in 0..m {
@@ -276,7 +237,7 @@ pub fn pdunnett_hsu(q: f64, df: f64, correlation: &[Vec<f64>], n_mc: usize, seed
         }
         let mut chi_sq = 0.0_f64;
         for _ in 0..df_ceil {
-            let v = rng.next_standard_normal();
+            let v = rng.next_normal();
             chi_sq += v * v;
         }
         let s = (chi_sq / df).sqrt();

@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use atman_core::stats::mean;
-use atman_core::Sample;
+use atman_core::{Sample, SplitMix64};
 use clap::{Args as ClapArgs, Subcommand};
 use csv::ReaderBuilder;
 use serde_json::json;
@@ -300,7 +300,7 @@ fn run_protein(args: ProteinArgs) -> Result<()> {
             .push(value);
     }
 
-    let mut rng = Rng64::new(args.seed);
+    let mut rng = SplitMix64::new(args.seed);
     let mut rows = Vec::new();
     for (a, b) in &comparisons {
         let comparison = format!("{a}-{b}");
@@ -482,7 +482,7 @@ fn run_module(args: ModuleArgs) -> Result<()> {
             .push(acc.sum / acc.n as f64);
     }
 
-    let mut rng = Rng64::new(args.seed);
+    let mut rng = SplitMix64::new(args.seed);
     let mut rows = Vec::new();
     for (a, b) in &comparisons {
         let comparison = format!("{a}-{b}");
@@ -658,7 +658,7 @@ fn run_program(args: ProgramArgs) -> Result<()> {
             .push(acc.weighted_sum / acc.weight_abs_sum);
     }
 
-    let mut rng = Rng64::new(args.seed);
+    let mut rng = SplitMix64::new(args.seed);
     let mut rows = Vec::new();
     for (a, b) in &comparisons {
         let comparison = format!("{a}-{b}");
@@ -753,7 +753,7 @@ fn run_program(args: ProgramArgs) -> Result<()> {
 
 fn bootstrap_unpaired(
     args: &ProteinArgs,
-    rng: &mut Rng64,
+    rng: &mut SplitMix64,
     comparison: &str,
     key: &ProteinKey,
     uniprot: &str,
@@ -797,7 +797,7 @@ fn bootstrap_unpaired(
 
 fn bootstrap_paired(
     args: &ProteinArgs,
-    rng: &mut Rng64,
+    rng: &mut SplitMix64,
     comparison: &str,
     key: &ProteinKey,
     uniprot: &str,
@@ -841,7 +841,7 @@ fn bootstrap_paired(
 
 fn bootstrap_module_unpaired(
     args: &ModuleArgs,
-    rng: &mut Rng64,
+    rng: &mut SplitMix64,
     ctx: ModuleRowContext<'_>,
     a_values: &BTreeMap<String, f64>,
     b_values: &BTreeMap<String, f64>,
@@ -864,7 +864,7 @@ fn bootstrap_module_unpaired(
 
 fn bootstrap_module_paired(
     args: &ModuleArgs,
-    rng: &mut Rng64,
+    rng: &mut SplitMix64,
     mut ctx: ModuleRowContext<'_>,
     a_values: &BTreeMap<String, f64>,
     b_values: &BTreeMap<String, f64>,
@@ -1028,7 +1028,7 @@ fn skipped_module_row(ctx: ModuleRowContext<'_>, reason: &str) -> ModuleBootstra
 
 fn bootstrap_program_from_values(
     args: &ProgramArgs,
-    rng: &mut Rng64,
+    rng: &mut SplitMix64,
     ctx: ProgramRowContext<'_>,
     unpaired: Option<SubjectValues<'_>>,
     paired_diffs: Option<&[f64]>,
@@ -1116,10 +1116,10 @@ fn subject_means(input: Option<&BTreeMap<String, Vec<f64>>>) -> BTreeMap<String,
         .collect()
 }
 
-fn bootstrap_mean(values: &[f64], rng: &mut Rng64) -> f64 {
+fn bootstrap_mean(values: &[f64], rng: &mut SplitMix64) -> f64 {
     let mut total = 0.0;
     for _ in 0..values.len() {
-        total += values[rng.gen_range(values.len())];
+        total += values[rng.bounded(values.len())];
     }
     total / values.len() as f64
 }
@@ -1343,30 +1343,5 @@ fn read_program_loadings(path: &Path) -> Result<BTreeMap<String, Vec<(String, f6
 fn push_opt(buf: &mut String, value: Option<f64>) {
     if let Some(value) = value {
         buf.push_str(&format!("{value}"));
-    }
-}
-
-struct Rng64 {
-    state: u64,
-}
-
-impl Rng64 {
-    fn new(seed: u64) -> Self {
-        Self {
-            state: if seed == 0 { 0x9e3779b97f4a7c15 } else { seed },
-        }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut x = self.state;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.state = x;
-        x.wrapping_mul(0x2545f4914f6cdd1d)
-    }
-
-    fn gen_range(&mut self, upper: usize) -> usize {
-        (self.next_u64() as usize) % upper
     }
 }

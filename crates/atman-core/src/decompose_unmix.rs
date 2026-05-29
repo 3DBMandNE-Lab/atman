@@ -28,14 +28,7 @@
 //! `--n-boot`, and `--annotate-markers`. Each is its own
 //! ~150-line follow-on; the core pipeline is already substantial.
 
-use crate::ica::Xoshiro256pp;
-
-fn derive_sub_seed(seed: u64, iter: usize) -> u64 {
-    let mut z = seed.wrapping_add(0x9E3779B97F4A7C15_u64.wrapping_mul(iter as u64 + 1));
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-    z ^ (z >> 31)
-}
+use crate::rng::{derive_sub_seed, Xoshiro256pp};
 
 /// In-place modified Gram-Schmidt: subtract from `w` its projection
 /// onto each non-zero basis vector in `basis`. Skips degenerate
@@ -627,31 +620,12 @@ pub fn unmix(data: &[Vec<f64>], k: usize, cfg: UnmixConfig) -> Result<UnmixResul
     })
 }
 
-/// Sub-seed derivation matching align_bootstrap's scheme: SplitMix64
-/// over `(seed, iter + 1)`. Fixed convention across atman bootstrap
-/// modules so the same top-level `--seed` produces the same iteration
-/// stream everywhere.
-fn bootstrap_sub_seed(seed: u64, iter: usize) -> u64 {
-    let mut z = seed.wrapping_add(0x9E3779B97F4A7C15_u64.wrapping_mul(iter as u64 + 1));
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-    z ^ (z >> 31)
-}
-
 fn sample_indices_with_replacement(rng: &mut Xoshiro256pp, n: usize) -> Vec<usize> {
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        let bound = n as u64;
-        loop {
-            let v = rng.next_normal().to_bits();
-            let limit = u64::MAX - u64::MAX % bound;
-            if v < limit {
-                out.push((v % bound) as usize);
-                break;
-            }
-        }
-    }
-    out
+    // Unbiased bounded draw on the raw u64 stream (was a modulo-biased
+    // rejection loop over `next_normal().to_bits()`, which both biased the
+    // result and drew from float bit patterns rather than the integer
+    // stream).
+    (0..n).map(|_| rng.bounded(n)).collect()
 }
 
 /// Subject-level bootstrap CI for both endmember loadings and
@@ -698,7 +672,7 @@ pub fn bootstrap_ci(
     let mut abundance_reps: Vec<Vec<Vec<f64>>> = Vec::with_capacity(n_boot);
 
     for b in 0..n_boot {
-        let sub_seed = bootstrap_sub_seed(seed, b);
+        let sub_seed = derive_sub_seed(seed, b);
         let mut rng = Xoshiro256pp::new(sub_seed);
         let idx = sample_indices_with_replacement(&mut rng, n);
         let resampled: Vec<Vec<f64>> = idx.iter().map(|&i| data[i].clone()).collect();

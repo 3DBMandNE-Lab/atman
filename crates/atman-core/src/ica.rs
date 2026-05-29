@@ -12,55 +12,11 @@ use std::cmp::Ordering;
 
 pub use crate::stats::jaccard_top_n;
 
-/// Deterministic Xoshiro256++ PRNG seeded via SplitMix64.
-pub struct Xoshiro256pp {
-    state: [u64; 4],
-}
-
-impl Xoshiro256pp {
-    pub fn new(seed: u64) -> Self {
-        let mut sm = seed.wrapping_add(0x9E3779B97F4A7C15);
-        let mut next_seed = || {
-            sm = sm.wrapping_add(0x9E3779B97F4A7C15);
-            let mut z = sm;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-            z ^ (z >> 31)
-        };
-        let state = [next_seed(), next_seed(), next_seed(), next_seed()];
-        Self { state }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let result = self.state[0]
-            .wrapping_add(self.state[3])
-            .rotate_left(23)
-            .wrapping_add(self.state[0]);
-        let t = self.state[1] << 17;
-        self.state[2] ^= self.state[0];
-        self.state[3] ^= self.state[1];
-        self.state[1] ^= self.state[2];
-        self.state[0] ^= self.state[3];
-        self.state[2] ^= t;
-        self.state[3] = self.state[3].rotate_left(45);
-        result
-    }
-
-    /// Uniform `[0, 1)` double.
-    fn next_f64(&mut self) -> f64 {
-        ((self.next_u64() >> 11) as f64) * (1.0_f64 / ((1u64 << 53) as f64))
-    }
-
-    /// Standard normal draw via Box-Muller. Paired draws; we discard one.
-    pub fn next_normal(&mut self) -> f64 {
-        let mut u1 = self.next_f64();
-        while u1 <= f64::MIN_POSITIVE {
-            u1 = self.next_f64();
-        }
-        let u2 = self.next_f64();
-        (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
-    }
-}
+// The reviewed Xoshiro256++ now lives in `crate::rng`; re-export it here so
+// the historical `crate::ica::Xoshiro256pp` path keeps working for the core
+// decomposition family (ica_null, align_bootstrap, nmf, decompose_unmix,
+// gsea) without churning their imports.
+pub use crate::rng::Xoshiro256pp;
 
 /// Eigendecomposition of a symmetric `n x n` matrix via cyclic Jacobi rotations.
 /// Returns `(values, vectors)` with columns of `vectors` as eigenvectors,

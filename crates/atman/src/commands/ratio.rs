@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use atman_core::stats::mean;
-use atman_core::Sample;
+use atman_core::{Sample, SplitMix64};
 use clap::{Args as ClapArgs, ValueEnum};
 use serde_json::json;
 use statrs::distribution::{ContinuousCDF, Normal, StudentsT};
@@ -107,7 +107,7 @@ pub fn run(args: Args) -> Result<()> {
     let median_a = median(a.clone()).expect("non-empty");
     let median_b = median(b.clone()).expect("non-empty");
     let point = median_a - median_b;
-    let mut rng = Rng64::new(args.seed);
+    let mut rng = SplitMix64::new(args.seed);
     let mut effects = bootstrap_median_diffs(&a, &b, args.n_bootstrap, &mut rng);
     effects.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
     let ci_low = percentile_sorted(&effects, 0.025);
@@ -299,23 +299,23 @@ fn measurement_matches(measurement: &atman_core::MeasurementRecord, target: &str
             .unwrap_or(false)
 }
 
-fn bootstrap_median_diffs(a: &[f64], b: &[f64], n: usize, rng: &mut Rng64) -> Vec<f64> {
+fn bootstrap_median_diffs(a: &[f64], b: &[f64], n: usize, rng: &mut SplitMix64) -> Vec<f64> {
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         let mut aa = Vec::with_capacity(a.len());
         let mut bb = Vec::with_capacity(b.len());
         for _ in 0..a.len() {
-            aa.push(a[rng.gen_range(a.len())]);
+            aa.push(a[rng.bounded(a.len())]);
         }
         for _ in 0..b.len() {
-            bb.push(b[rng.gen_range(b.len())]);
+            bb.push(b[rng.bounded(b.len())]);
         }
         out.push(median(aa).expect("resampled") - median(bb).expect("resampled"));
     }
     out
 }
 
-fn permutation_p(a: &[f64], b: &[f64], n: usize, rng: &mut Rng64) -> f64 {
+fn permutation_p(a: &[f64], b: &[f64], n: usize, rng: &mut SplitMix64) -> f64 {
     let observed = median(a.to_vec()).expect("a") - median(b.to_vec()).expect("b");
     let mut combined = a.to_vec();
     combined.extend_from_slice(b);
@@ -429,9 +429,9 @@ fn sign_stability(point: f64, effects: &[f64]) -> f64 {
     }
 }
 
-fn shuffle(values: &mut [f64], rng: &mut Rng64) {
+fn shuffle(values: &mut [f64], rng: &mut SplitMix64) {
     for i in (1..values.len()).rev() {
-        let j = rng.gen_range(i + 1);
+        let j = rng.bounded(i + 1);
         values.swap(i, j);
     }
 }
@@ -451,32 +451,5 @@ fn fmt(value: f64) -> String {
         "0".to_string()
     } else {
         format!("{value:.6}")
-    }
-}
-
-struct Rng64 {
-    state: u64,
-}
-
-impl Rng64 {
-    fn new(seed: u64) -> Self {
-        Self {
-            state: seed ^ 0x9E37_79B9_7F4A_7C15,
-        }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.state = self
-            .state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn gen_range(&mut self, upper: usize) -> usize {
-        (self.next_u64() as usize) % upper
     }
 }
