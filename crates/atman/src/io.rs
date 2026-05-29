@@ -698,10 +698,13 @@ pub fn write_fold_change_panel(
 /// fall-through to `Pass`, which would let a failed sample masquerade as passed.
 fn parse_qc(s: &str) -> Result<QcFlag> {
     match s {
-        "PASS" => Ok(QcFlag::Pass),
+        // Empty is the canonical "no flag specified" form and means Pass; it
+        // is accepted by validate_measurements too. Strict-failure applies to
+        // *unrecognized non-empty* values only (typos, lowercase, garbage).
+        "PASS" | "" => Ok(QcFlag::Pass),
         "WARN" => Ok(QcFlag::Warn(String::new())),
         "FAIL" => Ok(QcFlag::Fail(String::new())),
-        other => bail!("unrecognized QC flag {other:?} (expected PASS, WARN, or FAIL)"),
+        other => bail!("unrecognized QC flag {other:?} (expected PASS, WARN, FAIL, or empty)"),
     }
 }
 
@@ -1133,13 +1136,17 @@ mod tests {
         assert_eq!(parse_qc("PASS").unwrap(), QcFlag::Pass);
         assert_eq!(parse_qc("WARN").unwrap(), QcFlag::Warn(String::new()));
         assert_eq!(parse_qc("FAIL").unwrap(), QcFlag::Fail(String::new()));
+        // Empty is the "no flag" form and means Pass (consistent with
+        // validate_measurements, which also accepts "").
+        assert_eq!(parse_qc("").unwrap(), QcFlag::Pass);
     }
 
     #[test]
     fn parse_qc_rejects_unrecognized_values() {
-        // Lowercase, truncated, and empty cells must error rather than silently
+        // Lowercase, truncated, and garbage cells must error rather than silently
         // mapping to Pass — a garbled "fail" cell must not masquerade as passed.
-        for bad in ["pass", "fail", "FA", "", "OK", "PASS "] {
+        // (Empty is a valid "no flag" form and is tested as accepted above.)
+        for bad in ["pass", "fail", "FA", "OK", "PASS "] {
             assert!(parse_qc(bad).is_err(), "expected error for {bad:?}");
         }
     }

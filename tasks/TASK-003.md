@@ -5,7 +5,7 @@
 **Owner:** orchestrator
 **Branch:** (pending)
 **Started:** 2026-05-29T06:28:26+00:00
-**Updated:** 2026-05-29T06:37:38Z
+**Updated:** 2026-05-29T07:40:54+00:00
 <!-- kanban-status:end -->
 
 ## Plan
@@ -77,3 +77,7 @@ No public output format changes. The two distinct float-precision contracts
 (`format_f64` full round-trip vs `format_float` fixed-6dp) remain intentionally
 separate and are now documented; a future unification would require deciding
 which columns change bytes and is out of scope here.
+
+### Codex adversarial-review fix (orchestrator)
+
+Codex flagged (HIGH): the strict `parse_qc` rejected empty QC cells, but empty is a previously-valid "no flag" form that `validate_measurements` (validate.rs:360) still accepts as `"PASS" | "WARN" | "FAIL" | ""` — an over-strict regression that made the typed reader and the raw validator disagree. Fixed: `parse_qc` now maps `""` to `Pass` (the documented unspecified default) and bails only on *non-empty* unrecognized values, so garbage/typos are still rejected. Updated the unit tests accordingly (empty accepted; "pass"/"fail"/"FA"/"OK"/"PASS " rejected). `report_qc`, `determinism_new_methods`, `enrich_gsea` all still green.
