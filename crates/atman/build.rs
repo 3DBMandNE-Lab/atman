@@ -97,7 +97,15 @@ fn resolve_git_dir(marker: &Path) -> Option<PathBuf> {
         let dir = text
             .lines()
             .find_map(|l| l.trim().strip_prefix("gitdir: ").map(str::trim))?;
-        return Some(PathBuf::from(dir));
+        let dir = PathBuf::from(dir);
+        // `git worktree add` writes an absolute gitdir by default, but
+        // `--relative-paths` writes one relative to the `.git` file's own
+        // directory (NOT cargo's package cwd). Resolve accordingly.
+        return Some(if dir.is_absolute() {
+            dir
+        } else {
+            marker.parent().unwrap_or(Path::new("")).join(dir)
+        });
     }
     None
 }
