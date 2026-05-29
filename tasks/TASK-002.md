@@ -1,11 +1,11 @@
 # TASK-002 — core: guard effective_abundance() against non-finite values
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-a9a61d25457420390
 **Started:** 2026-05-29T06:28:26+00:00
-**Updated:** 2026-05-29T06:31:58Z
+**Updated:** 2026-05-29T07:37:11+00:00
 <!-- kanban-status:end -->
 
 ## Plan
