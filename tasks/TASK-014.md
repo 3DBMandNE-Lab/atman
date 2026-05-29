@@ -5,7 +5,7 @@
 **Owner:** orchestrator
 **Branch:** (pending)
 **Started:** 2026-05-29T09:49:45+00:00
-**Updated:** 2026-05-29T10:18:00+00:00
+**Updated:** 2026-05-29T10:28:07+00:00
 <!-- kanban-status:end -->
 
 ## Plan
@@ -57,3 +57,10 @@ Pure infra/provenance change. Reviewer note: the `-dirty` suffix will appear
 on any binary built from a non-clean checkout (by design). Clean CI builds are
 unaffected. Future candidate (not this task): feature-gate or replace statrs to
 shed the unused nalgebra+rand transitive deps.
+
+### Codex adversarial-review fix (orchestrator)
+
+Codex flagged two issues on the -dirty logic:
+- HIGH (staleness): cargo would not re-run build.rs on uncommitted *tracked source* edits (rerun-if-changed only watched build.rs/Cargo.lock/HEAD), so a dev rebuild after editing-without-committing could keep the clean SHA. Fixed by adding `cargo:rerun-if-changed=src` so this crate's source edits re-trigger the dirty check, and documented the residual limitation (an uncommitted edit to a *different* crate that doesn't rebuild atman can still leave a stale clean SHA; for guaranteed provenance build from a clean checkout, as CI/release does).
+- MEDIUM (untracked): switched from `git status --porcelain --untracked-files=no` to plain `--porcelain` so untracked non-ignored files (a new uncommitted source file = non-reproducible build) also flag -dirty. .gitignore'd artifacts (target/, etc.) are not reported, so they don't spuriously trip it.
+Verified: built binary bakes `<sha>-dirty` in this dirty worktree; clean checkout yields a bare SHA. Build + tests green.

@@ -52,8 +52,12 @@ fn main() {
 
     // Rebuild when HEAD moves so the baked-in SHA stays current across
     // commits. Also re-run if Cargo.lock changes (so ATMAN_CARGO_LOCK_SHA256
-    // tracks dependency pin changes).
+    // tracks dependency pin changes), and when this crate's own sources change
+    // so the `-dirty` flag refreshes on uncommitted edits during incremental
+    // dev builds (emitting explicit rerun-if-changed opts out of cargo's
+    // default "any package file" trigger, so `src` must be listed explicitly).
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=../../Cargo.lock");
     let head = Path::new("../../.git/HEAD");
     if head.exists() {
@@ -69,22 +73,32 @@ fn main() {
 /// Resolve the build-time git SHA, appending a `-dirty` suffix when the
 /// working tree has uncommitted tracked changes.
 ///
-/// `git status --porcelain` emits one line per changed/untracked path and
+/// `git status --porcelain` emits one line per changed-or-untracked path and
 /// nothing at all for a clean tree, so a non-empty (successful) output marks
-/// the tree dirty. Untracked-only files would also flag dirty here, so the
-/// command is restricted to tracked modifications via `--untracked-files=no`,
-/// matching the task's "uncommitted tracked changes" definition.
+/// the tree dirty. Untracked (non-ignored) files are INCLUDED: a new,
+/// uncommitted source file means the build is not reproducible from the
+/// recorded commit, which is exactly the provenance gap `-dirty` exists to
+/// flag. (`.gitignore`d paths like `target/` are not reported, so routine
+/// build artifacts do not spuriously trip it.)
 ///
 /// When `git` is unavailable the base SHA is `"unknown"` (preserving the
 /// existing fallback) and no suffix is added — we never claim dirtiness we
 /// cannot observe. Side-effect-free and deterministic.
+///
+/// LIMITATION: the flag is captured when this build script runs. Cargo re-runs
+/// it on changes to `build.rs`, this crate's `src`, `Cargo.lock`, and
+/// `.git/HEAD`/the branch ref — so it refreshes on commits and on edits to
+/// this crate. An uncommitted edit to a DIFFERENT workspace crate that does
+/// not also rebuild this crate can leave a stale clean SHA. For guaranteed
+/// provenance, build from a clean checkout (as CI/release does); for
+/// incremental dev builds `-dirty` is best-effort.
 fn git_sha_with_dirty() -> String {
     let sha = capture_command("git", &["rev-parse", "HEAD"]);
     if sha == "unknown" {
         return sha;
     }
     let status = Command::new("git")
-        .args(["status", "--porcelain", "--untracked-files=no"])
+        .args(["status", "--porcelain"])
         .output();
     let dirty = matches!(
         status,
