@@ -305,7 +305,10 @@ each sample of condition A to its nearest-stem-distance partner of condition
 B *within the same recovered plex*. Inference succeeds only when every A has
 a unique B partner at distance ≤ `--pair-stem-distance` (default 1); on
 success the augmented samples file gains a `patient_id` column and a
-companion `*_pairs.tsv` lists the pairs and their stem distances. Use the
+companion `*_pairs.tsv` lists the pairs and their stem distances. If you ask
+for `--infer-pairs` on a detection-coherent plex but inference cannot
+complete (no unique partner within the distance bound), the command fails
+loudly rather than emitting a success with no pairs file. Use the
 recovered patient id as the pairing covariate in DE, e.g.
 `atman detectability --design "~ patient_id"`.
 

@@ -129,6 +129,9 @@ atman matrix             canonical long TSV → per-panel wide NPX CSVs
 atman fold-change        compute per-panel log2 fold-change tables
 atman de                 paired, Welch, OLS, mixed, limma, msqrob, or ensemble DE
 atman detectability      model detected/not-detected proteins alongside abundance
+atman robust-paired      leave-one-subject-out sign-stability for paired DE
+atman absence-topology   cluster proteins that go missing together (co-absence)
+atman recover-plex       recover acquisition plexes / pairs from co-detection
 atman bootstrap protein  subject-level bootstrap intervals for protein effects
 atman bootstrap module   subject-level bootstrap intervals for module effects
 atman null               permutation/sign-flip null calibration for DE effects
@@ -147,9 +150,11 @@ atman meta               combine DE results across cohorts
 atman network influence  feature-covariance hub scoring
 atman network differential  cross-cohort differential coexpression (edge-pairwise / edge-summary / module)
 atman decompose ica      multi-seed FastICA with seed-stability reporting
+atman decompose nmf      Brunet 2004 NMF with multi-seed stability + k-selection
 atman decompose null     permutation-null calibration of archetype stability
 atman decompose variance mixed-model variance partition per archetype
 atman decompose unmix    VCA + FCLS compartmental unmixing
+atman decompose counterfactual  per-archetype counterfactual ablation
 atman align programs     cross-cohort program alignment + sensitivity sweep
 atman align bootstrap    subject-level bootstrap of alignment
 atman run                execute a plan YAML/JSON and emit a hash manifest

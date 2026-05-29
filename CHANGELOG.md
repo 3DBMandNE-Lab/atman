@@ -8,6 +8,42 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`atman detectability` — two-layer detection + abundance differential
+  screen.** Separates "is this protein detected differently between
+  conditions?" (a logistic/contingency test on the present-vs-missing
+  pattern, with log-odds-ratio effect size) from "is it abundant
+  differently where detected?" (OLS on the detected-only subset). Treats
+  below-LOD / missing as genuinely missing (MNAR), never imputed. The
+  abundance layer requires `--min-detected-per-condition` (default 2)
+  detected samples in BOTH conditions, otherwise it is suppressed with
+  `skip_reason = one_sided_detection` (a 3-vs-0 split has no real
+  between-group contrast). Both layers report effect sizes alongside
+  BH-adjusted q-values.
+
+- **`atman absence-topology` — protein-side co-absence clustering.** Groups
+  proteins that go missing together across samples via union-find over the
+  Jaccard distance of their missingness patterns, surfacing structured
+  dropout (shared depletion, panel/plate effects) as continuous,
+  auditable clusters rather than per-protein noise. Deterministic
+  (cluster ids assigned by sorted membership). The protein-side dual of
+  `recover-plex`.
+
+- **`atman recover-plex` — sample-side plex / pair recovery.** Clusters
+  samples by co-detection structure (union-find over Jaccard distance) to
+  recover acquisition plexes or paired designs from the data when the
+  metadata is missing or suspect. `--infer-pairs` proposes a pairing on a
+  detection-coherent plex and **fails loudly** if inference cannot
+  complete on a coherent plex (rather than silently emitting no pairs);
+  detection-incoherent plexes are reported as a skip.
+
+- **`atman robust-paired` — leave-one-subject-out sign-stability for paired
+  DE.** Jackknifes each paired comparison, recomputing the effect with one
+  pair dropped, and reports per-protein sign-stability (the fraction of
+  LOSO replicates preserving the full-data effect direction) plus the
+  most-influential pair. An exactly-zero replicate effect is treated as
+  non-directional (not spuriously sign-stable). BH-FDR at the biological-
+  replicate (pair) level.
+
 - **`atman decompose nmf` — Brunet 2004 multiplicative-updates NMF.**
   Frobenius or KL divergence loss (selectable via `--loss`) with two key features:
   (1) **Multi-seed stability framework** (`--n-seeds`, `--seed-stability-threshold`)
@@ -68,11 +104,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Numerically stable two-sided p-value tails across DE / limma / msqrob
-  / ensemble / network_differential.** Replaced `2 * (1 - cdf(|t|))` with
-  the survival function `sf()` to avoid rounding-to-zero on extreme tails
-  (e.g. t = 39, df = 326). Affects p-values reported in `de_results.tsv`,
-  `ensemble_de.tsv`, and `network_differential.tsv` (mode edge-pairwise)
-  when effect sizes are large or residual degrees of freedom are high.
+  / ensemble / network_differential / the permutation null.** Replaced
+  `2 * (1 - cdf(|t|))` with the survival function `sf()` to avoid
+  rounding-to-zero on extreme tails (e.g. t = 39, df = 326). Affects
+  p-values reported in `de_results.tsv`, `ensemble_de.tsv`, and
+  `network_differential.tsv` (mode edge-pairwise) when effect sizes are
+  large or residual degrees of freedom are high. The `atman null`
+  permutation path previously used the unstable form in its per-iteration
+  t-statistic while the observed path used `sf()`, putting the two arms of
+  the empirical-FDR calibration on different numerical scales in the tail;
+  both now share `atman_core::de::two_sided_t_p_value`.
 
 - **`atman_core::de::fit_f_dist` homogeneous-variance case.** Now returns
   `(Inf, arithmetic_mean(s²))` when `excess <= 0` (residual variance equal
@@ -82,6 +123,57 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   when residual variance is near-homogeneous (e.g., high-replicate assays,
   processed matrices with post-QC low variance). `de_results.tsv` columns
   `df_prior` and `s2_prior` now populate correctly in this case.
+
+- **`ingest-matrix` `abundance_raw` column now holds the pre-normalization
+  value.** It previously received the same post-`--log2-transform`,
+  post-normalization value as the `abundance` column, defeating any
+  downstream raw-vs-effective comparison. `MeasurementRow` now carries the
+  pre-normalization value separately and emits it in `abundance_raw`.
+  `ingest-matrix` also now warns on matrix value-columns matching no
+  sample and hard-fails on a protein/row length mismatch instead of
+  silently truncating.
+
+- **`MeasurementRecord::effective_abundance()` rejects non-finite values.**
+  It returned `Some(NaN)`/`Some(inf)` for a non-dropped row whose abundance
+  parsed to a non-finite literal, leaking into `module-de`, `bootstrap`,
+  `ratio`, `residuals`, and `fold-change`. It now returns `None` for
+  non-finite abundance, matching the peptide-record accessor.
+
+- **`meta` sign-test trial count.** The binomial sign test used the total
+  cohort count as `n` while excluding zero-effect cohorts from `k`,
+  deflating the tail. It now uses `n = n_positive + n_negative`.
+
+- **`de --test limma` F-test q-values.** The per-feature `f_p_value` column
+  was emitted with `f_bh_q` always empty — the only p-column without
+  multiplicity control. `f_bh_q` is now BH-adjusted per (comparison, panel)
+  consistently with the moderated-t `bh_q`.
+
+- **Confidence intervals use the correct critical value (msqrob, Tukey,
+  Dunnett, Šidák post-hoc).** These emitted `effect ± 1.96·se` z-intervals
+  while their p-values were t-based or family-wise-adjusted, so a CI could
+  disagree with its own p-value at small df. Each CI now uses the matching
+  critical value (Student-t at the fit df; studentized-range for Tukey;
+  Dunnett critical value for Dunnett). p-values are unchanged; only
+  `ci_low`/`ci_high` move.
+
+- **Deterministic tie-breaking in `robustness` top-k selection.** The
+  top-k changed-feature set was sorted by `|mean_diff|` from a `HashMap`
+  with no secondary key, so features tied at the k-boundary were selected
+  by hash iteration order (non-reproducible Jaccard/overlap output, and
+  non-finite effects could hijack the set). It now uses a total-order
+  comparator with an ascending feature-id tie-break and excludes
+  non-finite effects; two further hash-ordered output paths in the same
+  command were made deterministic.
+
+- **`align project` keys activations by the matrix's own sample order.**
+  It re-derived sample IDs from `samples.tsv` in file order, independent of
+  the order `load_cohort_matrix` built the columns from; on a count match
+  with a different order this attached activations to the wrong samples.
+  The matrix's column order is now the single source of truth.
+
+- **Provenance input-hash lists de-duplicated** (`validate`, `de`,
+  `de --test ensemble`, `null`) — `measurements.tsv` was listed twice in
+  the canonical-input set recorded in the run sidecar.
 
 ### Documented divergences (atman vs the named reference)
 
@@ -180,6 +272,57 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Emits a `*.run.json` SHA-256 sidecar with all CLI parameters.
 
 ### Changed
+
+- **Unified pseudo-random number generation across the workspace.** Six
+  independently hand-rolled splitmix/LCG generators (in `null`, `bootstrap`,
+  `ratio`, and core `ica` / `multivariate_t` / `decompose_unmix` /
+  `align_bootstrap` / `gsea`) — which had already drifted apart and all used
+  a modulo-biased bounded draw — are replaced by one reviewed
+  `atman_core::rng` (`SplitMix64` / `Xoshiro256pp`) with an unbiased Lemire
+  bounded draw. The raw xoshiro stream is preserved byte-for-byte, so
+  decomposition point estimates (ICA / NMF / VCA) are unchanged. The
+  unbiased bounded draw **does change the absolute outputs** of the
+  permutation/bootstrap commands (`null`, `bootstrap`, `ratio`,
+  `decompose null`, `decompose unmix --n-boot`, GSEA permutation,
+  `align bootstrap`, Dunnett-Hsu Monte-Carlo) — same-seed reruns remain
+  byte-identical, but values differ from any pre-1.0 internal runs of those
+  commands, which should be regenerated.
+
+- **Strict QC-flag parsing.** Reading `measurements.tsv` now errors on an
+  unrecognized `qc_sample` / `qc_assay` value instead of silently treating
+  it as `PASS`. The accepted set is `PASS` / `WARN` / `FAIL` / empty (empty
+  = no flag = pass), matching `validate`. A garbled or lowercase QC cell is
+  now a loud failure rather than a silent "everything passed".
+
+- **Crash-safe (atomic) output writes.** `asymmetry`, `robustness`,
+  `module-de`, and `module-trajectory` now write their outputs via the
+  shared `atomic_write` (temp file + rename) like the rest of the toolset,
+  so an interrupted run cannot leave a truncated TSV.
+
+- **Honest build provenance.** The baked-in `ATMAN_GIT_SHA` now carries a
+  `-dirty` suffix when the working tree has uncommitted changes at build
+  time (`build.rs` is also worktree-aware, resolving the real git dir for
+  linked worktrees). A clean checkout records a bare SHA; CI/release builds
+  are unaffected.
+
+- **Minimum supported / pinned Rust is 1.94.** Added a committed
+  `rust-toolchain.toml` (channel 1.94) so local, Docker, and CI builds
+  cannot drift; CI now also pins the supported toolchain and exports
+  `BLAS_NUM_THREADS`/`OMP_NUM_THREADS`/`OPENBLAS_NUM_THREADS=1` so the
+  byte-identity determinism tests run under their documented conditions.
+  Dropped the unused `thiserror` workspace dependency.
+
+- **Internal: large command modules split (behavior-preserving).**
+  `commands/decompose.rs` (≈3,350 LOC) became a `decompose/` submodule tree
+  (one file per subcommand) and `commands/de/mod.rs` (≈2,500 LOC) was
+  reduced to dispatch plus `args` / `ols_design` / `output_rows` submodules;
+  the duplicated union-find / Jaccard / median helpers shared by
+  `absence-topology` and `recover-plex` were extracted to one
+  `jaccard_cluster` module. Output is byte-identical (guarded by the
+  determinism + golden suites). A new `determinism_rng_commands` test suite
+  asserts cross-run byte-identity for every RNG-bearing command
+  (`null`, `bootstrap`, `ratio`, `align bootstrap`, `de --test ensemble`,
+  `decompose ica`, `robust-paired`).
 
 - **`Platform` accepts custom identifiers without recompile.** The
   canonical `platform` field in `samples.tsv` / `proteins.tsv` /
@@ -569,23 +712,31 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   welch-t, ols, mixed, limma (with or without DEqMS), msqrob — and
   writes a per-(comparison, protein) agreement summary to
   `de_ensemble.tsv` alongside the tagged per-method rows in
-  `de_results.tsv` (new `method` column). Per-method p-values are
-  Stouffer-combined into an `ensemble_p`, BH-FDR'd to `ensemble_q`
-  within each comparison; grade is **VALIDATED** when
-  `ensemble_q < --ensemble-q-threshold` (default 0.05) AND every
-  applicable method agrees on sign; **PROVISIONAL** when
-  ensemble_q is significant but at least `--ensemble-provisional-fraction`
-  (default 0.50) of methods agree on sign; **INSUFFICIENT**
-  otherwise. Method applicability is auto-detected: methods whose
-  required inputs are missing (e.g. msqrob without
-  `--peptide-measurements`) are listed in `methods_skipped` rather
-  than aborting the run. Thresholds are overridable
-  (`--ensemble-q-threshold`, `--ensemble-validated-fraction`,
-  `--ensemble-provisional-fraction`, `--ensemble-sign-fraction`).
-  Validated on the bundled Dube heat-acclimation cohort — all three
-  canonical heat-shock proteins present in the Olink panels (HSPA1A,
-  HSPB1, DNAJB1) are graded VALIDATED in PT2-PR2 with
-  `ensemble_q < 0.025` and positive majority sign.
+  `de_results.tsv` (new `method` column). The grade is assigned from
+  **per-method agreement, not a combined p-value**: for each
+  (comparison, protein) it counts how many applied methods individually
+  clear their own per-method BH-q < `--ensemble-q-threshold` (default
+  0.05) — `n_significant` — and how many agree on the `mean_diff` sign.
+  Grade is **VALIDATED** when both the significant fraction and the
+  sign-consistent fraction reach `--ensemble-sign-fraction` (default
+  1.00 — every applied method); **PROVISIONAL** when both reach
+  `--ensemble-provisional-fraction` (default 0.50 — a majority);
+  **INSUFFICIENT** otherwise (including when no method clears its own
+  significance, regardless of how small the combined p is). A Stouffer
+  `ensemble_p` / BH `ensemble_q` is still emitted but is a
+  **non-calibrated ranking heuristic only — never an input to the
+  grade**: the methods share one abundance matrix, so their p-values are
+  positively correlated and the combined p is anti-conservative. Method
+  applicability is auto-detected: methods whose required inputs are
+  missing (e.g. msqrob without `--peptide-measurements`) are listed in
+  `methods_skipped` rather than aborting the run. Thresholds are
+  overridable (`--ensemble-q-threshold`, `--ensemble-provisional-fraction`,
+  `--ensemble-sign-fraction`). On the bundled Dube heat-acclimation
+  cohort the canonical heat-shock proteins (HSPA1A, HSPB1, DNAJB1) show
+  consistent positive sign in PT2-PR2, but at n≈9–20 paired subjects no
+  single method clears its own BH-q, so honest grading does **not** mark
+  them VALIDATED — the prior VALIDATED label came only from the
+  anti-conservative combined `ensemble_q`.
 - **DEqMS peptide-count-weighted variance on `--test limma`
   (`atman de --test limma --peptide-metadata peptides.tsv`).**
   Swaps limma's parametric mean-variance trend covariate for
