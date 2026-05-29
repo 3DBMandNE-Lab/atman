@@ -1,11 +1,11 @@
 # TASK-006 — meta: fix binomial sign-test trial count
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-ab33c1cabc856b588
 **Started:** 2026-05-29T06:43:48+00:00
-**Updated:** 2026-05-29T06:46:03Z
+**Updated:** 2026-05-29T07:37:11+00:00
 <!-- kanban-status:end -->
 
 ## Plan
