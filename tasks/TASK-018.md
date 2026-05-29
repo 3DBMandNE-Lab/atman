@@ -1,11 +1,11 @@
 # TASK-018 — validate: dedup the provenance input-hash list
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-af93479cd8e11bb2f
 **Started:** 2026-05-29T13:08:21+00:00
-**Updated:** 2026-05-29T13:09:39Z
+**Updated:** 2026-05-29T21:00:25+00:00
 <!-- kanban-status:end -->
 
 ## Plan
