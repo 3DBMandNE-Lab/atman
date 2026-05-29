@@ -1,11 +1,11 @@
 # TASK-019 — de/mod: fix stale doc comments + dedup provenance hash list
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-acd463d6f37f34969
 **Started:** 2026-05-29T13:08:21+00:00
-**Updated:** 2026-05-29T13:14:13+00:00
+**Updated:** 2026-05-29T21:00:25+00:00
 <!-- kanban-status:end -->
 
 ## Plan
