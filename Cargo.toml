@@ -24,7 +24,6 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 statrs = "0.17"
 tempfile = "3"
-thiserror = "1"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 uuid = { version = "1", features = ["v4"] }
 proptest = "1"

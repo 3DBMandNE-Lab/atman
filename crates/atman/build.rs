@@ -4,7 +4,9 @@
 //!
 //! Sets:
 //! - `ATMAN_GIT_SHA` — `git rev-parse HEAD`, or `"unknown"` when built
-//!   outside a git checkout.
+//!   outside a git checkout. A `-dirty` suffix is appended when the
+//!   working tree has uncommitted tracked changes at build time, so a
+//!   binary built from a dirty tree never claims a clean commit.
 //! - `ATMAN_TARGET` — Cargo `TARGET` triple (e.g. `aarch64-apple-darwin`).
 //! - `ATMAN_RUSTC_VERSION` — `rustc --version` verbatim, or `"unknown"`.
 //! - `ATMAN_CARGO_LOCK_SHA256` — SHA-256 of the workspace `Cargo.lock`,
@@ -12,10 +14,13 @@
 //!   normal build, but `cargo install` from a git dep can).
 //! - `ATMAN_PROFILE` — `debug` / `release`, from Cargo.
 
-use std::{path::Path, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn main() {
-    let sha = capture_command("git", &["rev-parse", "HEAD"]);
+    let sha = git_sha_with_dirty();
     println!("cargo:rustc-env=ATMAN_GIT_SHA={sha}");
 
     let target = std::env::var("TARGET").unwrap_or_default();
@@ -50,17 +55,107 @@ fn main() {
 
     // Rebuild when HEAD moves so the baked-in SHA stays current across
     // commits. Also re-run if Cargo.lock changes (so ATMAN_CARGO_LOCK_SHA256
-    // tracks dependency pin changes).
+    // tracks dependency pin changes), and when this crate's own sources change
+    // so the `-dirty` flag refreshes on uncommitted edits during incremental
+    // dev builds (emitting explicit rerun-if-changed opts out of cargo's
+    // default "any package file" trigger, so `src` must be listed explicitly).
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=../../Cargo.lock");
-    let head = Path::new("../../.git/HEAD");
-    if head.exists() {
-        println!("cargo:rerun-if-changed=../../.git/HEAD");
-        if let Ok(text) = std::fs::read_to_string(head) {
-            if let Some(rest) = text.trim().strip_prefix("ref: ") {
-                println!("cargo:rerun-if-changed=../../.git/{rest}");
+    // Resolve the git directory. In a normal checkout `../../.git` is a
+    // directory; in a LINKED git worktree it is a FILE containing
+    // `gitdir: <path-to-per-worktree-gitdir>`. The kanban build system runs
+    // entirely in linked worktrees, so we must handle the file form — otherwise
+    // the HEAD rerun trigger is silently skipped and the baked SHA goes stale
+    // across commits in a worktree.
+    if let Some(git_dir) = resolve_git_dir(Path::new("../../.git")) {
+        let head = git_dir.join("HEAD");
+        if head.exists() {
+            println!("cargo:rerun-if-changed={}", head.display());
+            if let Ok(text) = std::fs::read_to_string(&head) {
+                if let Some(rest) = text.trim().strip_prefix("ref: ") {
+                    // Branch refs are shared via the common dir (worktrees
+                    // record it in a `commondir` file); resolve against it so
+                    // the watched ref path is correct in both layouts.
+                    let base = read_commondir(&git_dir).unwrap_or_else(|| git_dir.clone());
+                    println!("cargo:rerun-if-changed={}", base.join(rest).display());
+                }
             }
         }
+    }
+}
+
+/// Resolve the real git directory for `marker` (`<repo>/.git`). Returns the
+/// directory itself for a normal checkout, or the `gitdir:` target when
+/// `marker` is the file form used by linked worktrees. `None` if neither.
+fn resolve_git_dir(marker: &Path) -> Option<PathBuf> {
+    if marker.is_dir() {
+        return Some(marker.to_path_buf());
+    }
+    if marker.is_file() {
+        let text = std::fs::read_to_string(marker).ok()?;
+        let dir = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("gitdir: ").map(str::trim))?;
+        let dir = PathBuf::from(dir);
+        // `git worktree add` writes an absolute gitdir by default, but
+        // `--relative-paths` writes one relative to the `.git` file's own
+        // directory (NOT cargo's package cwd). Resolve accordingly.
+        return Some(if dir.is_absolute() {
+            dir
+        } else {
+            marker.parent().unwrap_or(Path::new("")).join(dir)
+        });
+    }
+    None
+}
+
+/// In a linked worktree the shared refs live in the common git dir, recorded
+/// in `<git_dir>/commondir` as a path relative to `git_dir`. Returns that
+/// resolved common dir, or `None` for a normal checkout (no `commondir` file).
+fn read_commondir(git_dir: &Path) -> Option<PathBuf> {
+    let rel = std::fs::read_to_string(git_dir.join("commondir")).ok()?;
+    Some(git_dir.join(rel.trim()))
+}
+
+/// Resolve the build-time git SHA, appending a `-dirty` suffix when the
+/// working tree has uncommitted tracked changes.
+///
+/// `git status --porcelain` emits one line per changed-or-untracked path and
+/// nothing at all for a clean tree, so a non-empty (successful) output marks
+/// the tree dirty. Untracked (non-ignored) files are INCLUDED: a new,
+/// uncommitted source file means the build is not reproducible from the
+/// recorded commit, which is exactly the provenance gap `-dirty` exists to
+/// flag. (`.gitignore`d paths like `target/` are not reported, so routine
+/// build artifacts do not spuriously trip it.)
+///
+/// When `git` is unavailable the base SHA is `"unknown"` (preserving the
+/// existing fallback) and no suffix is added — we never claim dirtiness we
+/// cannot observe. Side-effect-free and deterministic.
+///
+/// LIMITATION: the flag is captured when this build script runs. Cargo re-runs
+/// it on changes to `build.rs`, this crate's `src`, `Cargo.lock`, and
+/// `.git/HEAD`/the branch ref — so it refreshes on commits and on edits to
+/// this crate. An uncommitted edit to a DIFFERENT workspace crate that does
+/// not also rebuild this crate can leave a stale clean SHA. For guaranteed
+/// provenance, build from a clean checkout (as CI/release does); for
+/// incremental dev builds `-dirty` is best-effort.
+fn git_sha_with_dirty() -> String {
+    let sha = capture_command("git", &["rev-parse", "HEAD"]);
+    if sha == "unknown" {
+        return sha;
+    }
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output();
+    let dirty = matches!(
+        status,
+        Ok(o) if o.status.success() && !o.stdout.iter().all(u8::is_ascii_whitespace)
+    );
+    if dirty {
+        format!("{sha}-dirty")
+    } else {
+        sha
     }
 }
 
