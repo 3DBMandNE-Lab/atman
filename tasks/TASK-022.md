@@ -5,7 +5,7 @@
 **Owner:** orchestrator
 **Branch:** (pending)
 **Started:** 2026-05-29T21:07:03+00:00
-**Updated:** 2026-05-29T21:13:33+00:00
+**Updated:** 2026-05-29T21:41:55+00:00
 <!-- kanban-status:end -->
 
 ## Plan
@@ -51,3 +51,10 @@ Follow-up risk: BLAS-thread pinning is required for ICA/ensemble determinism;
 tests set BLAS_NUM_THREADS/OMP_NUM_THREADS/OPENBLAS_NUM_THREADS=1 (matching the
 existing harness). robust-paired has no `--seed` (LOSO diagnostic, no RNG); if a
 seed flag is ever added it should be threaded through and this test extended.
+
+### Codex adversarial-review fix (orchestrator)
+
+Codex flagged two test-hardening MEDIUMs:
+- robust-paired only directly byte-compared its primary output; the derived `<stem>_summary.<ext>` companion was covered only via the sidecar SHA helper. Added a direct `assert_byte_identical` on the summary file (via a `summary_sibling` helper).
+- `assert_sidecar_shas_match` could pass vacuously if `output_files` were empty. Added a non-empty guard so an absent/empty output set fails loudly instead of comparing two empty maps.
+All 7 determinism_rng_commands tests still pass.

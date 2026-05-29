@@ -98,11 +98,27 @@ fn assert_sidecar_shas_match(path_a: &Path, path_b: &Path, label: &str) {
         out.sort();
         out
     };
+    let out_a = filename_shas(&ja["output_files"]);
+    // Guard against a trivial pass: an empty (or absent) output_files map would
+    // make the equality below vacuously true. Every RNG command emits at least
+    // one output file, so assert the set is non-empty.
+    assert!(
+        !out_a.is_empty(),
+        "{label} sidecar output_files is empty — comparison would be vacuous"
+    );
     assert_eq!(
-        filename_shas(&ja["output_files"]),
+        out_a,
         filename_shas(&jb["output_files"]),
         "{label} sidecar output_files SHA mismatch"
     );
+}
+
+/// The derived `<stem>_summary.<ext>` companion path a command writes next to
+/// its primary `--output` file (used by robust-paired).
+fn summary_sibling(out: &Path) -> std::path::PathBuf {
+    let stem = out.file_stem().unwrap().to_string_lossy();
+    let ext = out.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+    out.with_file_name(format!("{stem}_summary.{ext}"))
 }
 
 fn sidecar_for(output: &Path) -> std::path::PathBuf {
@@ -765,5 +781,12 @@ fn robust_paired_is_byte_deterministic() {
     }
 
     assert_byte_identical(&out1, &out2, "robust-paired");
+    // robust-paired also emits a <stem>_summary.<ext> companion; compare it
+    // directly rather than relying solely on the sidecar SHA helper.
+    assert_byte_identical(
+        &summary_sibling(&out1),
+        &summary_sibling(&out2),
+        "robust-paired summary",
+    );
     assert_sidecar_shas_match(&sidecar_for(&out1), &sidecar_for(&out2), "robust-paired sidecar");
 }
