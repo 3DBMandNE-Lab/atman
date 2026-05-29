@@ -33,8 +33,8 @@ fn workspace_root() -> PathBuf {
 fn cptac_tmt_adapter_recovers_paired_condition_from_real_subset() {
     let root = workspace_root();
     let adapter = root.join("adapters/cptac/cptac_tmt_proteome_to_atman.py");
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cptac_hcc_subset.tsv");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cptac_hcc_subset.tsv");
     assert!(adapter.exists(), "adapter missing: {adapter:?}");
     assert!(fixture.exists(), "fixture missing: {fixture:?}");
 
@@ -86,8 +86,7 @@ fn cptac_tmt_adapter_recovers_paired_condition_from_real_subset() {
     assert_eq!(by_sample["T112"][2], "tumor", "T -> tumor");
     assert_eq!(by_sample["P111"][1], "111", "subject_id for P111");
     assert_eq!(
-        by_sample["P111"][2],
-        "paired_non_tumor",
+        by_sample["P111"][2], "paired_non_tumor",
         "P -> paired_non_tumor"
     );
     assert_eq!(by_sample["T113"][2], "tumor");
@@ -96,7 +95,10 @@ fn cptac_tmt_adapter_recovers_paired_condition_from_real_subset() {
     // proteins.tsv: 4 distinct proteins; assay_id = NCBIGeneID.
     let proteins = std::fs::read_to_string(&proteins_path).unwrap();
     let protein_lines: Vec<&str> = proteins.lines().collect();
-    assert_eq!(protein_lines[0], "platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot");
+    assert_eq!(
+        protein_lines[0],
+        "platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot"
+    );
     assert_eq!(protein_lines.len(), 5, "expected 1 header + 4 protein rows");
     let by_gene: std::collections::BTreeMap<&str, Vec<&str>> = protein_lines[1..]
         .iter()
@@ -167,8 +169,8 @@ fn cptac_tmt_adapter_default_condition_for_opaque_ids() {
     // sample-id regex; everything should be labeled `tumor`.
     let root = workspace_root();
     let adapter = root.join("adapters/cptac/cptac_tmt_proteome_to_atman.py");
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/cptac_hcc_subset.tsv");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cptac_hcc_subset.tsv");
 
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path();
@@ -189,7 +191,10 @@ fn cptac_tmt_adapter_default_condition_for_opaque_ids() {
     let samples = std::fs::read_to_string(out.join("samples.tsv")).unwrap();
     for line in samples.lines().skip(1) {
         let f: Vec<&str> = line.split('\t').collect();
-        assert_eq!(f[1], f[0], "subject_id should equal sample_id with no regex");
+        assert_eq!(
+            f[1], f[0],
+            "subject_id should equal sample_id with no regex"
+        );
         assert_eq!(f[2], "tumor", "default condition should apply");
     }
 }

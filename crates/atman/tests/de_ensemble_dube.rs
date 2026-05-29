@@ -195,7 +195,8 @@ fn ensemble_grades_dube_heat_shock_proteins_as_validated() {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
         assert_eq!(
-            n_significant, n_applied,
+            n_significant,
+            n_applied,
             "VALIDATED protein with n_significant {n_significant} != n_applied {n_applied}: {:?}",
             r.get("gene_symbol")
         );

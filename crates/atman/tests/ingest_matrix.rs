@@ -286,7 +286,11 @@ A4\t20\t16\t18\n",
     // abundance_raw for S1 is exactly the raw inputs, untouched by normalization.
     let mut s1_raw = raw.get("S1").cloned().unwrap();
     s1_raw.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    assert_eq!(s1_raw, vec![14.0, 16.0, 18.0, 20.0], "abundance_raw mutated");
+    assert_eq!(
+        s1_raw,
+        vec![14.0, 16.0, 18.0, 20.0],
+        "abundance_raw mutated"
+    );
 
     // Median normalization shifts S1's working abundance, so the two columns
     // must differ for at least one row — proving abundance_raw is not a copy

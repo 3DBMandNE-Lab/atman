@@ -26,7 +26,8 @@ fn assert_tsv_byte_identical(path_a: &Path, path_b: &Path, label: &str) {
     let bytes_a = std::fs::read(path_a).expect(&format!("read {}", path_a.display()));
     let bytes_b = std::fs::read(path_b).expect(&format!("read {}", path_b.display()));
     assert_eq!(
-        bytes_a, bytes_b,
+        bytes_a,
+        bytes_b,
         "{} TSV byte mismatch:\n  A: {}\n  B: {}",
         label,
         path_a.display(),
@@ -37,7 +38,8 @@ fn assert_tsv_byte_identical(path_a: &Path, path_b: &Path, label: &str) {
 /// Parse .run.json sidecar and extract input/output SHA fields for comparison.
 fn extract_run_json_shas(path: &Path) -> (serde_json::Value, serde_json::Value) {
     let text = std::fs::read_to_string(path).expect(&format!("read {}", path.display()));
-    let j: serde_json::Value = serde_json::from_str(&text).expect(&format!("parse {}", path.display()));
+    let j: serde_json::Value =
+        serde_json::from_str(&text).expect(&format!("parse {}", path.display()));
 
     let input_sha = j["inputs_sha256"].clone();
     let output_files = j["output_files"].clone();
@@ -53,9 +55,7 @@ fn assert_run_json_shas_match(path_a: &Path, path_b: &Path, label: &str) {
     assert_eq!(
         input_sha_a, input_sha_b,
         "{} .run.json inputs_sha256 mismatch:\n  A: {}\n  B: {}",
-        label,
-        input_sha_a,
-        input_sha_b
+        label, input_sha_a, input_sha_b
     );
 
     // Extract just the filenames and SHAs, not full paths (which differ between runs)
@@ -82,9 +82,7 @@ fn assert_run_json_shas_match(path_a: &Path, path_b: &Path, label: &str) {
     assert_eq!(
         shas_a, shas_b,
         "{} .run.json output file SHAs mismatch:\n  A: {:?}\n  B: {:?}",
-        label,
-        shas_a,
-        shas_b
+        label, shas_a, shas_b
     );
 }
 
@@ -131,7 +129,8 @@ fn build_canonical_input_from_matrix(matrix_path: &Path, output_dir: &Path) {
                    detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order";
     let mut measurements_tsv = String::from(headers);
     measurements_tsv.push('\n');
-    for (ingest_order, (sample_id, gene_symbol, abundance)) in measurements.into_iter().enumerate() {
+    for (ingest_order, (sample_id, gene_symbol, abundance)) in measurements.into_iter().enumerate()
+    {
         let gene_idx = genes.iter().position(|g| g == &gene_symbol).unwrap();
         let assay_id = format!("A{:03}", gene_idx);
         let src = format!("{:.10}", abundance);
@@ -148,7 +147,9 @@ fn build_canonical_input_from_matrix(matrix_path: &Path, output_dir: &Path) {
     for (i, sample_id) in samples.iter().enumerate() {
         samples_tsv.push_str(&format!(
             "{}\t{}\tcase\t0\tcsf\t{}\n",
-            sample_id, sample_id, i + 1
+            sample_id,
+            sample_id,
+            i + 1
         ));
     }
     std::fs::write(output_dir.join("samples.tsv"), samples_tsv).unwrap();
@@ -165,9 +166,12 @@ fn build_canonical_input_from_matrix(matrix_path: &Path, output_dir: &Path) {
 
 #[test]
 fn decompose_nmf_is_byte_deterministic() {
-    let fixture_path = manifest_dir()
-        .join("tests/fixtures/nmf_frobenius_input.tsv");
-    assert!(fixture_path.exists(), "fixture not found: {}", fixture_path.display());
+    let fixture_path = manifest_dir().join("tests/fixtures/nmf_frobenius_input.tsv");
+    assert!(
+        fixture_path.exists(),
+        "fixture not found: {}",
+        fixture_path.display()
+    );
 
     let tmp1 = tempfile::tempdir().unwrap();
     let tmp2 = tempfile::tempdir().unwrap();
@@ -222,7 +226,11 @@ fn decompose_nmf_is_byte_deterministic() {
 
     // Compare outputs byte-for-byte
     assert_tsv_byte_identical(&output_loadings_1, &output_loadings_2, "nmf_loadings");
-    assert_tsv_byte_identical(&output_activations_1, &output_activations_2, "nmf_activations");
+    assert_tsv_byte_identical(
+        &output_activations_1,
+        &output_activations_2,
+        "nmf_activations",
+    );
 
     // Compare .run.json SHA fields
     let sidecar_1 = {
@@ -240,8 +248,7 @@ fn decompose_nmf_is_byte_deterministic() {
 
 #[test]
 fn decompose_ica_missingness_is_byte_deterministic() {
-    let fixture_dir = manifest_dir()
-        .join("tests/fixtures");
+    let fixture_dir = manifest_dir().join("tests/fixtures");
 
     let tmp1 = tempfile::tempdir().unwrap();
     let tmp2 = tempfile::tempdir().unwrap();
@@ -306,7 +313,11 @@ fn decompose_ica_missingness_is_byte_deterministic() {
 
     // Compare outputs byte-for-byte
     assert_tsv_byte_identical(&output_loadings_1, &output_loadings_2, "ica_loadings");
-    assert_tsv_byte_identical(&output_activations_1, &output_activations_2, "ica_activations");
+    assert_tsv_byte_identical(
+        &output_activations_1,
+        &output_activations_2,
+        "ica_activations",
+    );
 
     // Compare .run.json SHA fields
     let sidecar_1 = {
@@ -324,13 +335,20 @@ fn decompose_ica_missingness_is_byte_deterministic() {
 
 #[test]
 fn de_adjust_for_is_byte_deterministic() {
-    let fixture_dir = manifest_dir()
-        .join("tests/fixtures");
+    let fixture_dir = manifest_dir().join("tests/fixtures");
     let input_dir = fixture_dir.join("de_adjust_for_input");
     let covariates_path = fixture_dir.join("de_adjust_for_covariates.tsv");
 
-    assert!(input_dir.exists(), "input dir not found: {}", input_dir.display());
-    assert!(covariates_path.exists(), "covariates file not found: {}", covariates_path.display());
+    assert!(
+        input_dir.exists(),
+        "input dir not found: {}",
+        input_dir.display()
+    );
+    assert!(
+        covariates_path.exists(),
+        "covariates file not found: {}",
+        covariates_path.display()
+    );
 
     let tmp1 = tempfile::tempdir().unwrap();
     let tmp2 = tempfile::tempdir().unwrap();
@@ -383,7 +401,14 @@ fn de_adjust_for_is_byte_deterministic() {
         for entry in std::fs::read_dir(dir).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.is_file() && path.file_name().unwrap().to_string_lossy().starts_with("de_results") && path.extension().map_or(false, |ext| ext == "tsv") {
+            if path.is_file()
+                && path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("de_results")
+                && path.extension().map_or(false, |ext| ext == "tsv")
+            {
                 return path;
             }
         }

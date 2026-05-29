@@ -233,7 +233,10 @@ fn write_nmf_fixture(dir: &Path) {
     let mut planted = String::from("archetype_id\tprotein\tloading\n");
     for k in 0..N_ARCHETYPES {
         for j in 0..N_FEATURES {
-            planted.push_str(&format!("{}\t{}\t{:.6}\n", arch_ids[k], gene_ids[j], h[k][j]));
+            planted.push_str(&format!(
+                "{}\t{}\t{:.6}\n",
+                arch_ids[k], gene_ids[j], h[k][j]
+            ));
         }
     }
     std::fs::write(dir.join("planted_loadings.tsv"), planted).unwrap();

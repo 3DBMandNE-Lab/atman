@@ -1266,7 +1266,10 @@ pub fn read_external_covariates<P: AsRef<Path>>(
                 .parse()
                 .map_err(|_| format!("failed to parse '{}' as f64", value_str))?;
             if !value.is_finite() {
-                return Err(format!("non-finite value in long-format TSV: {}", value_str));
+                return Err(format!(
+                    "non-finite value in long-format TSV: {}",
+                    value_str
+                ));
             }
             result
                 .entry(sample_id)
@@ -1291,7 +1294,10 @@ pub fn read_external_covariates<P: AsRef<Path>>(
                     .parse()
                     .map_err(|_| format!("failed to parse '{}' as f64", value_str))?;
                 if !value.is_finite() {
-                    return Err(format!("non-finite value in column '{}': {}", header, value_str));
+                    return Err(format!(
+                        "non-finite value in column '{}': {}",
+                        header, value_str
+                    ));
                 }
                 covariates.insert(header.clone(), value);
             }

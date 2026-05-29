@@ -172,9 +172,7 @@ pub struct ModuleRewiringRow {
 /// `p = 2 * (1 - Φ(|Z|))`. Edges with `n < 4` in either cohort are
 /// skipped; edges with `|r| ≥ 1.0 - eps` are clamped to `±(1 - 1e-9)`
 /// before the atanh to keep the test finite.
-pub fn edge_pairwise_differential(
-    cohorts: &[&CohortCorrelations],
-) -> Vec<EdgePairwiseRow> {
+pub fn edge_pairwise_differential(cohorts: &[&CohortCorrelations]) -> Vec<EdgePairwiseRow> {
     if cohorts.len() < 2 {
         return Vec::new();
     }
@@ -257,14 +255,8 @@ pub fn edge_summary_differential(
             let m = mean(&r_vec);
             let sd = sample_sd(&r_vec, m);
             let abs_corrs: Vec<f64> = r_vec.iter().map(|r| r.abs()).collect();
-            let min_abs = abs_corrs
-                .iter()
-                .copied()
-                .fold(f64::INFINITY, f64::min);
-            let max_abs = abs_corrs
-                .iter()
-                .copied()
-                .fold(f64::NEG_INFINITY, f64::max);
+            let min_abs = abs_corrs.iter().copied().fold(f64::INFINITY, f64::min);
+            let max_abs = abs_corrs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
             let range = max_abs - min_abs;
             let n_sign_flips = sign_flip_count(&r_vec);
             let conservation = min_abs;
@@ -460,18 +452,12 @@ mod tests {
         let c1 = cohort(
             "c1",
             &features,
-            vec![
-                vec![1.0, 2.0, 3.0, 4.0, 5.0],
-                vec![1.1, 2.1, 3.0, 4.1, 4.9],
-            ],
+            vec![vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![1.1, 2.1, 3.0, 4.1, 4.9]],
         );
         let c2 = cohort(
             "c2",
             &features,
-            vec![
-                vec![1.0, 2.0, 3.0, 4.0, 5.0],
-                vec![1.0, 2.2, 3.1, 3.9, 5.1],
-            ],
+            vec![vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![1.0, 2.2, 3.1, 3.9, 5.1]],
         );
         let s = edge_summary_differential(&[&c1, &c2], 2);
         let ab = &s[0];
@@ -566,10 +552,7 @@ mod tests {
         let c2 = cohort(
             "c2",
             &features,
-            vec![
-                vec![1.0, 2.0, 3.0, 4.0, 5.0],
-                vec![1.1, 2.1, 3.0, 4.1, 5.0],
-            ],
+            vec![vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![1.1, 2.1, 3.0, 4.1, 5.0]],
         );
         // c1's A-B edge has n=2; require min 3 → edge dropped.
         let s = edge_summary_differential(&[&c1, &c2], 3);

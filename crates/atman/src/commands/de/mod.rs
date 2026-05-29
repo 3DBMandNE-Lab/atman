@@ -325,9 +325,7 @@ pub fn run(args: Args) -> Result<()> {
                 );
             }
         }
-        other => anyhow::bail!(
-            "unknown --post-hoc {other:?}; supported: sidak, tukey, dunnett"
-        ),
+        other => anyhow::bail!("unknown --post-hoc {other:?}; supported: sidak, tukey, dunnett"),
     }
     if args.test == "ensemble" {
         for frac in [
@@ -1151,4 +1149,3 @@ pub fn run(args: Args) -> Result<()> {
     eprintln!("de: sidecar={}", sidecar.display());
     Ok(())
 }
-

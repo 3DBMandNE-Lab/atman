@@ -838,7 +838,11 @@ pub fn limma_fit(
             return None;
         }
         let am = valid.iter().sum::<f64>() / valid.len() as f64;
-        if am.is_finite() && am > 0.0 { Some(am) } else { None }
+        if am.is_finite() && am > 0.0 {
+            Some(am)
+        } else {
+            None
+        }
     };
     let prior = if options.robust {
         fit_f_dist_robust(&ratios, df_res, options.winsor_lower, options.winsor_upper)

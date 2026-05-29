@@ -30,7 +30,11 @@ fn build_canonical_from_fixture(tmp: &Path, subdir: &str) -> std::path::PathBuf 
     let input_lines: Vec<&str> = input_text.lines().collect();
 
     // Skip comment header.
-    let data_start = if input_lines[0].starts_with('#') { 1 } else { 0 };
+    let data_start = if input_lines[0].starts_with('#') {
+        1
+    } else {
+        0
+    };
 
     let mut samples: BTreeSet<String> = BTreeSet::new();
     let mut genes: Vec<String> = Vec::new();
@@ -83,7 +87,9 @@ fn build_canonical_from_fixture(tmp: &Path, subdir: &str) -> std::path::PathBuf 
     for (i, sample_id) in samples.iter().enumerate() {
         samples_tsv.push_str(&format!(
             "{}\t{}\tcase\t0\tcsf\t{}\n",
-            sample_id, sample_id, i + 1
+            sample_id,
+            sample_id,
+            i + 1
         ));
     }
     std::fs::write(canonical_dir.join("samples.tsv"), &samples_tsv).unwrap();
@@ -149,10 +155,7 @@ fn run_nmf(canonical_dir: &Path, out_prefix: &Path, seed: u64) -> std::path::Pat
     ]);
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!(
-            "decompose nmf (seed={seed}) failed:\nstderr:\n{}",
-            stderr
-        );
+        panic!("decompose nmf (seed={seed}) failed:\nstderr:\n{}", stderr);
     }
     assert!(
         loadings_path.exists(),
@@ -207,7 +210,9 @@ fn align_programs_consumes_nmf_loadings_unchanged() {
         let header = lines[data_start];
         // NMF emits: program TAB assay_id TAB gene_symbol TAB loading
         assert!(
-            header.starts_with("program\t") && header.contains("gene_symbol") && header.contains("loading"),
+            header.starts_with("program\t")
+                && header.contains("gene_symbol")
+                && header.contains("loading"),
             "{label} loadings header unexpected: {header:?}"
         );
     }
@@ -264,17 +269,26 @@ fn align_programs_consumes_nmf_loadings_unchanged() {
     // Verify schema of archetypes.tsv.
     let text = std::fs::read_to_string(&archetypes_path).unwrap();
     assert!(
-        text.starts_with("archetype_id\tcohort\tprogram\tcategory\tn_members\tn_cohorts\tis_singleton\n"),
-        "archetypes.tsv has unexpected header:\n{}", text.lines().next().unwrap_or("")
+        text.starts_with(
+            "archetype_id\tcohort\tprogram\tcategory\tn_members\tn_cohorts\tis_singleton\n"
+        ),
+        "archetypes.tsv has unexpected header:\n{}",
+        text.lines().next().unwrap_or("")
     );
 
     // Parse rows and assert at least one cross-cohort archetype.
     let rows = parse_archetypes(&archetypes_path);
     assert!(!rows.is_empty(), "archetypes.tsv is empty");
 
-    let n_cross_cohort = rows.iter().filter(|r| {
-        r.get("n_cohorts").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0) >= 2
-    }).count();
+    let n_cross_cohort = rows
+        .iter()
+        .filter(|r| {
+            r.get("n_cohorts")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0)
+                >= 2
+        })
+        .count();
 
     assert!(
         n_cross_cohort >= 2,

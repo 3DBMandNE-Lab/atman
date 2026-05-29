@@ -63,10 +63,7 @@ pub struct DetectionCurve {
 /// - Iteration order: sequential through the input slices (deterministic).
 ///
 /// Non-finite `log_abundance[k]` values are excluded from the regression.
-pub fn fit_detection_curve(
-    log_abundance: &[f64],
-    detected: &[bool],
-) -> DetectionCurve {
+pub fn fit_detection_curve(log_abundance: &[f64], detected: &[bool]) -> DetectionCurve {
     assert_eq!(
         log_abundance.len(),
         detected.len(),
@@ -121,8 +118,8 @@ pub fn fit_detection_curve(
         let mut xtwx_00 = 0.0_f64; // sum(w)
         let mut xtwx_01 = 0.0_f64; // sum(w*x)
         let mut xtwx_11 = 0.0_f64; // sum(w*x^2)
-        let mut xtwz_0 = 0.0_f64;  // sum(w*z)
-        let mut xtwz_1 = 0.0_f64;  // sum(w*x*z)
+        let mut xtwz_0 = 0.0_f64; // sum(w*z)
+        let mut xtwz_1 = 0.0_f64; // sum(w*x*z)
 
         for k in 0..n {
             let x = xs[k];
@@ -199,7 +196,11 @@ pub fn log_abundance_for_fit(abundance: &[Vec<f64>]) -> Vec<Vec<f64>> {
         .copied()
         .fold(f64::INFINITY, f64::min);
 
-    let offset = if global_min.is_finite() { global_min } else { 0.0 };
+    let offset = if global_min.is_finite() {
+        global_min
+    } else {
+        0.0
+    };
 
     abundance
         .iter()
@@ -306,10 +307,7 @@ pub struct MnarIcaResult {
 /// recovery on the Phase-F fixture.  Per-cell detection-probability weighting
 /// is retained as a named helper (`compute_cell_weights_with_mask`, `detection_probability`)
 /// for future work on detection-model-aware whitening.
-pub fn fast_ica_mnar(
-    abundance: &[Vec<f64>],
-    config: &MnarIcaConfig,
-) -> MnarIcaResult {
+pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaResult {
     use crate::ica::fast_ica_weighted;
 
     let n = abundance.len();
@@ -384,7 +382,9 @@ pub fn fast_ica_mnar(
         );
         joint_iterations += 1;
 
-        let delta = (curve.beta0 - prev_beta0).abs().max((curve.beta1 - prev_beta1).abs());
+        let delta = (curve.beta0 - prev_beta0)
+            .abs()
+            .max((curve.beta1 - prev_beta1).abs());
         if delta < config.joint_tol {
             joint_converged = true;
             break;
@@ -441,10 +441,7 @@ fn column_mean_impute(x: &[Vec<f64>]) -> Vec<Vec<f64>> {
 
 /// Flatten a 2-D log-abundance matrix and detection mask into parallel slices
 /// suitable for [`fit_detection_curve`].
-fn flatten_for_fit(
-    log_ab_mat: &[Vec<f64>],
-    detected: &[Vec<bool>],
-) -> (Vec<f64>, Vec<bool>) {
+fn flatten_for_fit(log_ab_mat: &[Vec<f64>], detected: &[Vec<bool>]) -> (Vec<f64>, Vec<bool>) {
     let mut log_ab_flat = Vec::new();
     let mut det_flat = Vec::new();
     for (i, row) in log_ab_mat.iter().enumerate() {
@@ -455,7 +452,6 @@ fn flatten_for_fit(
     }
     (log_ab_flat, det_flat)
 }
-
 
 /// Re-impute missing cells (NaN in `abundance`) using the ICA reconstruction.
 ///
@@ -696,7 +692,8 @@ mod tests {
         assert!(
             (got - expected).abs() < 1e-3,
             "detection_probability at log_ab=0: got {:.6}, expected {:.6}",
-            got, expected
+            got,
+            expected
         );
     }
 }

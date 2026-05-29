@@ -35,12 +35,9 @@ fn atman_bin() -> std::path::PathBuf {
 /// Read a TSV that may start with a `# ...` comment line.
 /// Returns rows-as-hashmaps keyed by column name.
 fn read_tsv_skip_comment(path: &Path) -> Vec<HashMap<String, String>> {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("cannot read {:?}: {e}", path));
-    let mut lines = text
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-        .peekable();
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {:?}: {e}", path));
+    let mut lines = text.lines().filter(|l| !l.starts_with('#')).peekable();
     let header: Vec<&str> = match lines.next() {
         Some(h) => h.split('\t').collect(),
         None => return vec![],
@@ -86,8 +83,8 @@ fn run_adjusted_de_parity_test(
     t_tol: f64,
 ) -> (f64, f64) {
     let fixture_dir = Path::new("tests/fixtures");
-    let input_dir   = fixture_dir.join("de_adjust_for_input");
-    let cov_tsv     = fixture_dir.join("de_adjust_for_covariates.tsv");
+    let input_dir = fixture_dir.join("de_adjust_for_input");
+    let cov_tsv = fixture_dir.join("de_adjust_for_covariates.tsv");
 
     std::fs::create_dir_all(output_dir).unwrap();
 
@@ -119,7 +116,7 @@ fn run_adjusted_de_parity_test(
     );
 
     let atman_rows = read_tsv_skip_comment(&output_dir.join("de_results.tsv"));
-    let ref_rows   = read_tsv_skip_comment(reference_tsv);
+    let ref_rows = read_tsv_skip_comment(reference_tsv);
 
     assert_eq!(
         atman_rows.len(),
@@ -136,7 +133,7 @@ fn run_adjusted_de_parity_test(
         .collect();
 
     let mut max_lfc_delta: f64 = 0.0;
-    let mut max_t_delta:   f64 = 0.0;
+    let mut max_t_delta: f64 = 0.0;
 
     for row in &atman_rows {
         let gene = row.get("gene_symbol").expect("gene_symbol column");
@@ -158,17 +155,21 @@ fn run_adjusted_de_parity_test(
             .unwrap_or_else(|_| panic!("cannot parse t for gene {gene}"));
 
         let ref_lfc_raw: f64 = r["log_fc"].parse().expect("ref log_fc");
-        let ref_t_raw:   f64 = r["t_stat"].parse().expect("ref t_stat");
+        let ref_t_raw: f64 = r["t_stat"].parse().expect("ref t_stat");
 
         // When sign conventions differ, negate the R values before delta.
         let ref_lfc = if sign_flip { -ref_lfc_raw } else { ref_lfc_raw };
-        let ref_t   = if sign_flip { -ref_t_raw   } else { ref_t_raw   };
+        let ref_t = if sign_flip { -ref_t_raw } else { ref_t_raw };
 
         let lfc_delta = (atman_lfc - ref_lfc).abs();
-        let t_delta   = (atman_t   - ref_t).abs();
+        let t_delta = (atman_t - ref_t).abs();
 
-        if lfc_delta > max_lfc_delta { max_lfc_delta = lfc_delta; }
-        if t_delta   > max_t_delta   { max_t_delta   = t_delta;   }
+        if lfc_delta > max_lfc_delta {
+            max_lfc_delta = lfc_delta;
+        }
+        if t_delta > max_t_delta {
+            max_t_delta = t_delta;
+        }
 
         assert!(
             lfc_delta <= lfc_tol,
@@ -192,18 +193,14 @@ fn limma_adjusted_de_matches_r_reference() {
     let ref_tsv = fixture_dir.join("de_adjust_for_limma_reference.tsv");
 
     let (max_lfc_delta, max_t_delta) = run_adjusted_de_parity_test(
-        &[
-            "--test", "limma",
-            "--trend", "false",
-            "--robust", "false",
-        ],
+        &["--test", "limma", "--trend", "false", "--robust", "false"],
         &output_dir,
         &ref_tsv,
         // limma path: atman b-a means effect = mean_b − mean_a,
         // same sign as R's conditionb. No flip needed.
         false,
-        1e-6,  // log_fc tolerance
-        1e-6,  // t-stat tolerance
+        1e-6, // log_fc tolerance
+        1e-6, // t-stat tolerance
     );
 
     eprintln!(
@@ -230,19 +227,23 @@ fn msqrob2_adjusted_de_matches_r_reference() {
     let output_dir = tmp.path().join("de_out");
 
     let fixture_dir = Path::new("tests/fixtures");
-    let input_dir   = fixture_dir.join("de_adjust_for_input");
-    let ref_tsv     = fixture_dir.join("de_adjust_for_msqrob2_reference.tsv");
+    let input_dir = fixture_dir.join("de_adjust_for_input");
+    let ref_tsv = fixture_dir.join("de_adjust_for_msqrob2_reference.tsv");
 
     let (max_lfc_delta, max_t_delta) = run_adjusted_de_parity_test(
         &[
-            "--test", "msqrob",
+            "--test",
+            "msqrob",
             "--peptide-metadata",
             input_dir.join("peptides.tsv").to_str().unwrap(),
             "--peptide-measurements",
             input_dir.join("peptide_measurements.tsv").to_str().unwrap(),
-            "--min-peptides", "2",
-            "--ridge-lambda", "0.0",
-            "--robust", "false",
+            "--min-peptides",
+            "2",
+            "--ridge-lambda",
+            "0.0",
+            "--robust",
+            "false",
         ],
         &output_dir,
         &ref_tsv,
@@ -292,8 +293,8 @@ fn run_adjusted_de_parity_test_paired(
     t_tol: f64,
 ) -> (f64, f64) {
     let fixture_dir = Path::new("tests/fixtures");
-    let input_dir   = fixture_dir.join("de_adjust_for_paired_input");
-    let cov_tsv     = fixture_dir.join("de_adjust_for_paired_covariates.tsv");
+    let input_dir = fixture_dir.join("de_adjust_for_paired_input");
+    let cov_tsv = fixture_dir.join("de_adjust_for_paired_covariates.tsv");
 
     std::fs::create_dir_all(output_dir).unwrap();
 
@@ -325,7 +326,7 @@ fn run_adjusted_de_parity_test_paired(
     );
 
     let atman_rows = read_tsv_skip_comment(&output_dir.join("de_results.tsv"));
-    let ref_rows   = read_tsv_skip_comment(reference_tsv);
+    let ref_rows = read_tsv_skip_comment(reference_tsv);
 
     assert_eq!(
         atman_rows.len(),
@@ -341,7 +342,7 @@ fn run_adjusted_de_parity_test_paired(
         .collect();
 
     let mut max_lfc_delta: f64 = 0.0;
-    let mut max_t_delta:   f64 = 0.0;
+    let mut max_t_delta: f64 = 0.0;
 
     for row in &atman_rows {
         let gene = row.get("gene_symbol").expect("gene_symbol column");
@@ -363,16 +364,20 @@ fn run_adjusted_de_parity_test_paired(
             .unwrap_or_else(|_| panic!("cannot parse t for gene {gene}"));
 
         let ref_lfc_raw: f64 = r["log_fc"].parse().expect("ref log_fc");
-        let ref_t_raw:   f64 = r["t_stat"].parse().expect("ref t_stat");
+        let ref_t_raw: f64 = r["t_stat"].parse().expect("ref t_stat");
 
         let ref_lfc = if sign_flip { -ref_lfc_raw } else { ref_lfc_raw };
-        let ref_t   = if sign_flip { -ref_t_raw   } else { ref_t_raw   };
+        let ref_t = if sign_flip { -ref_t_raw } else { ref_t_raw };
 
         let lfc_delta = (atman_lfc - ref_lfc).abs();
-        let t_delta   = (atman_t   - ref_t).abs();
+        let t_delta = (atman_t - ref_t).abs();
 
-        if lfc_delta > max_lfc_delta { max_lfc_delta = lfc_delta; }
-        if t_delta   > max_t_delta   { max_t_delta   = t_delta;   }
+        if lfc_delta > max_lfc_delta {
+            max_lfc_delta = lfc_delta;
+        }
+        if t_delta > max_t_delta {
+            max_t_delta = t_delta;
+        }
 
         assert!(
             lfc_delta <= lfc_tol,
@@ -400,14 +405,8 @@ fn ols_adjusted_de_matches_r_reference() {
     let output_dir = tmp.path().join("de_out");
     let ref_tsv = Path::new("tests/fixtures/de_adjust_for_ols_reference.tsv");
 
-    let (max_lfc_delta, max_t_delta) = run_adjusted_de_parity_test(
-        &["--test", "ols"],
-        &output_dir,
-        ref_tsv,
-        false,
-        1e-6,
-        1e-6,
-    );
+    let (max_lfc_delta, max_t_delta) =
+        run_adjusted_de_parity_test(&["--test", "ols"], &output_dir, ref_tsv, false, 1e-6, 1e-6);
 
     eprintln!(
         "ols_adjusted_de_matches_r_reference: max |Δlog_fc|={:.3e}  max |Δt|={:.3e}",
@@ -432,9 +431,12 @@ fn mixed_adjusted_de_matches_r_reference() {
 
     let (max_lfc_delta, max_t_delta) = run_adjusted_de_parity_test_paired(
         &[
-            "--test", "mixed",
-            "--fixed", "condition",
-            "--random", "1|subject_id",
+            "--test",
+            "mixed",
+            "--fixed",
+            "condition",
+            "--random",
+            "1|subject_id",
         ],
         &output_dir,
         ref_tsv,

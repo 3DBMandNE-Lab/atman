@@ -205,10 +205,7 @@ fn pvalue_and_nes(es: f64, perm_es: &[f64]) -> (f64, f64) {
     let p_value = if same_sign.is_empty() {
         1.0 / ((perm_es.len() + 1) as f64)
     } else {
-        let extreme = same_sign
-            .iter()
-            .filter(|&&v| v.abs() >= es.abs())
-            .count();
+        let extreme = same_sign.iter().filter(|&&v| v.abs() >= es.abs()).count();
         ((extreme + 1) as f64) / ((same_sign.len() + 1) as f64)
     };
     let nes = if same_sign.is_empty() {

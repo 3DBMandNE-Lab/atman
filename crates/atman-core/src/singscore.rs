@@ -106,7 +106,10 @@ pub fn singscore(
 ///
 /// Range: `[-0.5, 0.5]`.
 fn centered_singscore(mean_rank: f64, n: usize, m: usize) -> f64 {
-    debug_assert!(n > m, "n must exceed m for centered singscore to be defined");
+    debug_assert!(
+        n > m,
+        "n must exceed m for centered singscore to be defined"
+    );
     let denom = 2.0 * (n - m) as f64;
     (2.0 * mean_rank - (n + 1) as f64) / denom
 }
@@ -139,10 +142,7 @@ mod tests {
     use super::*;
 
     fn sample_with(values: &[(&str, f64)]) -> BTreeMap<String, f64> {
-        values
-            .iter()
-            .map(|(g, v)| (g.to_string(), *v))
-            .collect()
+        values.iter().map(|(g, v)| (g.to_string(), *v)).collect()
     }
 
     fn one_set(name: &str, genes: &[&str]) -> BTreeMap<String, BTreeSet<String>> {
@@ -205,7 +205,13 @@ mod tests {
         // values: G1=1, G2=2, G3=2, G4=2, G5=3
         // strict sorted positions: G1(1), G2/G3/G4(2,3,4), G5(5)
         // average ranks: G1=1, G2=G3=G4=3, G5=5
-        let m = sample_with(&[("G1", 1.0), ("G2", 2.0), ("G3", 2.0), ("G4", 2.0), ("G5", 3.0)]);
+        let m = sample_with(&[
+            ("G1", 1.0),
+            ("G2", 2.0),
+            ("G3", 2.0),
+            ("G4", 2.0),
+            ("G5", 3.0),
+        ]);
         let r = average_ranks(&m);
         assert!((r["G1"] - 1.0).abs() < 1e-12);
         assert!((r["G2"] - 3.0).abs() < 1e-12);

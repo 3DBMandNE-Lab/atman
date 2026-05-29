@@ -23,9 +23,8 @@ fn write_cohort(dir: &Path, planted_block: usize, n_subjects: usize) {
     // planted_block = 0: P0/P1/P2 tight, P3/P4/P5 noise.
     // planted_block = 1: P3/P4/P5 tight, P0/P1/P2 noise.
     std::fs::create_dir_all(dir).unwrap();
-    let mut samples = String::from(
-        "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n",
-    );
+    let mut samples =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
     for i in 1..=n_subjects {
         samples.push_str(&format!("S{i:03}\tS{i:03}\tCase\t0\ttissue\t{i}\n"));
     }
@@ -97,7 +96,10 @@ fn network_differential_edge_summary_flags_planted_divergence() {
     let mut lines = body.lines();
     let header = lines.next().unwrap();
     assert!(header.starts_with("feature_a\tfeature_b\tn_cohorts"));
-    assert!(header.ends_with("C1_corr\tC2_corr"), "per-cohort columns at end: {header}");
+    assert!(
+        header.ends_with("C1_corr\tC2_corr"),
+        "per-cohort columns at end: {header}"
+    );
     let rows: Vec<Vec<&str>> = lines.map(|l| l.split('\t').collect()).collect();
     assert!(!rows.is_empty(), "expected non-empty edge summary");
 
@@ -167,16 +169,29 @@ fn network_differential_edge_pairwise_emits_significant_z_for_planted_flip() {
         z_diff.abs() > 2.0,
         "Fisher-z should be |Z| > 2 for planted decoupling, got {z_diff}"
     );
-    assert!(p_val < 0.05, "p-value should be < 0.05 for planted flip, got {p_val}");
+    assert!(
+        p_val < 0.05,
+        "p-value should be < 0.05 for planted flip, got {p_val}"
+    );
 
     // Top row (sorted by |z_diff| desc) should be one of the planted
     // divergent edges (anything within the planted blocks).
     let top = &rows[0];
-    let planted_edges: std::collections::HashSet<(&str, &str)> =
-        [("P0", "P1"), ("P0", "P2"), ("P1", "P2"), ("P3", "P4"), ("P3", "P5"), ("P4", "P5")]
-            .into_iter()
-            .collect();
-    let key = if top[0] < top[1] { (top[0], top[1]) } else { (top[1], top[0]) };
+    let planted_edges: std::collections::HashSet<(&str, &str)> = [
+        ("P0", "P1"),
+        ("P0", "P2"),
+        ("P1", "P2"),
+        ("P3", "P4"),
+        ("P3", "P5"),
+        ("P4", "P5"),
+    ]
+    .into_iter()
+    .collect();
+    let key = if top[0] < top[1] {
+        (top[0], top[1])
+    } else {
+        (top[1], top[0])
+    };
     assert!(
         planted_edges.contains(&key),
         "top |z_diff| edge should be a planted divergence, got {key:?}"
@@ -240,7 +255,10 @@ fn network_differential_module_mode_scores_rewiring() {
         "block_hi should be more connected in C2 (planted), got C1={hi_c1} C2={hi_c2}"
     );
     let lo_rewire: f64 = lo[6].parse().unwrap();
-    assert!(lo_rewire > 0.0, "block_lo rewiring should be > 0, got {lo_rewire}");
+    assert!(
+        lo_rewire > 0.0,
+        "block_lo rewiring should be > 0, got {lo_rewire}"
+    );
 }
 
 #[test]

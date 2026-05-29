@@ -423,9 +423,7 @@ fn top_k_set(rows: &HashMap<String, DeLite>, k: usize) -> BTreeSet<String> {
     // id, ascending lexicographic) makes the ordering a deterministic total
     // order. `total_cmp` keeps the primary comparison a total order; all
     // values here are finite after the filter above.
-    v.sort_by(|a, b| {
-        b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0))
-    });
+    v.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
     v.into_iter().take(k).map(|(k, _)| k.clone()).collect()
 }
 
@@ -447,7 +445,11 @@ mod tests {
     use super::*;
 
     fn lite(diff: Option<f64>) -> DeLite {
-        DeLite { gene_symbol: String::new(), mean_diff: diff, bh_q: Some(0.01) }
+        DeLite {
+            gene_symbol: String::new(),
+            mean_diff: diff,
+            bh_q: Some(0.01),
+        }
     }
 
     #[test]
@@ -463,6 +465,9 @@ mod tests {
         // Top-2 by |mean_diff|: ZZZ (5.0) then the tie {AAA,KKK} resolves to AAA.
         let got = top_k_set(&rows, 2);
         let expected: BTreeSet<String> = ["ZZZ", "AAA"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(got, expected, "NaN/inf must not enter top-k; ties resolve by ascending id");
+        assert_eq!(
+            got, expected,
+            "NaN/inf must not enter top-k; ties resolve by ascending id"
+        );
     }
 }

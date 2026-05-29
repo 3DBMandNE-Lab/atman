@@ -165,7 +165,11 @@ fn mnar_ica_collapses_to_fastica_under_uniform_detection() {
     for i in 0..k {
         let p = &plain_canon[i];
         let m = &mnar_canon[i];
-        assert_eq!(p.len(), m.len(), "loading vector length mismatch at program {i}");
+        assert_eq!(
+            p.len(),
+            m.len(),
+            "loading vector length mismatch at program {i}"
+        );
 
         // Determine sign by dot product.
         let dot: f64 = p.iter().zip(m.iter()).map(|(a, b)| a * b).sum();
@@ -192,8 +196,7 @@ fn mnar_ica_collapses_to_fastica_under_uniform_detection() {
 fn mnar_ica_recovers_sources_better_than_impute_then_decompose() {
     // Fixtures produced by the Phase-F generator (60 samples × 50 features,
     // beta0=4.0 beta1=1.5, numpy seed=7).
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures");
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
 
     let observed_tsv = fixture_dir.join("mnar_observed_abundance.tsv");
     let truth_tsv = fixture_dir.join("mnar_ground_truth_sources.tsv");
@@ -337,7 +340,8 @@ fn build_mnar_canonical_input(tmp: &Path, observed_tsv: &Path) -> std::path::Pat
         }
         let sample_id = parts[0].to_string();
         let gene_symbol = parts[1].to_string();
-        let abundance: Option<f64> = if parts[2].eq_ignore_ascii_case("nan") || parts[2].is_empty() {
+        let abundance: Option<f64> = if parts[2].eq_ignore_ascii_case("nan") || parts[2].is_empty()
+        {
             None
         } else {
             parts[2].parse().ok()
@@ -348,7 +352,11 @@ fn build_mnar_canonical_input(tmp: &Path, observed_tsv: &Path) -> std::path::Pat
         if seen_genes.insert(gene_symbol.clone()) {
             gene_order.push(gene_symbol.clone());
         }
-        rows.push(Row { sample_id, gene_symbol, abundance });
+        rows.push(Row {
+            sample_id,
+            gene_symbol,
+            abundance,
+        });
     }
 
     // Write measurements.tsv in canonical long format.
@@ -395,8 +403,7 @@ fn build_mnar_canonical_input(tmp: &Path, observed_tsv: &Path) -> std::path::Pat
 /// Returns a map from program name to loading vector (in assay order).
 fn parse_loadings(path: &Path) -> std::collections::BTreeMap<String, Vec<f64>> {
     let content = std::fs::read_to_string(path).unwrap();
-    let mut map: std::collections::BTreeMap<String, Vec<f64>> =
-        std::collections::BTreeMap::new();
+    let mut map: std::collections::BTreeMap<String, Vec<f64>> = std::collections::BTreeMap::new();
     for line in content.lines().skip(1) {
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() < 4 {
@@ -410,9 +417,7 @@ fn parse_loadings(path: &Path) -> std::collections::BTreeMap<String, Vec<f64>> {
 }
 
 /// Sort program loading vectors by descending L2 norm.
-fn sort_by_l2_norm(
-    map: std::collections::BTreeMap<String, Vec<f64>>,
-) -> Vec<Vec<f64>> {
+fn sort_by_l2_norm(map: std::collections::BTreeMap<String, Vec<f64>>) -> Vec<Vec<f64>> {
     let mut vecs: Vec<Vec<f64>> = map.into_values().collect();
     vecs.sort_by(|a, b| {
         let la: f64 = a.iter().map(|v| v * v).sum::<f64>().sqrt();

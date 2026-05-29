@@ -145,9 +145,7 @@ fn git_sha_with_dirty() -> String {
     if sha == "unknown" {
         return sha;
     }
-    let status = Command::new("git")
-        .args(["status", "--porcelain"])
-        .output();
+    let status = Command::new("git").args(["status", "--porcelain"]).output();
     let dirty = matches!(
         status,
         Ok(o) if o.status.success() && !o.stdout.iter().all(u8::is_ascii_whitespace)

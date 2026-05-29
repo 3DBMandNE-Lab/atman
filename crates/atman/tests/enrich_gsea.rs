@@ -15,7 +15,10 @@ fn write_de_results(path: &std::path::Path, top_genes: &[&str], rest: &[&str]) {
         let p = 1e-8 * (10f64.powf(0.5 * (i as f64)));
         s.push_str(&format!(
             "p\t{g}\t{g}\t\tCase-Control\t10\t\t\t{:.6}\t{:.4}\t8\t{:.3e}\t{:.3e}\t\n",
-            mean_diff, mean_diff * 4.0, p, p
+            mean_diff,
+            mean_diff * 4.0,
+            p,
+            p
         ));
     }
     // Background: alternating-sign small effects, high p — symmetric around zero
@@ -26,7 +29,10 @@ fn write_de_results(path: &std::path::Path, top_genes: &[&str], rest: &[&str]) {
         let p = (0.4 + 0.001 * (i as f64)).min(0.999);
         s.push_str(&format!(
             "p\t{g}\t{g}\t\tCase-Control\t10\t\t\t{:.6}\t{:.4}\t8\t{:.6}\t{:.6}\t\n",
-            mean_diff, mean_diff * 0.5, p, p
+            mean_diff,
+            mean_diff * 0.5,
+            p,
+            p
         ));
     }
     std::fs::write(path, s).unwrap();
@@ -168,7 +174,10 @@ fn enrich_gsea_es_matches_fgsea_simple_reference() {
     let de = fixture_dir.join("gsea_de_results.tsv");
     let sets = fixture_dir.join("gsea_gene_sets.tsv");
     let ref_path = fixture_dir.join("gsea_reference.tsv");
-    assert!(de.exists(), "fixture missing: {de:?} (run gsea_reference.R)");
+    assert!(
+        de.exists(),
+        "fixture missing: {de:?} (run gsea_reference.R)"
+    );
     assert!(sets.exists(), "fixture missing: {sets:?}");
     assert!(ref_path.exists(), "fixture missing: {ref_path:?}");
 
@@ -196,7 +205,8 @@ fn enrich_gsea_es_matches_fgsea_simple_reference() {
         String::from_utf8_lossy(&r.stderr)
     );
 
-    let mut atman_es: std::collections::BTreeMap<String, (usize, f64)> = std::collections::BTreeMap::new();
+    let mut atman_es: std::collections::BTreeMap<String, (usize, f64)> =
+        std::collections::BTreeMap::new();
     let body = std::fs::read_to_string(&out).unwrap();
     let mut lines = body.lines();
     let header = lines.next().unwrap();

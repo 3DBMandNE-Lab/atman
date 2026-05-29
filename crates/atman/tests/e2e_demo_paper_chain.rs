@@ -40,8 +40,7 @@ fn assert_success(output: &std::process::Output, label: &str) {
 
 /// Read a TSV (skip `#`-prefixed comment lines) into rows-as-hashmaps.
 fn read_tsv(path: &Path) -> Vec<HashMap<String, String>> {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {:?}: {e}", path));
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {:?}: {e}", path));
     let mut lines = text.lines().filter(|l| !l.starts_with('#')).peekable();
     let header: Vec<&str> = match lines.next() {
         Some(h) => h.split('\t').collect(),
@@ -115,7 +114,7 @@ fn parse_sidecar_inputs(sidecar_path: &Path) -> HashMap<String, String> {
         }
     }
     let obj_body = &obj_str[1..end - 1]; // strip outer { }
-    // Parse key:"value" pairs.
+                                         // Parse key:"value" pairs.
     let mut map = HashMap::new();
     // Split on `","` to get raw pairs, then parse "key": "value".
     // We iterate over comma-separated entries. Simple state machine.
@@ -133,9 +132,15 @@ fn parse_sidecar_inputs(sidecar_path: &Path) -> HashMap<String, String> {
         let key = remaining[1..key_end].to_string();
         remaining = remaining[key_end + 1..].trim();
         // Expect: `: "value"`
-        assert!(remaining.starts_with(':'), "expected colon after key {key:?}");
+        assert!(
+            remaining.starts_with(':'),
+            "expected colon after key {key:?}"
+        );
         remaining = remaining[1..].trim();
-        assert!(remaining.starts_with('"'), "expected string value for key {key:?}");
+        assert!(
+            remaining.starts_with('"'),
+            "expected string value for key {key:?}"
+        );
         let val_end = remaining[1..].find('"').expect("value close quote") + 1;
         let val = remaining[1..val_end].to_string();
         remaining = &remaining[val_end + 1..];
@@ -168,18 +173,12 @@ fn build_synthetic_fixture(tmp: &Path) -> std::path::PathBuf {
     let n_mes = 15usize; // mesenchymal
 
     // ── samples.tsv ─────────────────────────────────────────────────────────
-    let mut samples_tsv = String::from(
-        "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n",
-    );
+    let mut samples_tsv =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
     for i in 0..n_samples {
         let sid = format!("S{:03}", i + 1);
         let cond = if i < n_mes { "mesenchymal" } else { "other" };
-        writeln!(
-            samples_tsv,
-            "{sid}\t{sid}\t{cond}\t0\ttumour\t{}",
-            i + 1
-        )
-        .unwrap();
+        writeln!(samples_tsv, "{sid}\t{sid}\t{cond}\t0\ttumour\t{}", i + 1).unwrap();
     }
     std::fs::write(dir.join("samples.tsv"), &samples_tsv).unwrap();
 
@@ -189,11 +188,7 @@ fn build_synthetic_fixture(tmp: &Path) -> std::path::PathBuf {
     for g in 0..n_genes {
         let gene = format!("GENE{:03}", g + 1);
         let assay = format!("A{:04}", g + 1);
-        writeln!(
-            proteins_tsv,
-            "custom\t{assay}\t\t{gene}\tgbm_panel\t"
-        )
-        .unwrap();
+        writeln!(proteins_tsv, "custom\t{assay}\t\t{gene}\tgbm_panel\t").unwrap();
     }
     std::fs::write(dir.join("proteins.tsv"), &proteins_tsv).unwrap();
 
@@ -203,7 +198,9 @@ fn build_synthetic_fixture(tmp: &Path) -> std::path::PathBuf {
     // Seed with a simple LCG for determinism (no external RNG dep).
     let mut lcg_state: u64 = 0xdeadbeef_cafebabe;
     let mut lcg = move || -> f64 {
-        lcg_state = lcg_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        lcg_state = lcg_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         // u64 in [0, 2^64) → (0, 1)
         (lcg_state >> 11) as f64 / (1u64 << 53) as f64
     };
@@ -354,7 +351,10 @@ fn e2e_demo_paper_chain() {
         "nmf_loadings.tsv missing 'program' column"
     );
     let activations_rows = read_tsv(&nmf_activations);
-    assert!(!activations_rows.is_empty(), "nmf_activations.tsv has no rows");
+    assert!(
+        !activations_rows.is_empty(),
+        "nmf_activations.tsv has no rows"
+    );
     assert!(
         activations_rows[0].contains_key("sample_id"),
         "nmf_activations.tsv missing 'sample_id' column"
@@ -367,7 +367,10 @@ fn e2e_demo_paper_chain() {
         s.push(".run.json");
         std::path::PathBuf::from(s)
     };
-    assert!(nmf_sidecar_path.exists(), "NMF sidecar missing: {nmf_sidecar_path:?}");
+    assert!(
+        nmf_sidecar_path.exists(),
+        "NMF sidecar missing: {nmf_sidecar_path:?}"
+    );
     let nmf_sidecar_text = std::fs::read_to_string(&nmf_sidecar_path).unwrap();
     assert!(
         nmf_sidecar_text.contains("\"command\""),
@@ -425,7 +428,10 @@ fn e2e_demo_paper_chain() {
         s.push(".run.json");
         std::path::PathBuf::from(s)
     };
-    assert!(de_sidecar_path.exists(), "DE sidecar missing: {de_sidecar_path:?}");
+    assert!(
+        de_sidecar_path.exists(),
+        "DE sidecar missing: {de_sidecar_path:?}"
+    );
     let de_sidecar_text = std::fs::read_to_string(&de_sidecar_path).unwrap();
     assert!(
         de_sidecar_text.contains("\"command\""),
@@ -497,7 +503,10 @@ fn e2e_demo_paper_chain() {
         s.push(".run.json");
         std::path::PathBuf::from(s)
     };
-    assert!(gsea_sidecar_path.exists(), "GSEA sidecar missing: {gsea_sidecar_path:?}");
+    assert!(
+        gsea_sidecar_path.exists(),
+        "GSEA sidecar missing: {gsea_sidecar_path:?}"
+    );
     let gsea_sidecar_text = std::fs::read_to_string(&gsea_sidecar_path).unwrap();
     assert!(
         gsea_sidecar_text.contains("enrich gsea"),
@@ -557,7 +566,10 @@ fn e2e_demo_paper_chain() {
         s.push(".run.json");
         std::path::PathBuf::from(s)
     };
-    assert!(null_sidecar_path.exists(), "null sidecar missing: {null_sidecar_path:?}");
+    assert!(
+        null_sidecar_path.exists(),
+        "null sidecar missing: {null_sidecar_path:?}"
+    );
     let null_sidecar_text = std::fs::read_to_string(&null_sidecar_path).unwrap();
     assert!(
         null_sidecar_text.contains("\"command\""),

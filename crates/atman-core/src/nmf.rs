@@ -327,18 +327,14 @@ fn kl_mu(
 ///
 /// D = sum_ij [ X_ij * log(X_ij / (WH)_ij) - X_ij + (WH)_ij ]
 /// Convention: 0 * log(0) = 0 (handled via the EPSILON floor on WH).
-fn kl_loss(
-    x: &[Vec<f64>],
-    w: &[Vec<f64>],
-    h: &[Vec<f64>],
-    n: usize,
-    p: usize,
-    k: usize,
-) -> f64 {
+fn kl_loss(x: &[Vec<f64>], w: &[Vec<f64>], h: &[Vec<f64>], n: usize, p: usize, k: usize) -> f64 {
     let mut acc = 0.0_f64;
     for i in 0..n {
         for j in 0..p {
-            let wh_ij: f64 = (0..k).map(|kk| w[i][kk] * h[kk][j]).sum::<f64>().max(EPSILON);
+            let wh_ij: f64 = (0..k)
+                .map(|kk| w[i][kk] * h[kk][j])
+                .sum::<f64>()
+                .max(EPSILON);
             let x_ij = x[i][j];
             if x_ij > 0.0 {
                 acc += x_ij * (x_ij / wh_ij).ln() - x_ij + wh_ij;
@@ -373,7 +369,11 @@ fn init_nndsvda(x: &[Vec<f64>], n: usize, p: usize, k: usize) -> (Vec<Vec<f64>>,
     let mean_x: f64 = {
         let total: f64 = x.iter().flat_map(|r| r.iter()).sum();
         let count = (n * p) as f64;
-        if count > 0.0 { total / count } else { 0.0 }
+        if count > 0.0 {
+            total / count
+        } else {
+            0.0
+        }
     };
 
     let mut w = vec![vec![0.0_f64; k]; n]; // n × k
@@ -448,7 +448,11 @@ fn init_random(
     let mean_x: f64 = {
         let total: f64 = x.iter().flat_map(|r| r.iter()).sum();
         let count = (n * p) as f64;
-        if count > 0.0 { total / count } else { 1.0 }
+        if count > 0.0 {
+            total / count
+        } else {
+            1.0
+        }
     };
     let scale = (mean_x / k as f64).sqrt().max(EPSILON);
     let mut rng = Xoshiro256pp::new(seed);
@@ -566,7 +570,14 @@ fn gram_xtx(x: &[Vec<f64>], n: usize, p: usize) -> Vec<Vec<f64>> {
 // ── small matrix helpers ─────────────────────────────────────────────────────
 
 /// (rows_a × cols_b) = (rows_a × shared) @ (shared × cols_b)
-fn mat_mul(rows_a: usize, shared: usize, a: &[Vec<f64>], _shared2: usize, cols_b: usize, b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+fn mat_mul(
+    rows_a: usize,
+    shared: usize,
+    a: &[Vec<f64>],
+    _shared2: usize,
+    cols_b: usize,
+    b: &[Vec<f64>],
+) -> Vec<Vec<f64>> {
     let mut out = vec![vec![0.0_f64; cols_b]; rows_a];
     for i in 0..rows_a {
         for j in 0..cols_b {
@@ -581,7 +592,13 @@ fn mat_mul(rows_a: usize, shared: usize, a: &[Vec<f64>], _shared2: usize, cols_b
 }
 
 /// A^T @ B: (cols_a × cols_b) from (rows × cols_a) and (rows × cols_b)
-fn mat_mul_at_b(a: &[Vec<f64>], b: &[Vec<f64>], cols_a: usize, rows: usize, cols_b: usize) -> Vec<Vec<f64>> {
+fn mat_mul_at_b(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+    cols_a: usize,
+    rows: usize,
+    cols_b: usize,
+) -> Vec<Vec<f64>> {
     let mut out = vec![vec![0.0_f64; cols_b]; cols_a];
     for r in 0..rows {
         for i in 0..cols_a {
@@ -613,7 +630,13 @@ fn mat_mul_at_a(a: &[Vec<f64>], cols: usize, rows: usize) -> Vec<Vec<f64>> {
 }
 
 /// A @ B^T: (rows_a × rows_b) from (rows_a × shared) and (rows_b × shared)
-fn mat_mul_a_bt(a: &[Vec<f64>], b: &[Vec<f64>], rows_a: usize, _shared: usize, rows_b: usize) -> Vec<Vec<f64>> {
+fn mat_mul_a_bt(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+    rows_a: usize,
+    _shared: usize,
+    rows_b: usize,
+) -> Vec<Vec<f64>> {
     let shared = a[0].len();
     let mut out = vec![vec![0.0_f64; rows_b]; rows_a];
     for i in 0..rows_a {
@@ -723,9 +746,8 @@ pub fn multi_seed_nmf(
 
     // For each reference program `a`, collect loadings from each seed that
     // matched it (plus the reference itself).
-    let mut seed_loadings_per_ref: Vec<Vec<Vec<f64>>> = (0..k)
-        .map(|a| vec![reference[a].clone()])
-        .collect();
+    let mut seed_loadings_per_ref: Vec<Vec<Vec<f64>>> =
+        (0..k).map(|a| vec![reference[a].clone()]).collect();
 
     for seed_idx in 1..ms_cfg.n_seeds {
         let alt = &all_h[seed_idx];
@@ -928,13 +950,19 @@ pub fn select_k(
             }
 
             // Assign each sample to the component with the highest W value.
-            let assignments: Vec<usize> = res.w.iter().map(|row| {
-                row.iter()
-                    .enumerate()
-                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(idx, _)| idx)
-                    .unwrap_or(0)
-            }).collect();
+            let assignments: Vec<usize> = res
+                .w
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .enumerate()
+                        .max_by(|(_, a), (_, b)| {
+                            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(0)
+                })
+                .collect();
 
             // Update co-occurrence.
             for i in 0..n {
@@ -963,15 +991,22 @@ pub fn select_k(
             1.0
         } else {
             let consensus_dist: Vec<Vec<f64>> = (0..n)
-                .map(|i| (0..n).map(|j| {
-                    1.0 - co_count[i][j] as f64 / n_seeds_f
-                }).collect())
+                .map(|i| {
+                    (0..n)
+                        .map(|j| 1.0 - co_count[i][j] as f64 / n_seeds_f)
+                        .collect()
+                })
                 .collect();
             let cophenetic_dist = average_linkage_cophenetic(&consensus_dist, n);
             spearman_upper_tri(&consensus_dist, &cophenetic_dist, n)
         };
 
-        rows.push(KSweepRow { k, cophenetic, mean_rss, mean_kl });
+        rows.push(KSweepRow {
+            k,
+            cophenetic,
+            mean_rss,
+            mean_kl,
+        });
     }
 
     let selected_k = match method {
@@ -1001,7 +1036,9 @@ pub fn select_k(
                 let mut best_k = rows[0].k;
                 let mut best_dist = f64::NEG_INFINITY;
                 for (idx, row) in rows.iter().enumerate() {
-                    if row.cophenetic.is_nan() { continue; }
+                    if row.cophenetic.is_nan() {
+                        continue;
+                    }
                     let xi = idx as f64;
                     let yi = row.cophenetic;
                     let dist = (a * xi + b * yi + c).abs() / denom;
@@ -1048,7 +1085,10 @@ pub fn select_k(
         }
     };
 
-    KSelectionResult { selected_k, per_k: rows }
+    KSelectionResult {
+        selected_k,
+        per_k: rows,
+    }
 }
 
 /// Compute cophenetic distances from average-linkage hierarchical clustering
@@ -1082,9 +1122,13 @@ fn average_linkage_cophenetic(d: &[Vec<f64>], n: usize) -> Vec<Vec<f64>> {
         let mut best_i = 0;
         let mut best_j = 0;
         for i in 0..dist.len() {
-            if !active[i] { continue; }
+            if !active[i] {
+                continue;
+            }
             for j in (i + 1)..dist.len() {
-                if !active[j] { continue; }
+                if !active[j] {
+                    continue;
+                }
                 if dist[i][j] < best {
                     best = dist[i][j];
                     best_i = i;
@@ -1112,7 +1156,9 @@ fn average_linkage_cophenetic(d: &[Vec<f64>], n: usize) -> Vec<Vec<f64>> {
 
         let n_slots = dist.len();
         for c in 0..n_slots {
-            if !active[c] || c == best_i || c == best_j { continue; }
+            if !active[c] || c == best_i || c == best_j {
+                continue;
+            }
             let new_d = (size_i * dist[best_i][c] + size_j * dist[best_j][c]) / total;
             dist[best_i][c] = new_d;
             dist[c][best_i] = new_d;
@@ -1147,7 +1193,9 @@ fn spearman_upper_tri(a: &[Vec<f64>], b: &[Vec<f64>], n: usize) -> f64 {
 /// Convert values to ranks (average ranks for ties), then compute Pearson r.
 fn pearson_on_ranks(a: &[f64], b: &[f64]) -> f64 {
     let n = a.len();
-    if n == 0 { return 0.0; }
+    if n == 0 {
+        return 0.0;
+    }
     let ra = rank_vector(a);
     let rb = rank_vector(b);
     pearson_r(&ra, &rb)
@@ -1180,7 +1228,9 @@ fn rank_vector(v: &[f64]) -> Vec<f64> {
 /// Pearson r between two equal-length slices.
 fn pearson_r(a: &[f64], b: &[f64]) -> f64 {
     let n = a.len();
-    if n < 2 { return 0.0; }
+    if n < 2 {
+        return 0.0;
+    }
     let mean_a = a.iter().sum::<f64>() / n as f64;
     let mean_b = b.iter().sum::<f64>() / n as f64;
     let mut num = 0.0_f64;
@@ -1194,7 +1244,11 @@ fn pearson_r(a: &[f64], b: &[f64]) -> f64 {
         sb += db * db;
     }
     let denom = (sa * sb).sqrt();
-    if denom < 1e-30 { 0.0 } else { num / denom }
+    if denom < 1e-30 {
+        0.0
+    } else {
+        num / denom
+    }
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
@@ -1254,7 +1308,11 @@ mod tests {
         let h_true: Vec<Vec<f64>> = vec![vec![1.0, 0.0, 1.0, 2.0], vec![0.0, 1.0, 2.0, 1.0]];
         // x = w_true @ h_true
         let x: Vec<Vec<f64>> = (0..6)
-            .map(|i| (0..4).map(|j| w_true[i][0] * h_true[0][j] + w_true[i][1] * h_true[1][j]).collect())
+            .map(|i| {
+                (0..4)
+                    .map(|j| w_true[i][0] * h_true[0][j] + w_true[i][1] * h_true[1][j])
+                    .collect()
+            })
             .collect();
 
         let cfg = NmfConfig {
@@ -1307,11 +1365,7 @@ mod tests {
     #[test]
     fn frobenius_deterministic_under_nndsvda() {
         // Same input + NNDSVDa init + same params → byte-identical W, H, n_iter.
-        let x = mat(&[
-            &[1.0, 2.0, 3.0],
-            &[4.0, 5.0, 6.0],
-            &[7.0, 8.0, 9.0],
-        ]);
+        let x = mat(&[&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0], &[7.0, 8.0, 9.0]]);
         let cfg = NmfConfig {
             k: 2,
             beta_loss: BetaLoss::Frobenius,
@@ -1345,11 +1399,7 @@ mod tests {
 
     #[test]
     fn frobenius_deterministic_under_random_init() {
-        let x = mat(&[
-            &[1.0, 2.0, 3.0],
-            &[4.0, 5.0, 6.0],
-            &[7.0, 8.0, 9.0],
-        ]);
+        let x = mat(&[&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0], &[7.0, 8.0, 9.0]]);
         let cfg = NmfConfig {
             k: 2,
             beta_loss: BetaLoss::Frobenius,
@@ -1547,11 +1597,7 @@ mod tests {
     #[test]
     fn kl_deterministic_under_nndsvda() {
         // Same input + NNDSVDa init + same params → byte-identical W, H, n_iter.
-        let x = mat(&[
-            &[1.0, 2.0, 3.0],
-            &[4.0, 5.0, 6.0],
-            &[7.0, 8.0, 9.0],
-        ]);
+        let x = mat(&[&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0], &[7.0, 8.0, 9.0]]);
         let cfg = NmfConfig {
             k: 2,
             beta_loss: BetaLoss::KullbackLeibler,
@@ -1604,7 +1650,11 @@ mod tests {
         (0..n)
             .map(|i| {
                 (0..p)
-                    .map(|j| (0..k_true).map(|a| w_true[i][a] * h_true[a][j]).sum::<f64>())
+                    .map(|j| {
+                        (0..k_true)
+                            .map(|a| w_true[i][a] * h_true[a][j])
+                            .sum::<f64>()
+                    })
                     .collect()
             })
             .collect()
@@ -1668,7 +1718,11 @@ mod tests {
             result.selected_k == 3 || result.selected_k == 4,
             "RSS knee should select k ∈ {{3, 4}} on rank-3 synthetic; got k={}, rss values: {:?}",
             result.selected_k,
-            result.per_k.iter().map(|r| (r.k, r.mean_rss)).collect::<Vec<_>>()
+            result
+                .per_k
+                .iter()
+                .map(|r| (r.k, r.mean_rss))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -1698,8 +1752,15 @@ mod tests {
 
         let result = select_k(&x, &nmf_cfg, &ms_cfg, 2, 5, KSelection::Fixed);
 
-        assert_eq!(result.selected_k, nmf_cfg.k, "Fixed should pass through cfg.k");
-        assert_eq!(result.per_k.len(), 1, "Fixed should return exactly 1 per_k row");
+        assert_eq!(
+            result.selected_k, nmf_cfg.k,
+            "Fixed should pass through cfg.k"
+        );
+        assert_eq!(
+            result.per_k.len(),
+            1,
+            "Fixed should return exactly 1 per_k row"
+        );
         assert_eq!(result.per_k[0].k, nmf_cfg.k);
     }
 }

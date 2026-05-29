@@ -44,16 +44,16 @@ S2\tS2\tControl\t1\tcsf\t2\n",
     }
     // S2: signature genes G07/G08/G09 land at positions 4, 5, 6 (middle).
     let s2_values: Vec<f64> = vec![
-        0.0,  // G00 -> rank 1
-        1.0,  // G01 -> rank 2
-        2.0,  // G02 -> rank 3
-        8.0,  // G03 -> rank 9
-        9.0,  // G04 -> rank 10
-        7.0,  // G05 -> rank 8
-        6.0,  // G06 -> rank 7
-        3.0,  // G07 -> rank 4   (signature)
-        4.0,  // G08 -> rank 5   (signature)
-        5.0,  // G09 -> rank 6   (signature)
+        0.0, // G00 -> rank 1
+        1.0, // G01 -> rank 2
+        2.0, // G02 -> rank 3
+        8.0, // G03 -> rank 9
+        9.0, // G04 -> rank 10
+        7.0, // G05 -> rank 8
+        6.0, // G06 -> rank 7
+        3.0, // G07 -> rank 4   (signature)
+        4.0, // G08 -> rank 5   (signature)
+        5.0, // G09 -> rank 6   (signature)
     ];
     for (i, v) in s2_values.iter().enumerate() {
         idx += 1;
@@ -176,7 +176,10 @@ fn score_signatures_singscore_matches_reference() {
     let sets = fixture_dir.join("singscore_gene_sets.tsv");
     let reference = fixture_dir.join("singscore_reference.tsv");
     for f in [&samples, &proteins, &measurements, &sets, &reference] {
-        assert!(f.exists(), "fixture missing: {f:?} (run singscore_reference.R)");
+        assert!(
+            f.exists(),
+            "fixture missing: {f:?} (run singscore_reference.R)"
+        );
     }
 
     let tmp = tempfile::tempdir().unwrap();

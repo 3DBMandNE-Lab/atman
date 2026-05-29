@@ -23,10 +23,10 @@ pub mod limma;
 pub mod matrix;
 pub mod modules_discover;
 pub mod msqrob;
-pub mod nmf;
 pub mod multivariate_t;
 pub mod network;
 pub mod network_differential;
+pub mod nmf;
 pub mod qc;
 pub mod rng;
 pub mod singscore;
@@ -50,19 +50,19 @@ pub use fold_change::{
 };
 pub use gsea::{gsea, GseaConfig, GseaResult};
 pub use ica_null::{archetype_null, generate_null_matrix, ArchetypeNullRow, NullMode, NullParams};
-pub use singscore::{singscore, SingscoreRow};
 pub use matrix::{WidePanel, WidePanelRow};
 pub use msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
 pub use network::{
     adjacency, betweenness_centrality, eigenvector_centrality, influence_scores,
     pairwise_similarity, AdjacencyPolicy, InfluenceRow, SimilarityMatrix, SimilarityMetric,
 };
-pub use rng::{derive_sub_seed, SplitMix64, Xoshiro256pp};
 pub use network_differential::{
     edge_pairwise_differential, edge_summary_differential, module_rewiring,
-    signed_pairwise_correlations, CohortCorrelations, CohortData, EdgePairwiseRow,
-    EdgeSummaryRow, ModuleRewiringRow, SignedMetric,
+    signed_pairwise_correlations, CohortCorrelations, CohortData, EdgePairwiseRow, EdgeSummaryRow,
+    ModuleRewiringRow, SignedMetric,
 };
+pub use rng::{derive_sub_seed, SplitMix64, Xoshiro256pp};
+pub use singscore::{singscore, SingscoreRow};
 pub use types::{
     Abundance, AssayId, Batch, DetectionLimit, MeasurementRecord, PeptideIdentity,
     PeptideMeasurementRecord, Platform, ProteinIdentity, QcFlag, Sample,

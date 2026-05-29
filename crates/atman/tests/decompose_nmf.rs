@@ -21,7 +21,10 @@ fn read_loadings_tsv(path: &std::path::Path) -> Vec<(String, BTreeMap<String, f6
 
     // Expect header "program\tassay_id\tgene_symbol\tloading"
     assert!(
-        lines.get(data_start).map(|l| l.starts_with("program\t")).unwrap_or(false),
+        lines
+            .get(data_start)
+            .map(|l| l.starts_with("program\t"))
+            .unwrap_or(false),
         "invalid loadings header"
     );
 
@@ -32,7 +35,12 @@ fn read_loadings_tsv(path: &std::path::Path) -> Vec<(String, BTreeMap<String, f6
             continue;
         }
         let parts: Vec<&str> = line.split('\t').collect();
-        assert_eq!(parts.len(), 4, "expected 4 columns in loadings row: {}", line);
+        assert_eq!(
+            parts.len(),
+            4,
+            "expected 4 columns in loadings row: {}",
+            line
+        );
 
         let program = parts[0].to_string();
         let gene_symbol = parts[2].to_string();
@@ -51,32 +59,17 @@ fn read_loadings_tsv(path: &std::path::Path) -> Vec<(String, BTreeMap<String, f6
 }
 
 /// Computes Jaccard similarity of top-N genes (by absolute loading) between two gene-loading maps.
-fn jaccard_top_n(
-    map_a: &BTreeMap<String, f64>,
-    map_b: &BTreeMap<String, f64>,
-    n: usize,
-) -> f64 {
+fn jaccard_top_n(map_a: &BTreeMap<String, f64>, map_b: &BTreeMap<String, f64>, n: usize) -> f64 {
     let mut genes_a: Vec<_> = map_a.iter().map(|(g, l)| (g.clone(), l.abs())).collect();
     let mut genes_b: Vec<_> = map_b.iter().map(|(g, l)| (g.clone(), l.abs())).collect();
 
     genes_a.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     genes_b.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    let top_a: BTreeSet<String> = genes_a
-        .iter()
-        .take(n)
-        .map(|(g, _)| g.clone())
-        .collect();
-    let top_b: BTreeSet<String> = genes_b
-        .iter()
-        .take(n)
-        .map(|(g, _)| g.clone())
-        .collect();
+    let top_a: BTreeSet<String> = genes_a.iter().take(n).map(|(g, _)| g.clone()).collect();
+    let top_b: BTreeSet<String> = genes_b.iter().take(n).map(|(g, _)| g.clone()).collect();
 
-    let intersection = top_a
-        .intersection(&top_b)
-        .collect::<BTreeSet<_>>()
-        .len();
+    let intersection = top_a.intersection(&top_b).collect::<BTreeSet<_>>().len();
     let union = top_a.union(&top_b).collect::<BTreeSet<_>>().len();
 
     if union == 0 {
@@ -142,7 +135,10 @@ fn read_activations_tsv(path: &std::path::Path) -> BTreeMap<String, BTreeMap<Str
 
     // Expect header "sample_id\tprogram\tactivation"
     assert!(
-        lines.get(data_start).map(|l| l.starts_with("sample_id\t")).unwrap_or(false),
+        lines
+            .get(data_start)
+            .map(|l| l.starts_with("sample_id\t"))
+            .unwrap_or(false),
         "invalid activations header"
     );
 
@@ -223,7 +219,8 @@ fn frobenius_reconstruction_error(
             if let Some(gene_loadings) = H.get(program_id) {
                 for (gene_symbol, H_val) in gene_loadings {
                     let reconstructed = W_val * H_val;
-                    X_hat.entry(sample_id.clone())
+                    X_hat
+                        .entry(sample_id.clone())
                         .or_insert_with(BTreeMap::new)
                         .entry(gene_symbol.clone())
                         .and_modify(|v| *v += reconstructed)
@@ -280,15 +277,18 @@ fn run_nmf_parity_test(beta_loss: &str, reference_tsv_path: &str) {
     let tmp_path = tmp.path();
 
     // Step 1: Read the long-format input fixture.
-    let input_fixture_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/nmf_frobenius_input.tsv");
-    let input_text = std::fs::read_to_string(&input_fixture_path)
-        .expect("read nmf_frobenius_input.tsv fixture");
+    let input_fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/nmf_frobenius_input.tsv");
+    let input_text =
+        std::fs::read_to_string(&input_fixture_path).expect("read nmf_frobenius_input.tsv fixture");
     let input_lines: Vec<&str> = input_text.lines().collect();
 
     // First line is comment; skip it.
-    let data_start = if input_lines[0].starts_with('#') { 1 } else { 0 };
+    let data_start = if input_lines[0].starts_with('#') {
+        1
+    } else {
+        0
+    };
 
     // Collect all unique samples and genes.
     let mut samples: BTreeSet<String> = BTreeSet::new();
@@ -327,10 +327,7 @@ fn run_nmf_parity_test(beta_loss: &str, reference_tsv_path: &str) {
 
     let genes_vec: Vec<String> = genes.iter().cloned().collect();
     for (_row_idx, (sample_id, gene_symbol, abundance)) in measurements.iter().enumerate() {
-        let gene_idx = genes_vec
-            .iter()
-            .position(|g| g == gene_symbol)
-            .unwrap();
+        let gene_idx = genes_vec.iter().position(|g| g == gene_symbol).unwrap();
         let assay_id = format!("A{:03}", gene_idx);
         ingest_order += 1;
         let src = format!("{:.6}", abundance);
@@ -342,11 +339,14 @@ fn run_nmf_parity_test(beta_loss: &str, reference_tsv_path: &str) {
     std::fs::write(canonical_dir.join("measurements.tsv"), &measurements_tsv).unwrap();
 
     // Write samples.tsv.
-    let mut samples_tsv = String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
+    let mut samples_tsv =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
     for (i, sample_id) in samples.iter().enumerate() {
         samples_tsv.push_str(&format!(
             "{}\t{}\tcase\t0\tcsf\t{}\n",
-            sample_id, sample_id, i + 1
+            sample_id,
+            sample_id,
+            i + 1
         ));
     }
     std::fs::write(canonical_dir.join("samples.tsv"), &samples_tsv).unwrap();
@@ -400,8 +400,7 @@ fn run_nmf_parity_test(beta_loss: &str, reference_tsv_path: &str) {
     // Step 5: Read actual loadings and reference loadings.
     let actual_loadings = read_loadings_tsv(&loadings_path);
     let reference_fixture_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(reference_tsv_path);
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(reference_tsv_path);
     let reference_loadings = read_loadings_tsv(&reference_fixture_path);
 
     // Step 6: Align programs by Jaccard top-20.
@@ -437,24 +436,16 @@ fn run_nmf_parity_test(beta_loss: &str, reference_tsv_path: &str) {
 
 #[test]
 fn nmf_frobenius_matches_sklearn_reference() {
-    run_nmf_parity_test(
-        "frobenius",
-        "tests/fixtures/nmf_frobenius_reference.tsv",
-    );
+    run_nmf_parity_test("frobenius", "tests/fixtures/nmf_frobenius_reference.tsv");
 }
 
 #[test]
 fn nmf_kl_matches_sklearn_reference() {
-    run_nmf_parity_test(
-        "kullback-leibler",
-        "tests/fixtures/nmf_kl_reference.tsv",
-    );
+    run_nmf_parity_test("kullback-leibler", "tests/fixtures/nmf_kl_reference.tsv");
 }
 
 /// Reads a stability TSV (3 columns: program, stable_seed_fraction, n_seeds_present).
-fn read_stability_tsv(
-    path: &std::path::Path,
-) -> Vec<(String, f64, usize)> {
+fn read_stability_tsv(path: &std::path::Path) -> Vec<(String, f64, usize)> {
     let text = std::fs::read_to_string(path).expect("read stability TSV");
     let lines: Vec<&str> = text.lines().collect();
 
@@ -504,7 +495,11 @@ fn build_canonical_dir(
     let input_text =
         std::fs::read_to_string(&input_fixture_path).expect("read nmf_frobenius_input.tsv");
     let input_lines: Vec<&str> = input_text.lines().collect();
-    let data_start = if input_lines[0].starts_with('#') { 1 } else { 0 };
+    let data_start = if input_lines[0].starts_with('#') {
+        1
+    } else {
+        0
+    };
 
     let mut samples: BTreeSet<String> = BTreeSet::new();
     let mut genes: BTreeSet<String> = BTreeSet::new();
@@ -554,7 +549,9 @@ fn build_canonical_dir(
     for (i, sample_id) in samples.iter().enumerate() {
         samples_tsv.push_str(&format!(
             "{}\t{}\tcase\t0\tcsf\t{}\n",
-            sample_id, sample_id, i + 1
+            sample_id,
+            sample_id,
+            i + 1
         ));
     }
     std::fs::write(canonical_dir.join("samples.tsv"), &samples_tsv).unwrap();
@@ -664,10 +661,7 @@ fn nmf_multi_seed_emits_stability_and_filters_unstable_programs() {
 
     // ── 3. every program in loadings has stable_seed_fraction >= 0.9 ─────────
     // (The loadings TSV uses re-indexed program labels; match by position.)
-    for (stab_prog, stab_frac, _) in stability_rows
-        .iter()
-        .filter(|(_, frac, _)| *frac >= 0.9)
-    {
+    for (stab_prog, stab_frac, _) in stability_rows.iter().filter(|(_, frac, _)| *frac >= 0.9) {
         // Verify the fraction is non-NaN and non-negative.
         assert!(
             stab_frac.is_finite() && *stab_frac >= 0.0,
@@ -729,7 +723,12 @@ fn read_k_sweep_tsv(path: &std::path::Path) -> Vec<(usize, String, f64, String, 
             continue;
         }
         let parts: Vec<&str> = line.split('\t').collect();
-        assert_eq!(parts.len(), 5, "expected 5 columns in k-sweep row: {}", line);
+        assert_eq!(
+            parts.len(),
+            5,
+            "expected 5 columns in k-sweep row: {}",
+            line
+        );
         let k: usize = parts[0].parse().expect("parse k");
         let cophenetic = parts[1].to_string();
         let mean_rss: f64 = parts[2].parse().expect("parse mean_rss");
@@ -810,10 +809,7 @@ fn nmf_k_selection_cophenetic_picks_planted_k() {
 
     // ── 2. exactly one row has selected=1 ───────────────────────────────────
     let selected_count = sweep_rows.iter().filter(|r| r.4 == 1).count();
-    assert_eq!(
-        selected_count, 1,
-        "exactly one row should have selected=1"
-    );
+    assert_eq!(selected_count, 1, "exactly one row should have selected=1");
 
     // ── 3. selected_k is 4 (ground truth of the rank-4 fixture) ─────────────
     let selected_k = sweep_rows
@@ -823,7 +819,8 @@ fn nmf_k_selection_cophenetic_picks_planted_k() {
         .expect("no selected row found");
 
     assert_eq!(
-        selected_k, 4,
+        selected_k,
+        4,
         "cophenetic-knee should select k=4 on the rank-4 fixture; selected k={}. \
          sweep: {:?}",
         selected_k,

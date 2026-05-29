@@ -41,8 +41,10 @@ fn run_atman(args: &[&str]) -> std::process::Output {
 
 /// Compare two files byte-for-byte.
 fn assert_byte_identical(path_a: &Path, path_b: &Path, label: &str) {
-    let bytes_a = std::fs::read(path_a).unwrap_or_else(|e| panic!("read {}: {e}", path_a.display()));
-    let bytes_b = std::fs::read(path_b).unwrap_or_else(|e| panic!("read {}: {e}", path_b.display()));
+    let bytes_a =
+        std::fs::read(path_a).unwrap_or_else(|e| panic!("read {}: {e}", path_a.display()));
+    let bytes_b =
+        std::fs::read(path_b).unwrap_or_else(|e| panic!("read {}: {e}", path_b.display()));
     assert_eq!(
         bytes_a,
         bytes_b,
@@ -71,7 +73,11 @@ fn assert_sidecar_shas_match(path_a: &Path, path_b: &Path, label: &str) {
     let sha_values = |v: &serde_json::Value| -> Vec<String> {
         let mut out: Vec<String> = v
             .as_object()
-            .map(|m| m.values().filter_map(|x| x.as_str().map(String::from)).collect())
+            .map(|m| {
+                m.values()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         out.sort();
         out
@@ -117,7 +123,10 @@ fn assert_sidecar_shas_match(path_a: &Path, path_b: &Path, label: &str) {
 /// its primary `--output` file (used by robust-paired).
 fn summary_sibling(out: &Path) -> std::path::PathBuf {
     let stem = out.file_stem().unwrap().to_string_lossy();
-    let ext = out.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+    let ext = out
+        .extension()
+        .map(|e| e.to_string_lossy().to_string())
+        .unwrap_or_default();
     out.with_file_name(format!("{stem}_summary.{ext}"))
 }
 
@@ -253,8 +262,11 @@ fn write_de_ensemble_fixture(dir: &Path) {
     let mut order = 0;
     for i in 1..=12 {
         let is_b = i > 6;
-        for (assay, gene, effect) in [("A001", "UP", 1.5_f64), ("A002", "DN", -1.5), ("A003", "ST", 0.0)]
-        {
+        for (assay, gene, effect) in [
+            ("A001", "UP", 1.5_f64),
+            ("A002", "DN", -1.5),
+            ("A003", "ST", 0.0),
+        ] {
             order += 1;
             let v = 10.0 + if is_b { effect } else { 0.0 } + ((i * 7 + order) as f64).sin() * 0.05;
             qc.push_str(&format!(
@@ -332,7 +344,10 @@ fn write_robust_paired_fixture(dir: &Path, n_pairs: usize) {
     let mut order = 1u64;
     for k in 0..n_pairs {
         let pid = format!("pair_{:03}", k);
-        samples_buf.push_str(&format!("T{:03}\t{}\ttumor\t0\ttumor\t{}\t{}\n", k, k, order, pid));
+        samples_buf.push_str(&format!(
+            "T{:03}\t{}\ttumor\t0\ttumor\t{}\t{}\n",
+            k, k, order, pid
+        ));
         order += 1;
         samples_buf.push_str(&format!(
             "P{:03}\t{}\tpaired_non_tumor\t0\tnormal\t{}\t{}\n",
@@ -365,7 +380,11 @@ fn write_robust_paired_fixture(dir: &Path, n_pairs: usize) {
         ));
         row += 1;
         let f_jitter = ((k as f64) * 0.27).cos() * 0.05;
-        let (tf, nf) = if k == 0 { (30.0, 10.0) } else { (10.0 + f_jitter, 10.0 - f_jitter) };
+        let (tf, nf) = if k == 0 {
+            (30.0, 10.0)
+        } else {
+            (10.0 + f_jitter, 10.0 - f_jitter)
+        };
         buf.push_str(&format!(
             "diann_report\tT{:03}\tA_FRAGILE\tFRAGILE\tms\t\t{}\t{}\tlog2_intensity\tPASS\tPASS\t\t0\t0\t\t\t{}\n",
             k, tf, tf, row
@@ -420,7 +439,9 @@ fn write_align_cohort(
     std::fs::write(dir.join("samples.tsv"), samples).unwrap();
     let mut proteins = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
     for j in 1..=n_proteins {
-        proteins.push_str(&format!("olink_explore_ngs\tA{j:03}\tQ{j:05}\tG{j:03}\tP1\t\n"));
+        proteins.push_str(&format!(
+            "olink_explore_ngs\tA{j:03}\tQ{j:05}\tG{j:03}\tP1\t\n"
+        ));
     }
     std::fs::write(dir.join("proteins.tsv"), proteins).unwrap();
     let mut rng = Lcg::new(seed);
@@ -437,11 +458,21 @@ fn write_align_cohort(
         for j in 1..=n_proteins {
             order += 1;
             let universal_weight = if (1..=4).contains(&j) { 1.0 } else { 0.0 };
-            let a_weight = if planted_a_specific && (5..=7).contains(&j) { 1.0 } else { 0.0 };
-            let b_weight = if planted_b_specific && (8..=10).contains(&j) { 1.0 } else { 0.0 };
+            let a_weight = if planted_a_specific && (5..=7).contains(&j) {
+                1.0
+            } else {
+                0.0
+            };
+            let b_weight = if planted_b_specific && (8..=10).contains(&j) {
+                1.0
+            } else {
+                0.0
+            };
             let noise = (rng.next() - 0.5) * 0.3;
-            let value =
-                universal_weight * universal_source + a_weight * a_source + b_weight * b_source + noise;
+            let value = universal_weight * universal_source
+                + a_weight * a_source
+                + b_weight * b_source
+                + noise;
             qc.push_str(&format!(
                 "olink_explore_ngs\t{cohort_label}_S{i:03}\tA{j:03}\tG{j:03}\tP1\t{value:.6}\t\
                  {value:.6}\t{value:.6}\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n"
@@ -484,7 +515,11 @@ fn null_permutation_is_byte_deterministic() {
             "--min-pairs",
             "2",
         ]);
-        assert!(r.status.success(), "null failed:\n{}", String::from_utf8_lossy(&r.stderr));
+        assert!(
+            r.status.success(),
+            "null failed:\n{}",
+            String::from_utf8_lossy(&r.stderr)
+        );
     }
 
     assert_byte_identical(
@@ -534,11 +569,19 @@ fn bootstrap_protein_is_byte_deterministic() {
             "--min-pairs",
             "2",
         ]);
-        assert!(r.status.success(), "bootstrap failed:\n{}", String::from_utf8_lossy(&r.stderr));
+        assert!(
+            r.status.success(),
+            "bootstrap failed:\n{}",
+            String::from_utf8_lossy(&r.stderr)
+        );
     }
 
     assert_byte_identical(&out1, &out2, "bootstrap protein");
-    assert_sidecar_shas_match(&sidecar_for(&out1), &sidecar_for(&out2), "bootstrap sidecar");
+    assert_sidecar_shas_match(
+        &sidecar_for(&out1),
+        &sidecar_for(&out2),
+        "bootstrap sidecar",
+    );
 }
 
 #[test]
@@ -572,7 +615,11 @@ fn ratio_bootstrap_is_byte_deterministic() {
             "--output",
             out.to_str().unwrap(),
         ]);
-        assert!(r.status.success(), "ratio failed:\n{}", String::from_utf8_lossy(&r.stderr));
+        assert!(
+            r.status.success(),
+            "ratio failed:\n{}",
+            String::from_utf8_lossy(&r.stderr)
+        );
     }
 
     assert_byte_identical(&out1, &out2, "ratio");
@@ -629,7 +676,11 @@ fn align_bootstrap_is_byte_deterministic() {
     }
 
     assert_byte_identical(&out1, &out2, "align bootstrap");
-    assert_sidecar_shas_match(&sidecar_for(&out1), &sidecar_for(&out2), "align bootstrap sidecar");
+    assert_sidecar_shas_match(
+        &sidecar_for(&out1),
+        &sidecar_for(&out2),
+        "align bootstrap sidecar",
+    );
 }
 
 #[test]
@@ -788,5 +839,9 @@ fn robust_paired_is_byte_deterministic() {
         &summary_sibling(&out2),
         "robust-paired summary",
     );
-    assert_sidecar_shas_match(&sidecar_for(&out1), &sidecar_for(&out2), "robust-paired sidecar");
+    assert_sidecar_shas_match(
+        &sidecar_for(&out1),
+        &sidecar_for(&out2),
+        "robust-paired sidecar",
+    );
 }
