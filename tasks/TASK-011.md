@@ -1,11 +1,11 @@
 # TASK-011 — align project: use matrix sample-order, not re-derived order
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-a22741557ce5801e4
 **Started:** 2026-05-29T08:09:39+00:00
-**Updated:** 2026-05-29T09:22:13+00:00
+**Updated:** 2026-05-29T09:40:09+00:00
 <!-- kanban-status:end -->
 
 ## Plan
