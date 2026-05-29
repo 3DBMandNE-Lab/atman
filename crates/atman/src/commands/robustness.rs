@@ -88,7 +88,12 @@ pub fn run(args: Args) -> Result<()> {
          baseline_q\tretained_q_strict\tn_retained_q_strict\tn_retained_q_relaxed\n",
     );
     for (cmp, base_rows) in &base {
-        for (key, b) in base_rows {
+        // `base_rows` is a HashMap; iterate in sorted-key order so the emitted
+        // row order is deterministic (same class of bug as the top-k tie-break).
+        let mut keys: Vec<&String> = base_rows.keys().collect();
+        keys.sort();
+        for key in keys {
+            let b = &base_rows[key];
             let mut n_loo = 0usize;
             let mut n_sign_match = 0usize;
             let mut n_ret_strict = 0usize;
@@ -185,7 +190,13 @@ pub fn run(args: Args) -> Result<()> {
     let mut stab_by_cmp: BTreeMap<String, Vec<StabRow>> = BTreeMap::new();
     for (cmp, base_rows) in &base {
         let mut rows: Vec<StabRow> = Vec::new();
-        for (key, b) in base_rows {
+        // Iterate the HashMap in sorted-key order so `rows` has a stable initial
+        // order; the rank sorts below use a stable sort, so ties resolve to this
+        // deterministic feature-id order.
+        let mut keys: Vec<&String> = base_rows.keys().collect();
+        keys.sort();
+        for key in keys {
+            let b = &base_rows[key];
             let mut n_loo = 0usize;
             let mut n_sign_match = 0usize;
             for loo in &loos {
@@ -278,11 +289,11 @@ pub fn run(args: Args) -> Result<()> {
     let sign_path = args.output_dir.join("loo_sign_stability.tsv");
     let rank_path = args.output_dir.join("rank_stability.tsv");
     let stab_path = args.output_dir.join("stability_ranked.tsv");
-    std::fs::write(&sign_path, sign_out.as_bytes())
+    crate::io::atomic_write(&sign_path, sign_out.as_bytes())
         .with_context(|| "writing loo_sign_stability.tsv")?;
-    std::fs::write(&rank_path, rank_out.as_bytes())
+    crate::io::atomic_write(&rank_path, rank_out.as_bytes())
         .with_context(|| "writing rank_stability.tsv")?;
-    std::fs::write(&stab_path, stab_out.as_bytes())
+    crate::io::atomic_write(&stab_path, stab_out.as_bytes())
         .with_context(|| "writing stability_ranked.tsv")?;
     eprintln!(
         "robustness: wrote {:?}, {:?}, and {:?}",
@@ -399,9 +410,22 @@ fn parse_opt_f64(s: &str) -> Result<Option<f64>> {
 fn top_k_set(rows: &HashMap<String, DeLite>, k: usize) -> BTreeSet<String> {
     let mut v: Vec<(&String, f64)> = rows
         .iter()
-        .filter_map(|(k, r)| r.mean_diff.map(|d| (k, d.abs())))
+        // Non-finite |mean_diff| (NaN/inf) is not a meaningful "top changed
+        // feature": with `total_cmp`, NaN sorts ahead of every finite value in
+        // descending order and would hijack the top-k set. Exclude it from the
+        // ranking entirely (strict ranking semantics).
+        .filter_map(|(k, r)| r.mean_diff.filter(|d| d.is_finite()).map(|d| (k, d.abs())))
         .collect();
-    v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // Sort by |mean_diff| descending. The collection comes from a HashMap, so
+    // iteration order is nondeterministic; without a tie-break, features with
+    // equal magnitude at the k-boundary would be selected arbitrarily, making
+    // the Jaccard/overlap output non-reproducible. The secondary key (feature
+    // id, ascending lexicographic) makes the ordering a deterministic total
+    // order. `total_cmp` keeps the primary comparison a total order; all
+    // values here are finite after the filter above.
+    v.sort_by(|a, b| {
+        b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0))
+    });
     v.into_iter().take(k).map(|(k, _)| k.clone()).collect()
 }
 
@@ -415,5 +439,30 @@ fn split_key(key: &str) -> (&str, &str) {
 fn push_opt_f64(buf: &mut String, v: Option<f64>) {
     if let Some(x) = v {
         buf.push_str(&x.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lite(diff: Option<f64>) -> DeLite {
+        DeLite { gene_symbol: String::new(), mean_diff: diff, bh_q: Some(0.01) }
+    }
+
+    #[test]
+    fn top_k_set_excludes_non_finite_and_breaks_ties_by_id() {
+        let mut rows = HashMap::new();
+        rows.insert("ZZZ".to_string(), lite(Some(5.0)));
+        rows.insert("AAA".to_string(), lite(Some(2.0))); // tie with KKK
+        rows.insert("KKK".to_string(), lite(Some(2.0))); // tie with AAA
+        rows.insert("NAN".to_string(), lite(Some(f64::NAN))); // must be excluded
+        rows.insert("INF".to_string(), lite(Some(f64::INFINITY))); // must be excluded
+        rows.insert("NONE".to_string(), lite(None)); // already excluded
+
+        // Top-2 by |mean_diff|: ZZZ (5.0) then the tie {AAA,KKK} resolves to AAA.
+        let got = top_k_set(&rows, 2);
+        let expected: BTreeSet<String> = ["ZZZ", "AAA"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(got, expected, "NaN/inf must not enter top-k; ties resolve by ascending id");
     }
 }
