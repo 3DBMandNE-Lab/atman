@@ -1,11 +1,11 @@
 # TASK-014 — build provenance: -dirty SHA, drop unused thiserror, audit statrs
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-a54da6cf214f5a4db
 **Started:** 2026-05-29T09:49:45+00:00
-**Updated:** 2026-05-29T10:36:16+00:00
+**Updated:** 2026-05-29T13:07:42+00:00
 <!-- kanban-status:end -->
 
 ## Plan
