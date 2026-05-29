@@ -482,6 +482,23 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
     Ok(())
 }
 
+/// Tukey HSD simultaneous-CI half-width on the estimate (contrast)
+/// scale. The studentized-range critical value `q* = qtukey(0.95, k, df)`
+/// is the same distribution used for the Tukey adjusted p-value; on the
+/// estimate scale the half-width is `q*·se/√2` because the studentized
+/// range statistic is `diff·√2/se`. Returns `None` when inputs are
+/// non-finite or `q*` is not finite.
+fn tukey_ci_halfwidth(est: f64, se: f64, k_nmeans: usize, df: f64) -> Option<f64> {
+    if !est.is_finite() || !se.is_finite() || !df.is_finite() {
+        return None;
+    }
+    let q_crit = atman_core::studentized_range::qtukey(0.95, k_nmeans, df);
+    if !q_crit.is_finite() {
+        return None;
+    }
+    Some(q_crit * se / std::f64::consts::SQRT_2)
+}
+
 /// Dispatch for `--post-hoc tukey`: one OLS fit per protein, then
 /// every ordered pair `(level_a, level_b)` of the post-hoc factor,
 /// with p-values adjusted via Tukey's studentized range. Compared
@@ -734,16 +751,16 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
                         bh_q: None,
                         effect_size: if est.is_finite() { Some(est) } else { None },
                         effect_size_method: "ols-posthoc-tukey".into(),
-                        ci_low: if est.is_finite() && se.is_finite() {
-                            Some(est - 1.96 * se)
-                        } else {
-                            None
-                        },
-                        ci_high: if est.is_finite() && se.is_finite() {
-                            Some(est + 1.96 * se)
-                        } else {
-                            None
-                        },
+                        // Tukey HSD simultaneous CI. Half-width uses the
+                        // SAME studentized-range distribution as the adjusted
+                        // p-value: the adjusted p is 1 − ptukey(|est|·√2/se),
+                        // so the 95% family-wise critical value is
+                        // q* = qtukey(0.95, k, df), and the half-width on the
+                        // estimate scale is q*·se/√2. This keeps the interval
+                        // and its adjusted p mutually consistent (a CI that
+                        // excludes 0 iff the adjusted p < 0.05).
+                        ci_low: tukey_ci_halfwidth(est, se, k_nmeans, fit.df).map(|h| est - h),
+                        ci_high: tukey_ci_halfwidth(est, se, k_nmeans, fit.df).map(|h| est + h),
                         wilcoxon_p: None,
                         wilcoxon_method: String::new(),
                         median_diff: None,
@@ -909,7 +926,9 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
 /// draws, byte-equal under fixed `--seed`).
 pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<()> {
     use atman_core::de::{contrast_inference, ols, OlsOutcome};
-    use atman_core::multivariate_t::{dunnett_hsu_correlation_matrix, pdunnett, pdunnett_hsu};
+    use atman_core::multivariate_t::{
+        dunnett_hsu_correlation_matrix, pdunnett, pdunnett_hsu, qdunnett,
+    };
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating output dir {:?}", args.output_dir))?;
 
@@ -1051,14 +1070,9 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
     const HSU_N_MC: usize = 50_000;
     const BALANCE_THRESHOLD: f64 = 1.25;
     // Count n_i per level from the full design. Hsu's correlation
-    // matrix depends only on these counts.
+    // matrix depends only on these counts. Iterate samples and read
+    // the factor value via setup.cov_raw keyed by sample_id.
     let mut level_counts: HashMap<String, usize> = HashMap::new();
-    for (sid, _) in &design_rows {
-        // Resolve the sample's factor level via the cov_raw lookup.
-        let _ = sid;
-    }
-    // The simpler way: iterate samples and read the factor value via
-    // setup.cov_raw keyed by sample_id.
     for sample in &samples {
         if sample.is_control {
             continue;
@@ -1111,6 +1125,45 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
             (_, false) => f64::NAN,
             (Some(r), _) => pdunnett_hsu(q, df, r, HSU_N_MC, hsu_mc_seed),
             (None, _) => pdunnett(q, m_contrasts, df, RHO),
+        }
+    };
+    // Two-sided 95% simultaneous Dunnett critical value at `df`. This is
+    // the inverse of the SAME distribution used for the adjusted p-value
+    // (`1 − dunnett_cdf(q, df)`), so the emitted CI excludes 0 exactly
+    // when the adjusted p < 0.05. Balanced designs invert the closed-form
+    // equicorrelated multivariate-t (`qdunnett`); unbalanced (Hsu) designs
+    // invert `pdunnett_hsu` by bisection on the same fixed-seed MC draws —
+    // this is the literal inverse of the p-value's CDF, not a fabricated
+    // quantile. Returns `None` when `df` is non-finite.
+    let dunnett_crit = |df: f64| -> Option<f64> {
+        if !df.is_finite() {
+            return None;
+        }
+        let c = match &hsu_matrix {
+            None => qdunnett(0.95, m_contrasts, df, RHO),
+            Some(r) => {
+                // Bisection mirroring `qdunnett`'s [0, 20] bracket on the
+                // deterministic Hsu Monte-Carlo CDF (same seed/draws/matrix
+                // as `dunnett_cdf`).
+                let (mut lo, mut hi) = (0.0_f64, 20.0_f64);
+                for _ in 0..80 {
+                    let mid = 0.5 * (lo + hi);
+                    if pdunnett_hsu(mid, df, r, HSU_N_MC, hsu_mc_seed) < 0.95 {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                    if (hi - lo).abs() < 1e-7 {
+                        break;
+                    }
+                }
+                0.5 * (lo + hi)
+            }
+        };
+        if c.is_finite() {
+            Some(c)
+        } else {
+            None
         }
     };
     let mut all_rows: Vec<DeResultRow> = Vec::new();
@@ -1179,13 +1232,17 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
                         bh_q: None,
                         effect_size: if est.is_finite() { Some(est) } else { None },
                         effect_size_method: "ols-posthoc-dunnett".into(),
+                        // Dunnett simultaneous CI: half-width = c·se where c is
+                        // the family-wise critical value from the SAME Dunnett
+                        // distribution used for the adjusted p (see `dunnett_crit`),
+                        // keeping the interval consistent with its adjusted p.
                         ci_low: if est.is_finite() && se.is_finite() {
-                            Some(est - 1.96 * se)
+                            dunnett_crit(fit.df).map(|c| est - c * se)
                         } else {
                             None
                         },
                         ci_high: if est.is_finite() && se.is_finite() {
-                            Some(est + 1.96 * se)
+                            dunnett_crit(fit.df).map(|c| est + c * se)
                         } else {
                             None
                         },

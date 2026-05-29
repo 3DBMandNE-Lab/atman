@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use atman_core::studentized_range::ptukey;
+use atman_core::studentized_range::{ptukey, qtukey};
 
 fn run_atman(args: &[&str]) -> Output {
     let bin = env!("CARGO_BIN_EXE_atman");
@@ -113,8 +113,10 @@ fn posthoc_tukey_adjustment_is_self_consistent_with_core_ptukey() {
         if !est.is_finite() || !df.is_finite() {
             continue;
         }
-        // Recover SE from the emitted 95% CI: ci_low = est - 1.96·se.
-        let se = (est - ci_low) / 1.96_f64;
+        // Recover SE from the emitted 95% Tukey simultaneous CI:
+        // ci_low = est - q*·se/√2, where q* = qtukey(0.95, k=3, df).
+        let q_crit = qtukey(0.95, 3, df);
+        let se = (est - ci_low) * std::f64::consts::SQRT_2 / q_crit;
         let q = est.abs() * std::f64::consts::SQRT_2 / se;
         // nmeans = 3 (stage has levels AD, CN, MCI).
         let expected_adj = (1.0 - ptukey(q, 3, df)).clamp(0.0, 1.0);
