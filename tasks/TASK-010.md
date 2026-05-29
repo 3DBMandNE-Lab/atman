@@ -5,7 +5,7 @@
 **Owner:** orchestrator
 **Branch:** (pending)
 **Started:** 2026-05-29T08:09:39+00:00
-**Updated:** 2026-05-29T09:24:09Z
+**Updated:** 2026-05-29T09:42:13+00:00
 <!-- kanban-status:end -->
 
 ## Plan
@@ -60,3 +60,7 @@ two sorted-key iterations + atomic_write) and new test
 `crates/atman/tests/robustness_topk_ties.rs`. No CLI/flag/output-schema changes;
 only ordering/atomicity. Branch name is the generic worktree name; rename on
 merge if a conventional branch name is desired.
+
+### Codex adversarial-review fix (orchestrator)
+
+Codex flagged (MEDIUM): `b.1.total_cmp(&a.1)` sorts NaN magnitudes ahead of all finite values in descending order, so a non-finite `mean_diff` (parse_opt_f64 accepts "NaN"/"inf") could hijack the top-k set. Fixed: `top_k_set` now filters non-finite `|mean_diff|` out of the candidate set before ranking (a non-finite effect is not a meaningful top hit; strict ranking). Added unit test `top_k_set_excludes_non_finite_and_breaks_ties_by_id` (NaN/inf excluded; tie resolves to ascending id). Integration tie-break byte-identity test still green.
