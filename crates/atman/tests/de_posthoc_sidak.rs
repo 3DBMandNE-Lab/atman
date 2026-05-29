@@ -3,6 +3,7 @@
 //! linear contrasts + Sidak adjustment) to ≥ 6 decimal places on a
 //! 36-sample 3-level fixture.
 
+use statrs::distribution::{ContinuousCDF, StudentsT};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -124,10 +125,15 @@ fn posthoc_sidak_matches_r_lm_contrasts_to_6_decimals() {
         let atman_p: f64 = atman_row["posthoc_p"].parse().unwrap();
         let atman_adj: f64 = atman_row["posthoc_adj_p"].parse().unwrap();
         let atman_est: f64 = atman_row["mean_diff"].parse().unwrap();
-        // SE isn't emitted on DeResultRow but we can recover from
-        // (mean_diff - ci_low) / 1.96.
+        // SE isn't emitted on DeResultRow, but the CI half-width is
+        // `t_crit * se` where `t_crit` is the two-sided 97.5% Student-t
+        // quantile at the fit's df (TASK-023: matches the t-based p-value,
+        // replacing the prior fixed 1.96 z-multiplier). Recover SE via
+        // (mean_diff - ci_low) / t_crit using the df emitted on the row.
         let ci_low: f64 = atman_row["ci_low"].parse().unwrap();
-        let atman_se = (atman_est - ci_low) / 1.96_f64;
+        let df: f64 = atman_row["df"].parse().unwrap();
+        let t_crit = StudentsT::new(0.0, 1.0, df).unwrap().inverse_cdf(0.975);
+        let atman_se = (atman_est - ci_low) / t_crit;
         max_p_err = max_p_err.max((ref_p - atman_p).abs());
         max_adj_err = max_adj_err.max((ref_adj - atman_adj).abs());
         max_est_err = max_est_err.max((ref_est - atman_est).abs());
