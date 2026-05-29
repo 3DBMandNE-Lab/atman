@@ -117,7 +117,7 @@ fn centered_singscore(mean_rank: f64, n: usize, m: usize) -> f64 {
 /// Average-rank assignment matching R's `rank(x, ties.method = "average")`.
 /// Ties are assigned the mean of the rank positions they would have
 /// occupied in a strict ordering. Returns `gene_symbol -> rank` (1-based).
-fn average_ranks<'a>(values: &'a BTreeMap<String, f64>) -> BTreeMap<&'a str, f64> {
+fn average_ranks(values: &BTreeMap<String, f64>) -> BTreeMap<&str, f64> {
     let mut entries: Vec<(&str, f64)> = values.iter().map(|(g, v)| (g.as_str(), *v)).collect();
     entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
     let mut out = BTreeMap::new();
@@ -129,8 +129,8 @@ fn average_ranks<'a>(values: &'a BTreeMap<String, f64>) -> BTreeMap<&'a str, f64
         }
         // Tied block: positions [i+1, j] in 1-based ranks; average is (i+1 + j) / 2.
         let avg_rank = ((i + 1 + j) as f64) / 2.0;
-        for k in i..j {
-            out.insert(entries[k].0, avg_rank);
+        for entry in &entries[i..j] {
+            out.insert(entry.0, avg_rank);
         }
         i = j;
     }
