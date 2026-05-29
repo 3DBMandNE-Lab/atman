@@ -256,7 +256,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let output_path = args.output_dir.join("module_de_results.tsv");
-    std::fs::write(&output_path, out.as_bytes())
+    crate::io::atomic_write(&output_path, out.as_bytes())
         .with_context(|| "writing module_de_results.tsv")?;
     eprintln!(
         "module-de: wrote {:?} (K={} modules × {} comparisons)",

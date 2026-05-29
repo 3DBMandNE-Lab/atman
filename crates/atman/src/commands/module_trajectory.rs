@@ -120,7 +120,7 @@ pub fn run(args: Args) -> Result<()> {
         out.push_str(&(a.sum_pr2_pr1 / n).to_string());
         out.push('\n');
     }
-    std::fs::write(&args.output, out.as_bytes())
+    crate::io::atomic_write(&args.output, out.as_bytes())
         .with_context(|| format!("writing {:?}", args.output))?;
     eprintln!("module-trajectory: wrote {:?}", args.output);
 
