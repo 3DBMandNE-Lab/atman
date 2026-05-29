@@ -4,7 +4,7 @@
 //! in the future does not silently mis-read older files. The writer emits a
 //! stable column order but the reader tolerates either ordering.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use atman_core::{
     fold_change::FoldChangePanel, matrix::WidePanel, Abundance, AssayId, Batch, DetectionLimit,
     MeasurementRecord, PeptideIdentity, PeptideMeasurementRecord, Platform, ProteinIdentity,
@@ -44,7 +44,11 @@ pub fn optional_cell(row: &StringRecord, col: Option<usize>) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-/// Format an `f64` with 6 decimal places; handles `NaN` and preserves zero as `"0"`.
+/// Fixed-6-decimal f64 formatter for human-facing report/QC columns
+/// (e.g. report.rs fraction columns, decompose `majority_sign`). Handles
+/// `NaN`/`Inf` explicitly and collapses zero to `"0"`. This rounding loses
+/// precision and is NOT round-trip-safe — use [`format_f64`] for value columns
+/// that must reparse to the exact same `f64`.
 pub fn format_float(value: f64) -> String {
     if !value.is_finite() {
         return if value.is_nan() {
@@ -258,8 +262,10 @@ pub fn read_measurements_long(path: &Path) -> Result<Vec<MeasurementRecord>> {
             abundance,
             abundance_raw,
             npx_source_str: row[c_src].to_string(),
-            qc_sample: parse_qc(&row[c_qcs]),
-            qc_assay: parse_qc(&row[c_qca]),
+            qc_sample: parse_qc(&row[c_qcs])
+                .with_context(|| format!("parsing qc_sample in {:?}", path))?,
+            qc_assay: parse_qc(&row[c_qca])
+                .with_context(|| format!("parsing qc_assay in {:?}", path))?,
             detection_limit,
             below_lod,
             batch: Batch {
@@ -677,7 +683,7 @@ pub fn write_fold_change_panel(
         for v in &panel.values[i] {
             buf.push(',');
             if let Some(x) = v {
-                buf.push_str(&format_f64_fc(*x));
+                buf.push_str(&format_f64(*x));
             }
         }
         buf.push('\n');
@@ -686,12 +692,16 @@ pub fn write_fold_change_panel(
     Ok(path)
 }
 
-fn parse_qc(s: &str) -> QcFlag {
+/// Parse a QC-flag cell. Strict: only the canonical spellings emitted by
+/// [`QcFlag::as_str`] (`PASS`/`WARN`/`FAIL`) are accepted. Any other value —
+/// a lowercase, truncated, or garbled cell — is an error rather than a silent
+/// fall-through to `Pass`, which would let a failed sample masquerade as passed.
+fn parse_qc(s: &str) -> Result<QcFlag> {
     match s {
-        "PASS" => QcFlag::Pass,
-        "WARN" => QcFlag::Warn(String::new()),
-        "FAIL" => QcFlag::Fail(String::new()),
-        _ => QcFlag::Pass,
+        "PASS" => Ok(QcFlag::Pass),
+        "WARN" => Ok(QcFlag::Warn(String::new())),
+        "FAIL" => Ok(QcFlag::Fail(String::new())),
+        other => bail!("unrecognized QC flag {other:?} (expected PASS, WARN, or FAIL)"),
     }
 }
 
@@ -725,11 +735,12 @@ fn empty_to_none(s: &str) -> Option<String> {
     }
 }
 
-fn format_f64(v: f64) -> String {
-    format!("{}", v)
-}
-
-fn format_f64_fc(v: f64) -> String {
+/// Full-precision, round-trip f64 formatter for value columns (long-TSV
+/// `abundance`/`abundance_raw`, fold-change panel cells). Uses Rust's default
+/// `{}` formatting, which emits the shortest decimal string that parses back to
+/// the exact same `f64`. Contrast with [`format_float`], whose fixed-6-decimal
+/// rounding is for human-facing report columns and is NOT round-trip-safe.
+pub fn format_f64(v: f64) -> String {
     format!("{}", v)
 }
 
@@ -1115,6 +1126,22 @@ mod tests {
         atomic_write(&p, b"old").unwrap();
         atomic_write(&p, b"new").unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), b"new");
+    }
+
+    #[test]
+    fn parse_qc_accepts_canonical_spellings() {
+        assert_eq!(parse_qc("PASS").unwrap(), QcFlag::Pass);
+        assert_eq!(parse_qc("WARN").unwrap(), QcFlag::Warn(String::new()));
+        assert_eq!(parse_qc("FAIL").unwrap(), QcFlag::Fail(String::new()));
+    }
+
+    #[test]
+    fn parse_qc_rejects_unrecognized_values() {
+        // Lowercase, truncated, and empty cells must error rather than silently
+        // mapping to Pass — a garbled "fail" cell must not masquerade as passed.
+        for bad in ["pass", "fail", "FA", "", "OK", "PASS "] {
+            assert!(parse_qc(bad).is_err(), "expected error for {bad:?}");
+        }
     }
 
     #[test]

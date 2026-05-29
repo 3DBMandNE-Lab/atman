@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use super::enrich_gprofiler::{run_gprofiler, GprofilerArgs};
-use crate::io::{atomic_write, hash_labeled_inputs, need_col, sidecar_path_for, write_run_sidecar};
+use crate::io::{
+    atomic_write, format_f64, hash_labeled_inputs, need_col, sidecar_path_for, write_run_sidecar,
+};
 use serde_json::json;
 use std::path::Path as StdPath;
 use std::time::SystemTime;
@@ -362,10 +364,10 @@ fn write_gsea_rows(path: &Path, rows: &[GseaWriteRow]) -> Result<()> {
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             row.set_name,
             row.set_size,
-            row.es,
-            row.nes,
-            row.p_value,
-            row.bh_q.map(|q| q.to_string()).unwrap_or_default(),
+            format_f64(row.es),
+            format_f64(row.nes),
+            format_f64(row.p_value),
+            row.bh_q.map(format_f64).unwrap_or_default(),
             row.leading_edge,
         ));
     }
@@ -615,9 +617,9 @@ fn write_rows(path: &Path, rows: &[OraRow]) -> Result<()> {
             row.hit_count,
             row.set_size,
             row.overlap_size,
-            row.odds_ratio,
-            row.p_value,
-            row.bh_q.map(|q| q.to_string()).unwrap_or_default(),
+            format_f64(row.odds_ratio),
+            format_f64(row.p_value),
+            row.bh_q.map(format_f64).unwrap_or_default(),
             row.overlap_genes,
         ));
     }
