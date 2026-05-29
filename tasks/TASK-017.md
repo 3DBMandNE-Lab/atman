@@ -1,11 +1,11 @@
 # TASK-017 — unify the six hand-rolled RNGs into atman_core::rng::SplitMix64
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-aa0835eae38bcd537
 **Started:** 2026-05-29T13:08:21+00:00
-**Updated:** 2026-05-29T21:05:26+00:00
+**Updated:** 2026-05-29T21:06:51+00:00
 <!-- kanban-status:end -->
 
 ## Plan
