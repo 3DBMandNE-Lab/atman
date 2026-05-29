@@ -1,11 +1,11 @@
 # TASK-015 — CI: build the real toolchain + enforce determinism pinning
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-a1cabe24d40878842
 **Started:** 2026-05-29T09:49:45+00:00
-**Updated:** 2026-05-29T10:18:00+00:00
+**Updated:** 2026-05-29T10:19:38+00:00
 <!-- kanban-status:end -->
 
 ## Plan
