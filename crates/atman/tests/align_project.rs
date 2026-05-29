@@ -356,6 +356,127 @@ fn align_project_includes_control_samples() {
     assert!(sids.contains(&"SUB04"), "control SUB04 missing from output");
 }
 
+/// Regression for TASK-011: when samples.tsv is in a different order
+/// than the measurement first-seen order, activations must still attach
+/// to the correct sample_id. The matrix rows are built in measurement
+/// first-seen order, so labels must come from that order — NOT from
+/// samples.tsv. The counts coincide (4 == 4), so the old length guard
+/// would not catch the mislabeling; only correct keying does.
+#[test]
+fn align_project_keys_activations_by_measurement_order_not_samples_tsv() {
+    let tmp = tempfile::tempdir().unwrap();
+    let atlas_dir = tmp.path().join("atlas");
+    let cohort_dir = tmp.path().join("cohort_order");
+    let output_dir = tmp.path().join("projected_order");
+    write_atlas(&atlas_dir);
+
+    std::fs::create_dir_all(&cohort_dir).unwrap();
+    let loadings_a1 = [1.0, 0.9, 0.1, 0.0];
+    let loadings_a2 = [0.0, 0.1, 0.9, 1.0];
+    let genes = ["G1", "G2", "G3", "G4"];
+
+    // Each sample_id maps to a distinct, recognizable coefficient pair.
+    let coefs: HashMap<&str, [f64; 2]> = [
+        ("SUB01", [1.0, 0.0]),
+        ("SUB02", [0.0, 1.0]),
+        ("SUB03", [0.5, 0.5]),
+        ("SUB04", [2.0, -1.0]),
+    ]
+    .into_iter()
+    .collect();
+
+    // samples.tsv in ASCENDING order.
+    let samples = "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n\
+                   SUB01\tSUB01\tN/A\t0\tplasma\t1\n\
+                   SUB02\tSUB02\tN/A\t0\tplasma\t2\n\
+                   SUB03\tSUB03\tN/A\t0\tplasma\t3\n\
+                   SUB04\tSUB04\tN/A\t0\tplasma\t4\n";
+    std::fs::write(cohort_dir.join("samples.tsv"), samples).unwrap();
+
+    let mut proteins = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    for (j, gene) in genes.iter().enumerate() {
+        proteins.push_str(&format!(
+            "olink_explore_ngs\tA{:03}\tQ{:05}\t{}\tP1\t\n",
+            j + 1,
+            j + 1,
+            gene,
+        ));
+    }
+    std::fs::write(cohort_dir.join("proteins.tsv"), proteins).unwrap();
+
+    // measurements.tsv with a DIFFERENT first-seen sample order than
+    // samples.tsv: SUB02, SUB04, SUB01, SUB03.
+    let measurement_order = ["SUB02", "SUB04", "SUB01", "SUB03"];
+    let mut qc = String::from(
+        "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
+         abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
+         detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n",
+    );
+    let mut order = 0u64;
+    for sid in measurement_order {
+        let c = &coefs[sid];
+        for (j, gene) in genes.iter().enumerate() {
+            order += 1;
+            let v = c[0] * loadings_a1[j] + c[1] * loadings_a2[j];
+            qc.push_str(&format!(
+                "olink_explore_ngs\t{sid}\tA{:03}\t{}\tP1\t{v:.6}\t\
+                 {v:.6}\t{v:.6}\tlog2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n",
+                j + 1,
+                gene
+            ));
+        }
+    }
+    std::fs::write(cohort_dir.join("measurements.tsv"), &qc).unwrap();
+
+    let status = run_atman(&[
+        "align",
+        "project",
+        "--atlas-archetypes",
+        atlas_dir.join("archetypes.tsv").to_str().unwrap(),
+        "--atlas-loadings",
+        &format!(
+            "COA={},COB={}",
+            atlas_dir.join("coa_loadings.tsv").display(),
+            atlas_dir.join("cob_loadings.tsv").display(),
+        ),
+        "--cohort-dir",
+        cohort_dir.to_str().unwrap(),
+        "--transform",
+        "none",
+        "--projection",
+        "ls",
+        "--output-dir",
+        output_dir.to_str().unwrap(),
+    ]);
+    assert!(
+        status.status.success(),
+        "align project failed:\nstderr:\n{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let (_, rows) = parse_tsv(&output_dir.join("projected_activations.tsv"));
+    assert_eq!(rows.len(), 4);
+    // Each row's activations must match the planted coefficients for the
+    // sample_id it is labeled with — proving labels follow measurement
+    // first-seen order, not samples.tsv order.
+    for r in &rows {
+        let sid = r["sample_id"].as_str();
+        let exp = &coefs[sid];
+        let a1: f64 = r["A0001"].parse().unwrap();
+        let a2: f64 = r["A0002"].parse().unwrap();
+        assert!(
+            (a1 - exp[0]).abs() < 1e-3,
+            "{sid}: A0001 = {a1}, expected {} (mislabeled?)",
+            exp[0]
+        );
+        assert!(
+            (a2 - exp[1]).abs() < 1e-3,
+            "{sid}: A0002 = {a2}, expected {} (mislabeled?)",
+            exp[1]
+        );
+    }
+}
+
 #[test]
 fn align_project_refuses_on_empty_cohort_intersection() {
     let tmp = tempfile::tempdir().unwrap();
