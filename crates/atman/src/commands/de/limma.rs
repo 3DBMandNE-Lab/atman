@@ -350,6 +350,27 @@ pub(super) fn run_limma(
             }
         }
 
+        // BH within (comparison, panel) over the per-feature moderated F-test
+        // p-values, mirroring the `p_value` → `bh_q` adjustment above. The
+        // F-test p-value is a reportable per-protein hypothesis and must carry
+        // the same multiplicity control as the primary `p_value` column.
+        let mut fp_by_panel: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
+        for (i, panel) in panel_by_feature.iter().enumerate() {
+            let row = &output.rows[i];
+            let fp = match row.f_p_value {
+                Some(v) if !row.skipped && v.is_finite() => Some(v),
+                _ => None,
+            };
+            fp_by_panel.entry(panel.clone()).or_default().push(fp);
+        }
+        let mut f_q_values: Vec<Option<f64>> = vec![None; n_features];
+        for (panel, fps) in &fp_by_panel {
+            let qs = bh_fdr(fps);
+            for (j, pos) in panel_positions[panel].iter().enumerate() {
+                f_q_values[*pos] = qs[j];
+            }
+        }
+
         // (vi) Map LimmaRow → DeResultRow and accumulate per-panel
         // summary state for the report.
         // When df_total = Inf (prior fully pooled), use the z-score 1.96 as
@@ -505,7 +526,7 @@ pub(super) fn run_limma(
                 df_total: Some(output.df_total),
                 f_statistic: row.f_statistic,
                 f_p_value: row.f_p_value,
-                f_bh_q: None,
+                f_bh_q: f_q_values[i],
                 lfc_threshold: Some(args.lfc_threshold),
                 n_peptides_observed: peptides_per_assay
                     .as_ref()
