@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::io::{
-    atomic_write, hash_canonical_inputs, read_measurements_long, read_proteins, read_samples,
-    sidecar_path_for, write_run_sidecar,
+    atomic_write, format_f64, hash_canonical_inputs, read_measurements_long, read_proteins,
+    read_samples, sidecar_path_for, write_run_sidecar,
 };
 
 #[derive(ClapArgs, Debug)]
@@ -382,8 +382,8 @@ impl QcReport {
                     "warning [sparse_protein] protein {:?}/{:?} effective fraction {} is below {}",
                     p.platform,
                     p.assay_id,
-                    format_float(effective_fraction),
-                    format_float(sparse_threshold)
+                    format_f64(effective_fraction),
+                    format_f64(sparse_threshold)
                 );
             }
         }
@@ -586,7 +586,7 @@ fn write_missingness_summary(path: &Path, rows: &[MissingnessSummaryRow]) -> Res
         buf.push_str(&r.n_absent_pairs.to_string());
         buf.push('\t');
         if r.fraction_absent_pairs.is_finite() {
-            buf.push_str(&format_float(r.fraction_absent_pairs));
+            buf.push_str(&format_f64(r.fraction_absent_pairs));
         }
         buf.push('\t');
         buf.push_str(&r.n_qc_masked_observed.to_string());
@@ -627,9 +627,5 @@ fn fraction(num: usize, denom: usize) -> String {
     if denom == 0 {
         return String::new();
     }
-    format_float(num as f64 / denom as f64)
-}
-
-fn format_float(v: f64) -> String {
-    format!("{v}")
+    format_f64(num as f64 / denom as f64)
 }
