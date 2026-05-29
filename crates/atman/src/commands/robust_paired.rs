@@ -194,7 +194,20 @@ pub fn run(args: Args) -> Result<()> {
             let mut influential_pair_id = String::new();
             let mut counted_loso = 0usize;
             if let (Some(t_full_v), Some(mean_diff_v)) = (t_full, mean_diff_full) {
-                let target_sign = mean_diff_v.signum();
+                // Sign of the full-sample effect we are testing LOSO stability
+                // against. `f64::signum(0.0)` is +1.0 in Rust, so use an explicit
+                // ternary that maps an exactly-zero effect to 0.0 (no direction).
+                // A zero target can never match a LOSO replicate's signum (which
+                // is only ever counted when it is +1.0 or -1.0; a zero replicate
+                // is likewise treated as non-matching below), so a no-direction
+                // full effect honestly yields sign_stability = 0.
+                let target_sign = if mean_diff_v > 0.0 {
+                    1.0
+                } else if mean_diff_v < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                };
                 for drop_idx in 0..n_full {
                     let mut sub: Vec<(f64, f64)> = Vec::with_capacity(n_full - 1);
                     for (i, (a, b)) in pairs_only.iter().enumerate() {
@@ -210,7 +223,19 @@ pub fn run(args: Args) -> Result<()> {
                     } = paired_t(&sub, args.min_pairs)
                     {
                         counted_loso += 1;
-                        if mean_diff.signum() == target_sign {
+                        // An exactly-zero replicate has no direction, so it is
+                        // NOT sign-stable with any target (including a positive
+                        // one): `f64::signum(0.0)` would spuriously report +1.0,
+                        // so compare an explicit direction instead. A zero
+                        // replicate counts as non-matching.
+                        let replicate_sign = if mean_diff > 0.0 {
+                            1.0
+                        } else if mean_diff < 0.0 {
+                            -1.0
+                        } else {
+                            0.0
+                        };
+                        if replicate_sign != 0.0 && replicate_sign == target_sign {
                             sign_keep += 1;
                         }
                         if p_value < 0.05 {
@@ -488,14 +513,17 @@ fn write_summary(path: &std::path::Path, summaries: &[SummaryRow]) -> Result<()>
         "comparison\tn_proteins\tn_proteins_full_q05\tn_proteins_robust\tfraction_robust_of_significant\tmedian_sign_stability_of_significant\n",
     );
     for s in summaries {
+        // Route both floats through the same empty-cell formatter used for
+        // per-row values: an undefined median (no significant proteins) becomes
+        // an empty cell rather than the literal `NaN`.
         buf.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{:.6}\t{:.6}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
             s.comparison,
             s.n_proteins,
             s.n_proteins_full_q05,
             s.n_proteins_robust,
-            s.fraction_robust_of_significant,
-            s.median_sign_stability_of_significant,
+            opt_f(Some(s.fraction_robust_of_significant)),
+            opt_f(Some(s.median_sign_stability_of_significant)),
         ));
     }
     atomic_write(path, buf.as_bytes()).with_context(|| format!("writing {:?}", path))

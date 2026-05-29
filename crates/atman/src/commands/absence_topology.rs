@@ -17,6 +17,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use crate::commands::jaccard_cluster::{
+    find, format_f, jaccard_distance, median_f, quality_path_for, union,
+};
 use crate::io::{
     atomic_write, hash_canonical_inputs, read_measurements_long, read_proteins, read_samples,
     sidecar_path_for, write_run_sidecar,
@@ -164,30 +167,6 @@ pub fn run(args: Args) -> Result<()> {
     // Connected-components clustering on clusterable proteins.
     let m = clusterable_idx.len();
     let mut parent: Vec<usize> = (0..m).collect();
-    fn find(parent: &mut [usize], x: usize) -> usize {
-        let mut r = x;
-        while parent[r] != r {
-            r = parent[r];
-        }
-        let mut cur = x;
-        while parent[cur] != r {
-            let nxt = parent[cur];
-            parent[cur] = r;
-            cur = nxt;
-        }
-        r
-    }
-    fn union(parent: &mut [usize], a: usize, b: usize) {
-        let ra = find(parent, a);
-        let rb = find(parent, b);
-        if ra != rb {
-            if ra < rb {
-                parent[rb] = ra;
-            } else {
-                parent[ra] = rb;
-            }
-        }
-    }
 
     for i in 0..m {
         for j in (i + 1)..m {
@@ -340,7 +319,7 @@ pub fn run(args: Args) -> Result<()> {
         min_absent: args.min_absent,
         diagnostic: diagnostic.clone(),
     };
-    let quality_path = quality_path_for(&args.output);
+    let quality_path = quality_path_for(&args.output, "absence_topology");
     write_quality(&quality_path, &quality)?;
 
     if diagnostic != "protein_coherent" {
@@ -390,35 +369,6 @@ fn protein_key(platform: &str, assay_id: &str) -> (String, String) {
     (platform.to_string(), assay_id.to_string())
 }
 
-fn jaccard_distance(a: &[u64], b: &[u64]) -> f64 {
-    debug_assert_eq!(a.len(), b.len());
-    let mut inter = 0u64;
-    let mut uni = 0u64;
-    for (x, y) in a.iter().zip(b.iter()) {
-        inter += (x & y).count_ones() as u64;
-        uni += (x | y).count_ones() as u64;
-    }
-    if uni == 0 {
-        0.0
-    } else {
-        1.0 - (inter as f64) / (uni as f64)
-    }
-}
-
-fn median_f(v: &[f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    let mut s = v.to_vec();
-    s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let n = s.len();
-    if n % 2 == 1 {
-        s[n / 2]
-    } else {
-        0.5 * (s[n / 2 - 1] + s[n / 2])
-    }
-}
-
 fn classify(
     n_singletons: usize,
     n_clusterable: usize,
@@ -460,18 +410,6 @@ fn write_rows(path: &std::path::Path, rows: &[ClusterRow]) -> Result<()> {
     atomic_write(path, buf.as_bytes()).with_context(|| format!("writing {:?}", path))
 }
 
-fn quality_path_for(out: &std::path::Path) -> PathBuf {
-    let stem = out
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "absence_topology".to_string());
-    let ext = out
-        .extension()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "tsv".to_string());
-    out.with_file_name(format!("{}_quality.{}", stem, ext))
-}
-
 fn write_quality(path: &std::path::Path, q: &QualityRow) -> Result<()> {
     let mut buf = String::from(
         "n_proteins\tn_samples_universe\tn_complete\tn_clusterable\tn_clusters\tn_singletons\tmedian_cluster_size\tmean_within_jaccard_distance\tmean_between_jaccard_distance\tseparation_ratio\tthreshold\tmin_absent\tdiagnostic\n",
@@ -493,18 +431,4 @@ fn write_quality(path: &std::path::Path, q: &QualityRow) -> Result<()> {
         q.diagnostic,
     ));
     atomic_write(path, buf.as_bytes()).with_context(|| format!("writing {:?}", path))
-}
-
-fn format_f(x: f64) -> String {
-    if x.is_nan() {
-        String::new()
-    } else if x.is_infinite() {
-        if x > 0.0 {
-            "inf".to_string()
-        } else {
-            "-inf".to_string()
-        }
-    } else {
-        format!("{:.6}", x)
-    }
 }
