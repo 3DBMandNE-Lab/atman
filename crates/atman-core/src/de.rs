@@ -1240,7 +1240,7 @@ pub fn read_external_covariates<P: AsRef<Path>>(
             if row.len() >= 2 {
                 seen_per_sample
                     .entry(row[0].clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(row[1].clone());
             }
         }
@@ -1271,10 +1271,7 @@ pub fn read_external_covariates<P: AsRef<Path>>(
                     value_str
                 ));
             }
-            result
-                .entry(sample_id)
-                .or_insert_with(BTreeMap::new)
-                .insert(cov_name, value);
+            result.entry(sample_id).or_default().insert(cov_name, value);
         }
     } else {
         // Wide format: each row is sample_id | cov1 | cov2 | ...

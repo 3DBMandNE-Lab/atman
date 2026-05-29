@@ -106,10 +106,13 @@ const EPSILON: f64 = 1e-9;
 
 /// Run Lee & Seung multiplicative updates for the Frobenius loss.
 /// Modifies `w` and `h` in place; returns the final [`NmfResult`].
+// Numeric kernel: the matrix dims (n, p, k) and solver params (max_iter, tol)
+// are intrinsic to the update and clearer as flat args than bundled in a struct.
+#[allow(clippy::too_many_arguments)]
 fn frobenius_mu(
     x: &[Vec<f64>],
-    w: &mut Vec<Vec<f64>>,
-    h: &mut Vec<Vec<f64>>,
+    w: &mut [Vec<f64>],
+    h: &mut [Vec<f64>],
     n: usize,
     p: usize,
     k: usize,
@@ -181,8 +184,8 @@ fn frobenius_mu(
     }
 
     NmfResult {
-        w: w.clone(),
-        h: h.clone(),
+        w: w.to_vec(),
+        h: h.to_vec(),
         n_iter,
         final_error: prev_error,
         converged,
@@ -218,10 +221,13 @@ fn frobenius_error(
 /// Update rules (element-wise):
 ///   H_kj ← H_kj * (sum_i  W_ik * X_ij / (WH)_ij) / (sum_i W_ik)
 ///   W_ik ← W_ik * (sum_j  H_kj * X_ij / (WH)_ij) / (sum_j H_kj)
+// Numeric kernel: the matrix dims (n, p, k) and solver params (max_iter, tol)
+// are intrinsic to the update and clearer as flat args than bundled in a struct.
+#[allow(clippy::too_many_arguments)]
 fn kl_mu(
     x: &[Vec<f64>],
-    w: &mut Vec<Vec<f64>>,
-    h: &mut Vec<Vec<f64>>,
+    w: &mut [Vec<f64>],
+    h: &mut [Vec<f64>],
     n: usize,
     p: usize,
     k: usize,
@@ -279,8 +285,8 @@ fn kl_mu(
         let mut h_row_sum = vec![0.0_f64; k];
 
         for kk in 0..k {
-            for j in 0..p {
-                h_row_sum[kk] += h[kk][j];
+            for &v in &h[kk] {
+                h_row_sum[kk] += v;
             }
         }
 
@@ -315,8 +321,8 @@ fn kl_mu(
     }
 
     NmfResult {
-        w: w.clone(),
-        h: h.clone(),
+        w: w.to_vec(),
+        h: h.to_vec(),
         n_iter,
         final_error: prev_loss,
         converged,
@@ -357,6 +363,7 @@ fn kl_loss(x: &[Vec<f64>], w: &[Vec<f64>], h: &[Vec<f64>], n: usize, p: usize, k
 ///   - choose the sign that gives the larger Frobenius contribution
 ///     (||u+|| * ||v+|| vs ||u-|| * ||v-||)
 ///   - set W[:, r] and H[r, :] accordingly, scaled by sqrt(s_r)
+///
 /// Remaining zeros (from the 0-norms) are replaced by mean(X) ("a" variant).
 fn init_nndsvda(x: &[Vec<f64>], n: usize, p: usize, k: usize) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
     // We compute the truncated SVD of X using the Gram-matrix trick from `pca_whiten`.
@@ -413,24 +420,18 @@ fn init_nndsvda(x: &[Vec<f64>], n: usize, p: usize, k: usize) -> (Vec<Vec<f64>>,
         for i in 0..n {
             w[i][r] = w_r[i];
         }
-        for j in 0..p {
-            h[r][j] = h_r[j];
-        }
+        h[r][..p].copy_from_slice(&h_r[..p]);
     }
 
     // "a" variant: replace zeros with mean(X)
-    for i in 0..n {
-        for a in 0..k {
-            if w[i][a] == 0.0 {
-                w[i][a] = mean_x;
-            }
+    for v in w.iter_mut().flat_map(|row| row.iter_mut()) {
+        if *v == 0.0 {
+            *v = mean_x;
         }
     }
-    for a in 0..k {
-        for j in 0..p {
-            if h[a][j] == 0.0 {
-                h[a][j] = mean_x;
-            }
+    for v in h.iter_mut().flat_map(|row| row.iter_mut()) {
+        if *v == 0.0 {
+            *v = mean_x;
         }
     }
 
@@ -557,6 +558,8 @@ fn gram_xtx(x: &[Vec<f64>], n: usize, p: usize) -> Vec<Vec<f64>> {
     for i in 0..p {
         for j in i..p {
             let mut acc = 0.0_f64;
+            // `r` indexes rows of x at two distinct columns (i and j) per step.
+            #[allow(clippy::needless_range_loop)]
             for r in 0..n {
                 acc += x[r][i] * x[r][j];
             }
@@ -614,6 +617,8 @@ fn mat_mul_at_b(
 /// A^T @ A: (cols × cols) from (rows × cols)
 fn mat_mul_at_a(a: &[Vec<f64>], cols: usize, rows: usize) -> Vec<Vec<f64>> {
     let mut out = vec![vec![0.0_f64; cols]; cols];
+    // `r` indexes rows of a; the inner loops read a[r] at two columns (i and j).
+    #[allow(clippy::needless_range_loop)]
     for r in 0..rows {
         for i in 0..cols {
             let ai = a[r][i];
@@ -749,9 +754,7 @@ pub fn multi_seed_nmf(
     let mut seed_loadings_per_ref: Vec<Vec<Vec<f64>>> =
         (0..k).map(|a| vec![reference[a].clone()]).collect();
 
-    for seed_idx in 1..ms_cfg.n_seeds {
-        let alt = &all_h[seed_idx];
-
+    for alt in all_h.iter().skip(1) {
         // Greedy matching: for each reference program (in order), find the
         // best-matching alternative program not yet assigned.
         let mut used = vec![false; k];
@@ -935,6 +938,8 @@ pub fn select_k(
             // Compute per-seed RSS (Frobenius squared).
             let n_p = if x.is_empty() { 0 } else { x[0].len() };
             let mut rss = 0.0_f64;
+            // i and j index the X / W / H matrices in lockstep (x[i][j], w[i][a], h[a][j]).
+            #[allow(clippy::needless_range_loop)]
             for i in 0..n {
                 for j in 0..n_p {
                     let wh: f64 = (0..k).map(|a| res.w[i][a] * res.h[a][j]).sum();
@@ -1280,6 +1285,8 @@ mod tests {
         let p = x[0].len();
         let err: f64 = {
             let mut acc = 0.0_f64;
+            // i and j index the X / W / H matrices in lockstep.
+            #[allow(clippy::needless_range_loop)]
             for i in 0..n {
                 for j in 0..p {
                     let wh: f64 = (0..cfg.k).map(|a| r.w[i][a] * r.h[a][j]).sum();
@@ -1328,6 +1335,8 @@ mod tests {
         let p = x[0].len();
         let err: f64 = {
             let mut acc = 0.0_f64;
+            // i and j index the X / W / H matrices in lockstep.
+            #[allow(clippy::needless_range_loop)]
             for i in 0..n {
                 for j in 0..p {
                     let wh: f64 = (0..cfg.k).map(|a| r.w[i][a] * r.h[a][j]).sum();
@@ -1559,6 +1568,8 @@ mod tests {
         let p = x[0].len();
         let err: f64 = {
             let mut acc = 0.0_f64;
+            // i and j index the X / W / H matrices in lockstep.
+            #[allow(clippy::needless_range_loop)]
             for i in 0..n {
                 for j in 0..p {
                     let wh: f64 = (0..cfg.k).map(|a| r.w[i][a] * r.h[a][j]).sum();
