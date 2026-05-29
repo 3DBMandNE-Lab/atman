@@ -1,11 +1,11 @@
 # TASK-020 — split god-module decompose.rs (3,349 LOC)
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-aa4e0cbbbb8fd332d
 **Started:** 2026-05-29T21:07:03+00:00
-**Updated:** 2026-05-29T21:31:11Z
+**Updated:** 2026-05-29T21:40:31+00:00
 <!-- kanban-status:end -->
 
 ## Plan
