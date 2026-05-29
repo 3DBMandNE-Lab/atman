@@ -30,6 +30,7 @@
 
 use crate::align::{build_archetypes, similarity, AlignMetric, AlignedProgram};
 use crate::ica::{canonicalize_ica, fast_ica, CanonicalIca, Xoshiro256pp};
+use crate::rng::derive_sub_seed;
 use statrs::distribution::{ContinuousCDF, Normal};
 
 #[derive(Debug, Clone)]
@@ -106,31 +107,10 @@ pub struct BootstrapRow {
     pub bca_fallback_to_percentile: bool,
 }
 
-/// SplitMix64-derived sub-seed for iteration `iter` under top-level
-/// `seed`. Same primitive as `ica_null::derive_sub_seed`.
-fn derive_sub_seed(seed: u64, iter: usize) -> u64 {
-    let mut z = seed.wrapping_add(0x9E3779B97F4A7C15_u64.wrapping_mul(iter as u64 + 1));
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-    z ^ (z >> 31)
-}
-
-/// Sample `n_samples` indices with replacement from `0..n` using
-/// rejection-sampling on the RNG.
+/// Sample `n_samples` indices with replacement from `0..n` using the
+/// reviewed unbiased bounded draw on the raw u64 stream.
 fn bootstrap_indices(rng: &mut Xoshiro256pp, n: usize, n_samples: usize) -> Vec<usize> {
-    let mut out = Vec::with_capacity(n_samples);
-    for _ in 0..n_samples {
-        let bound = n as u64;
-        loop {
-            let v = rng.next_normal().to_bits();
-            let limit = u64::MAX - u64::MAX % bound;
-            if v < limit {
-                out.push((v % bound) as usize);
-                break;
-            }
-        }
-    }
-    out
+    (0..n_samples).map(|_| rng.bounded(n)).collect()
 }
 
 /// Resample rows of `data` with replacement, returning a new

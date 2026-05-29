@@ -35,6 +35,7 @@
 //! top-level `seed`, every invocation is byte-identical.
 
 use crate::ica::{canonicalize_ica, compute_stability_scores, fast_ica, Xoshiro256pp};
+use crate::rng::derive_sub_seed;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NullMode {
@@ -84,47 +85,16 @@ pub struct ArchetypeNullRow {
     pub null_p: f64,
 }
 
-/// Derive a deterministic per-iteration sub-seed from `(seed, iter)`.
-/// Uses SplitMix64 so near-identical inputs produce well-separated
-/// outputs without pulling in a cryptographic hash dependency.
-fn derive_sub_seed(seed: u64, iter: usize) -> u64 {
-    let mut z = seed.wrapping_add(0x9E3779B97F4A7C15_u64.wrapping_mul(iter as u64 + 1));
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-    z ^ (z >> 31)
-}
-
 /// Fisher-Yates shuffle producing a permutation of `0..n` from a
-/// given RNG. Deterministic under fixed seed.
+/// given RNG. Deterministic under fixed seed. Uses the reviewed unbiased
+/// bounded draw on the raw u64 stream.
 fn permutation(rng: &mut Xoshiro256pp, n: usize) -> Vec<usize> {
     let mut out: Vec<usize> = (0..n).collect();
     for i in (1..n).rev() {
-        let bound = (i + 1) as u64;
-        // Rejection sampling to avoid modulo bias.
-        let mut u;
-        loop {
-            u = rng_u64(rng);
-            let limit = u64::MAX - u64::MAX % bound;
-            if u < limit {
-                break;
-            }
-        }
-        let j = (u % bound) as usize;
+        let j = rng.bounded(i + 1);
         out.swap(i, j);
     }
     out
-}
-
-fn rng_u64(rng: &mut Xoshiro256pp) -> u64 {
-    // Xoshiro256pp stores private state; reuse its public `next_normal`
-    // via a one-value draw. For uniform u64 draws we use two normals
-    // and bit-hash. Simpler: consume one `next_normal` and reinterpret
-    // its bit pattern as u64 — fine for permutation index since we only
-    // need a uniform-ish spread followed by rejection sampling.
-    // (A proper `next_u64` accessor would be cleaner; we piggyback on
-    // the existing public API without touching ica.rs.)
-    let v = rng.next_normal();
-    v.to_bits()
 }
 
 /// Produce a null matrix from the original `x` under the selected

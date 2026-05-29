@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use atman_core::de::{bh_fdr, paired_t, two_sided_t_p_value, welch_t, PairedTResult, SkipReason};
 use atman_core::stats::mean;
-use atman_core::Sample;
+use atman_core::{Sample, SplitMix64};
 use clap::Args as ClapArgs;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -135,7 +135,7 @@ pub fn run(args: Args) -> Result<()> {
     let measurements = read_measurements_long(&measurements_path)?;
     let protein_cells = build_cells(&samples, &proteins, &measurements);
 
-    let mut rng = Rng64::new(args.seed);
+    let mut rng = SplitMix64::new(args.seed);
     let mut summary_rows = Vec::new();
     let mut empirical_rows = Vec::new();
 
@@ -434,7 +434,7 @@ fn null_test(
     b: &str,
     test: &str,
     min_pairs: usize,
-    rng: &mut Rng64,
+    rng: &mut SplitMix64,
 ) -> TestStat {
     if test == "paired-t" {
         let pairs = paired_values(protein, a, b);
@@ -677,39 +677,10 @@ fn quantile_usize_sorted(values: &[usize], q: f64) -> usize {
     values[idx.min(values.len() - 1)]
 }
 
-fn shuffle<T>(values: &mut [T], rng: &mut Rng64) {
+fn shuffle<T>(values: &mut [T], rng: &mut SplitMix64) {
     for i in (1..values.len()).rev() {
-        let j = rng.gen_range(i + 1);
+        let j = rng.bounded(i + 1);
         values.swap(i, j);
-    }
-}
-
-struct Rng64 {
-    state: u64,
-}
-
-impl Rng64 {
-    fn new(seed: u64) -> Self {
-        Self {
-            state: if seed == 0 { 0x9e3779b97f4a7c15 } else { seed },
-        }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut x = self.state;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.state = x;
-        x.wrapping_mul(0x2545f4914f6cdd1d)
-    }
-
-    fn gen_bool(&mut self) -> bool {
-        self.next_u64() & 1 == 1
-    }
-
-    fn gen_range(&mut self, upper: usize) -> usize {
-        (self.next_u64() as usize) % upper
     }
 }
 

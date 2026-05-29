@@ -28,6 +28,7 @@ pub mod multivariate_t;
 pub mod network;
 pub mod network_differential;
 pub mod qc;
+pub mod rng;
 pub mod singscore;
 pub mod stats;
 pub mod studentized_range;
@@ -56,6 +57,7 @@ pub use network::{
     adjacency, betweenness_centrality, eigenvector_centrality, influence_scores,
     pairwise_similarity, AdjacencyPolicy, InfluenceRow, SimilarityMatrix, SimilarityMetric,
 };
+pub use rng::{derive_sub_seed, SplitMix64, Xoshiro256pp};
 pub use network_differential::{
     edge_pairwise_differential, edge_summary_differential, module_rewiring,
     signed_pairwise_correlations, CohortCorrelations, CohortData, EdgePairwiseRow,

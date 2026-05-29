@@ -244,26 +244,11 @@ fn sample_positions(rng: &mut Xoshiro256pp, n: usize, k: usize, out: &mut [bool]
     // Floyd's combination algorithm: for j = n-k..n, draw r in 0..=j; if
     // already chosen, choose j instead. Yields a uniform k-subset.
     for j in (n - k)..n {
-        let r = rng_index(rng, j + 1);
+        let r = rng.bounded(j + 1);
         if out[r] {
             out[j] = true;
         } else {
             out[r] = true;
-        }
-    }
-}
-
-/// Uniform integer in `0..bound` with rejection sampling to remove modulo
-/// bias. Mirrors the convention used by `crate::ica_null::permutation` —
-/// extracts entropy from one `next_normal()` draw via bit reinterpretation.
-fn rng_index(rng: &mut Xoshiro256pp, bound: usize) -> usize {
-    debug_assert!(bound > 0);
-    let bound_u = bound as u64;
-    loop {
-        let v = rng.next_normal().to_bits();
-        let limit = u64::MAX - u64::MAX % bound_u;
-        if v < limit {
-            return (v % bound_u) as usize;
         }
     }
 }
