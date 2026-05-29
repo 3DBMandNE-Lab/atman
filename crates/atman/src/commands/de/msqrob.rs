@@ -14,6 +14,7 @@
 use anyhow::{Context, Result};
 use atman_core::msqrob::{fit_msqrob, squeeze_variance, MsqrobFit, MsqrobOutcome};
 use atman_core::Sample;
+use statrs::distribution::{ContinuousCDF, StudentsT};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::{limma::ExternalCovariates, Args};
@@ -299,8 +300,15 @@ pub(super) fn run_msqrob(
             let se = fit.se[1];
             let t = -fit.t[1];
             let p_value = fit.p_value[1];
-            let ci_low = effect - 1.96 * se;
-            let ci_high = effect + 1.96 * se;
+            // CI critical value must match the t-based p-value: use the
+            // two-sided 97.5% quantile of Student's t at the fit's df,
+            // not a fixed 1.96 z-multiplier (which disagrees at small df).
+            let t_crit = StudentsT::new(0.0, 1.0, fit.df)
+                .ok()
+                .map(|d| d.inverse_cdf(0.975))
+                .unwrap_or(1.959963985);
+            let ci_low = effect - t_crit * se;
+            let ci_high = effect + t_crit * se;
             let acc = per_panel.entry(ctx.panel.clone()).or_default();
             acc.n_tests += 1;
             acc.collect_effect(effect);
