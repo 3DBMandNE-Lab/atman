@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Kanban orchestration guard.
+#
+# kanban.html is the canonical task catalog for the atman fix board. Subagents
+# working tasks in worktrees must NOT edit it (the orchestrator edits it by
+# hand when re-planning). Set ALLOW_BOARD_EDIT=1 to intentionally edit it.
+set -euo pipefail
+
+if [ "${ALLOW_BOARD_EDIT:-0}" = "1" ]; then
+  exit 0
+fi
+
+staged=$(git diff --cached --name-only)
+if echo "$staged" | grep -qx "kanban.html"; then
+  echo "pre-commit: refusing to commit changes to kanban.html." >&2
+  echo "  The task catalog is orchestrator-owned. To edit intentionally:" >&2
+  echo "    ALLOW_BOARD_EDIT=1 git commit ..." >&2
+  exit 1
+fi
+exit 0

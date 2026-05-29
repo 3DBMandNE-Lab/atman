@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>BiopsyID Provenance — Task Kanban</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --ink: #1a1f2c;
+    --ink-mute: #54607a;
+    --line: #e3e6ec;
+    --line-strong: #c9cfdb;
+    --accent: #2b5fd9;
+    --accent-soft: #e8efff;
+    --backlog: #6a7081;
+    --inprog: #b7791f;
+    --blocked: #c0392b;
+    --review: #6f42c1;
+    --done: #1f7a4d;
+    --chip-bg: #eef1f6;
+    --chip-ink: #3a4561;
+    --shadow: 0 1px 2px rgba(20,25,40,.05), 0 4px 12px rgba(20,25,40,.04);
+    --shadow-lift: 0 6px 20px rgba(20,25,40,.12);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 14px 22px; position: sticky; top: 0; z-index: 50; }
+  .titlerow { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--ink-mute); font-size: 12px; }
+  .controls { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .controls input, .controls select, .controls button { font: inherit; color: var(--ink); }
+  .controls input[type=search] { flex: 1 1 220px; min-width: 200px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fbfbfd; }
+  .controls select { padding: 7px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fbfbfd; }
+  .controls button { padding: 7px 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fbfbfd; cursor: pointer; }
+  .controls button:hover { background: #f0f2f7; }
+  .controls button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .controls button.primary:hover { background: #1f4cb0; }
+  .stats { margin-left: auto; color: var(--ink-mute); font-size: 12px; }
+
+  main { padding: 16px; }
+  .board { display: grid; grid-template-columns: repeat(5, minmax(260px, 1fr)); gap: 14px; align-items: start; }
+  .column { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-height: 240px; display: flex; flex-direction: column; max-height: calc(100vh - 170px); }
+  .col-head { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  .col-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .col-head h2 { margin: 0; font-size: 13px; font-weight: 600; }
+  .col-count { margin-left: auto; font-size: 12px; color: var(--ink-mute); background: var(--chip-bg); border-radius: 999px; padding: 2px 8px; }
+  [data-status=backlog] .col-dot { background: var(--backlog); }
+  [data-status=in_progress] .col-dot { background: var(--inprog); }
+  [data-status=blocked] .col-dot { background: var(--blocked); }
+  [data-status=review] .col-dot { background: var(--review); }
+  [data-status=done] .col-dot { background: var(--done); }
+
+  .cards { padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 10px 11px; cursor: grab; box-shadow: var(--shadow); transition: box-shadow .12s, transform .12s; }
+  .card:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); }
+  .card.dragging { opacity: .5; cursor: grabbing; }
+  .card-head { display: flex; gap: 8px; align-items: baseline; font-size: 11px; color: var(--ink-mute); }
+  .card-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; color: var(--accent); }
+  .card-title { font-size: 13px; font-weight: 600; margin: 4px 0 6px 0; line-height: 1.3; }
+  .card-meta { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { font-size: 10.5px; padding: 2px 7px; border-radius: 4px; background: var(--chip-bg); color: var(--chip-ink); }
+  .chip.epic { background: var(--accent-soft); color: var(--accent); }
+  .chip.dep { background: #fff4e0; color: #8a5300; }
+  .chip.owner { background: #e6f4ff; color: #1854a0; }
+  .chip.age   { background: #eef1f6; color: var(--ink-mute); }
+  .live-ok   { color: #1f7a4d; }
+  .live-stale { color: #c0392b; }
+
+  .column.drop-target .cards { background: var(--accent-soft); border-radius: 0 0 10px 10px; }
+
+  /* Modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(20,25,40,.5); display: none; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+  .modal-bg.show { display: flex; }
+  .modal { background: #fff; max-width: 720px; width: 100%; max-height: 85vh; overflow: auto; border-radius: 12px; box-shadow: var(--shadow-lift); padding: 20px 24px; }
+  .modal h3 { margin: 0 0 4px 0; font-size: 16px; }
+  .modal .mid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); font-size: 13px; }
+  .modal .row { margin-top: 12px; }
+  .modal .row .label { font-size: 11px; color: var(--ink-mute); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+  .modal .row .val { font-size: 13px; }
+  .modal .acc { background: #fafbfd; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .modal .acc ul { margin: 0; padding-left: 18px; }
+  .modal .acc li { margin: 2px 0; }
+  .modal .deplist { display: flex; flex-wrap: wrap; gap: 4px; }
+  .modal .actions { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .modal .actions select, .modal .actions button { padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fbfbfd; font: inherit; }
+  .modal .actions button { cursor: pointer; }
+  .modal .close { float: right; background: transparent; border: 0; font-size: 20px; cursor: pointer; color: var(--ink-mute); }
+
+  .empty { color: var(--ink-mute); font-size: 12px; padding: 10px; font-style: italic; }
+
+  @media (max-width: 1280px) { .board { grid-template-columns: repeat(3, minmax(280px, 1fr)); } }
+  @media (max-width: 820px)  { .board { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlerow">
+    <h1>BiopsyID Provenance — Task Kanban</h1>
+    <span class="sub">atman code-review fix board · drag cards between columns · state synced from /state.json</span>
+  </div>
+  <div class="controls">
+    <input type="search" id="q" placeholder="Search by id, title, section, description, dependency…" />
+    <select id="epicFilter"><option value="">All epics</option></select>
+    <select id="sectionFilter"><option value="">All sections</option></select>
+    <button id="exportBtn">Export JSON</button>
+    <span class="stats" id="stats"></span>
+    <span class="stats" id="liveStatus" style="margin-left:10px"></span>
+  </div>
+</header>
+
+<main>
+  <div class="board" id="board">
+    <section class="column" data-status="backlog">
+      <div class="col-head"><div class="col-dot"></div><h2>Backlog</h2><span class="col-count"></span></div>
+      <div class="cards"></div>
+    </section>
+    <section class="column" data-status="in_progress">
+      <div class="col-head"><div class="col-dot"></div><h2>In Progress</h2><span class="col-count"></span></div>
+      <div class="cards"></div>
+    </section>
+    <section class="column" data-status="blocked">
+      <div class="col-head"><div class="col-dot"></div><h2>Blocked</h2><span class="col-count"></span></div>
+      <div class="cards"></div>
+    </section>
+    <section class="column" data-status="review">
+      <div class="col-head"><div class="col-dot"></div><h2>Review</h2><span class="col-count"></span></div>
+      <div class="cards"></div>
+    </section>
+    <section class="column" data-status="done">
+      <div class="col-head"><div class="col-dot"></div><h2>Done</h2><span class="col-count"></span></div>
+      <div class="cards"></div>
+    </section>
+  </div>
+</main>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal" id="modal"></div>
+</div>
+
+<script>
+const TASKS = [
+ {id:"TASK-001",epic:"Provenance",title:"ingest-matrix: preserve raw abundance + fail loud on dropped rows/cols",section:"review#1,#17",description:"abundance_raw currently receives the post-log2/post-normalization value, not the raw input (ingest_matrix.rs:601-603). Carry the pre-normalization value separately on MeasurementRow and emit it in the abundance_raw column. Also: warn/fail on matrix value-columns matching no sample (:443) and on protein/row length mismatch in the zip (:457) instead of silently dropping.",acceptance:["abundance_raw column holds the pre-transform, pre-normalization input value", "round-trip read shows abundance_raw != normalized abundance when normalization applied", "unmatched matrix sample columns produce a warning (or hard error)", "length-mismatch between proteins and matrix rows is detected, not silently truncated", "cargo test passes; a new test asserts abundance_raw fidelity"],depends_on:[]},
+ {id:"TASK-002",epic:"Provenance",title:"core: guard effective_abundance() against non-finite values",section:"review#2",description:"MeasurementRecord::effective_abundance() (atman-core/src/types.rs:173-179) returns Some(abundance) for any non-dropped row with no is_finite() check, while the peptide twin (:215) does check. f64::parse accepts 'NaN'/'inf', so a non-dropped row can leak a non-finite value into module_de, bootstrap, ratio, residuals, fold_change. Add the finiteness guard to match the peptide impl.",acceptance:["effective_abundance() returns None for non-finite abundance on non-dropped rows", "behavior matches PeptideMeasurementRecord::effective_abundance", "a unit test covers the NaN/inf-string round-trip case", "cargo test passes"],depends_on:[]},
+ {id:"TASK-003",epic:"Robustness",title:"io: strict QC-flag parsing + unify float formatters",section:"review#13,#18",description:"parse_qc (io.rs:689) silently defaults unknown QC flags to Pass, violating strict-failure. Make it return Result and bail on unknown flags. Also collapse the byte-identical format_f64/format_f64_fc helpers, and remove the local format_float shadows in report.rs and enrich.rs in favor of one canonical io formatter; document the per-column precision contract.",acceptance:["parse_qc errors on any flag other than PASS/WARN/FAIL", "format_f64 and format_f64_fc collapsed to one function", "report.rs / enrich.rs use the canonical io float formatter", "no change to existing output bytes for valid inputs (determinism preserved)", "cargo test passes"],depends_on:[]},
+ {id:"TASK-004",epic:"Stats",title:"null: use numerically stable two-sided p-value",section:"review#6,#20",description:"The null permutation path's t_from_diffs (null.rs:581) uses 2*(1-cdf(|t|)), which underflows to 0.0 for large |t|, while the observed path uses the stable survival function. This biases empirical-FDR in the tail. Replace with 2*sf(|t|) (or call atman_core::de::two_sided_t_p_value). Also dedup the duplicated 'measurements.tsv' entry in this file's hash_canonical_inputs call.",acceptance:["null path uses the stable sf-based two-sided p-value, matching the observed path", "duplicate measurements.tsv removed from null.rs provenance hash list", "a test exercises a large-|t| case and asserts non-zero p where appropriate", "cargo test passes"],depends_on:[]},
+ {id:"TASK-005",epic:"Stats",title:"ensemble: stop treating correlated method p-values as independent",section:"review#5",description:"All ensemble methods are fit on the same matrix, so per-method p-values are positively correlated; plain Stouffer (atman-core/src/ensemble.rs) makes ensemble_p/ensemble_q anti-conservative, and that feeds the VALIDATED grade. Either grade on n_significant + sign-consistency (already computed) rather than the combined p, or apply a correlation correction (Brown's method / effective-tests). At minimum document ensemble_p as a heuristic, not a calibrated p. Also dedup the duplicate measurements.tsv in ensemble.rs hash list.",acceptance:["the VALIDATED grade no longer relies on an independence-assuming combined p, OR a correlation correction is applied and justified", "ensemble_p semantics documented in code + recipes", "duplicate measurements.tsv removed from ensemble.rs provenance hash list", "cargo test passes"],depends_on:[]},
+ {id:"TASK-006",epic:"Stats",title:"meta: fix binomial sign-test trial count",section:"review#7",description:"sign_binomial_p (meta.rs:456) calls binomial_upper_tail(max(n_pos,n_neg), effects.len()): it uses total cohort count as n while excluding zero-effect cohorts from k, deflating the tail. Use n = n_positive + n_negative as the trial count.",acceptance:["binomial sign test uses n = n_positive + n_negative", "a test with a zero-effect cohort confirms the corrected p-value", "cargo test passes"],depends_on:[]},
+ {id:"TASK-007",epic:"Stats",title:"limma: BH-adjust the per-feature F-test p-values",section:"review#8",description:"limma.rs:506 emits f_p_value per protein but f_bh_q is hardcoded None \u2014 the only p-column with no multiplicity control. Run bh_fdr over the finite f_p_values per (comparison, panel) and populate f_bh_q, or drop the F-test column if it is not a reportable hypothesis.",acceptance:["f_bh_q populated via BH over finite f_p_values per comparison/panel (or column removed)", "consistent with how p_value is adjusted elsewhere in the file", "cargo test passes"],depends_on:[]},
+ {id:"TASK-008",epic:"Stats",title:"post-hoc/msqrob: use correct critical values for CIs",section:"review#9",description:"tukey/dunnett CIs (posthoc.rs:705,1150) and msqrob CIs (msqrob.rs:302) use a hardcoded 1.96 while their p-values are t-based or family-wise-adjusted, so a CI can disagree with its p-value at small df. limma.rs:357 already does it right. Derive each CI half-width from the same critical value used for the p (StudentsT inverse_cdf for msqrob; studentized-range / Dunnett critical value for post-hoc), or clearly document the CI as unadjusted/per-contrast.",acceptance:["msqrob CI uses the t-quantile at fit.df, not 1.96", "post-hoc CIs use the matching simultaneity-adjusted critical value (or are documented as per-contrast)", "remove the dead scaffolding loop at posthoc.rs:1055", "cargo test passes"],depends_on:[]},
+ {id:"TASK-009",epic:"Stats",title:"detectability: per-condition minimum + dead-code cleanup",section:"review#10,#25",description:"The abundance layer (detectability.rs:330) checks only a global min_detected, so an effect can be reported from a 3-vs-0 split with no real between-group contrast. Require a minimum detected count per condition for the abundance layer. Hoist the per-row Normal::new construction out of the hot loop. Remove dead code if any.",acceptance:["abundance layer enforces a per-condition minimum detected count", "Normal distribution constructed once, not per row", "a test covers the degenerate one-sided-detection case", "cargo test passes"],depends_on:[]},
+ {id:"TASK-010",epic:"Determinism",title:"robustness: deterministic top-k tie-break + atomic writes",section:"review#11,#15",description:"top_k_set (robustness.rs:399) sorts (key,|mean_diff|) from a HashMap with no secondary key, so ties at the k-boundary depend on HashMap iteration order -> non-reproducible. Add .then_with(|| a.0.cmp(b.0)). Also route this file's output through crate::io::atomic_write instead of std::fs::write.",acceptance:["top-k sort has a deterministic secondary key (feature id)", "robustness.rs writes via atomic_write", "a test with tied effect sizes is byte-reproducible across runs", "cargo test passes"],depends_on:[]},
+ {id:"TASK-011",epic:"Correctness",title:"align project: use matrix sample-order, not re-derived order",section:"review#12",description:"run_project (align.rs:1436) re-derives subject_ids from samples.tsv in file order, independent of load_cohort_matrix's measurement-first-seen order. Coincidentally-equal counts could attach activations to the wrong sample IDs. Have load_cohort_matrix return its sample_order and use it directly.",acceptance:["activations are keyed by the same sample order the matrix was built from", "a test with samples.tsv order differing from measurement order passes", "cargo test passes"],depends_on:[]},
+ {id:"TASK-012",epic:"Correctness",title:"robust-paired: zero-sign handling, infer-pairs hard-fail, dedup cluster helpers",section:"review#3,#14,#16,#22",description:"robust_paired.rs:213 counts signum(0.0)==+1 as sign-stable for a positive target -> spurious stability on degenerate inputs; handle zero explicitly. recover_plex.rs:333 swallows --infer-pairs failure to a warning + exit 0; propagate as a hard error. Extract the duplicated union-find / jaccard / median / quality-path helpers shared by absence_topology.rs and recover_plex.rs into one shared module, and route robust_paired summary NaN through the empty-cell formatter.",acceptance:["sign-stability treats mean_diff==0 explicitly (not as positive)", "recover-plex --infer-pairs failure is a hard error, not warn+exit 0", "union-find/jaccard/median/quality-path helpers live in one shared module used by both topology commands", "robust_paired summary writes empty cells (not literal NaN) for undefined medians", "cargo test passes"],depends_on:[]},
+ {id:"TASK-013",epic:"Robustness",title:"atomic_write sweep for remaining direct fs::write callers",section:"review#15",description:"asymmetry.rs:177, module_de.rs:259, module_trajectory.rs:123 use std::fs::write directly; a crash mid-write leaves truncated output. Route all three through crate::io::atomic_write (robustness.rs is handled in TASK-010).",acceptance:["asymmetry.rs, module_de.rs, module_trajectory.rs write via atomic_write", "no remaining std::fs::write of command outputs outside io.rs", "cargo test passes"],depends_on:[]},
+ {id:"TASK-014",epic:"Infra",title:"build provenance: -dirty SHA, drop unused thiserror, audit statrs",section:"review#21,#23,#24",description:"build.rs:18 records the git SHA without dirty/clean state \u2014 a dirty tree claims a clean SHA. Append -dirty via git status --porcelain. Remove the unused thiserror workspace dependency (Cargo.toml:27; zero uses). Audit which statrs symbols are actually used and record findings (whether the nalgebra+rand footprint is justified) in a short note; do not remove statrs in this task.",acceptance:["sidecar git SHA carries a -dirty suffix when the tree is dirty at build time", "thiserror removed from workspace deps; workspace still builds", "statrs symbol-usage audit written to a docs note", "cargo build + cargo test pass"],depends_on:[]},
+ {id:"TASK-015",epic:"Infra",title:"CI: build the real toolchain + enforce determinism pinning",section:"review#3-infra",description:"CI (.github/workflows/ci.yml) pins Rust 1.75 while MSRV and Dockerfile are 1.94 \u2014 CI is not building the supported toolchain. Bump CI to 1.94, add a committed rust-toolchain.toml so CI/Docker/local cannot drift, and set BLAS_NUM_THREADS/OMP_NUM_THREADS/OPENBLAS_NUM_THREADS=1 at the job level so the byte-identity determinism test runs under its documented conditions.",acceptance:["CI toolchain set to 1.94 (matching MSRV + Dockerfile)", "rust-toolchain.toml committed at repo root", "BLAS/OMP/OPENBLAS thread-pinning env set on the test job", "workflow YAML is valid"],depends_on:[]},
+ {id:"TASK-016",epic:"Infra",title:"delete the stray github/ nested clone",section:"review#4",description:"/Users/kevinjoseph/Cursor/atman/github/ is a full duplicate checkout (own .git, stale CHANGELOG, crates/, build.rs) \u2014 almost certainly a 'git clone github' typo for .github. It is untracked. Delete it and confirm nothing in the live tree referenced it.",acceptance:["github/ directory removed from the working tree", "git status no longer lists github/", "no build/test/tooling referenced the deleted directory"],depends_on:[]},
+ {id:"TASK-017",epic:"Determinism",title:"unify the six hand-rolled RNGs into atman_core::rng::SplitMix64",section:"review#19",description:"Six independent splitmix/LCG RNGs (null.rs, bootstrap.rs, ratio.rs, core ica.rs, multivariate_t.rs, decompose_unmix.rs/align_bootstrap.rs) all seed the same constant and have already diverged (seed==0 handling). All share a modulo-bias gen_range. Hoist one reviewed atman_core::rng::SplitMix64 with an unbiased bounded draw (Lemire) and migrate all call sites. Determinism is the paper's core claim \u2014 preserve existing output bytes where seeds match, and note any intentional change.",acceptance:["single atman_core::rng module with an unbiased bounded-integer draw", "all six call sites use it; no remaining hand-rolled Rng64 structs", "documented whether output bytes change for any command (and why)", "cargo test passes, determinism tests still green"],depends_on:["TASK-004"]},
+ {id:"TASK-018",epic:"Provenance",title:"validate: dedup the provenance input-hash list",section:"review#20",description:"validate.rs:122 passes ['measurements.tsv','measurements.tsv','samples.tsv','proteins.tsv'] \u2014 measurements.tsv is listed twice. Dedup to the intended three. (The null/ensemble/de-mod duplicates are handled in their owning tasks.)",acceptance:["validate.rs provenance hash list has no duplicate entries", "cargo test passes"],depends_on:[]},
+ {id:"TASK-019",epic:"Quality",title:"de/mod: fix stale doc comments + dedup provenance hash list",section:"review#26,#20",description:"de/mod.rs has stale docs: --paired-by still says 'fixed to subject_id' (now overridable) and --post-hoc says tukey/dunnett are 'rejected until DEBT-5/6 ship' (implemented + dispatched). Update both. Also dedup the duplicate measurements.tsv in de/mod.rs hash_canonical_inputs.",acceptance:["--paired-by and --post-hoc help/doc text reflect current behavior", "duplicate measurements.tsv removed from de/mod.rs provenance hash list", "cargo test passes"],depends_on:[]},
+ {id:"TASK-020",epic:"Refactor",title:"split god-module decompose.rs (3,349 LOC)",section:"review#27",description:"decompose.rs is 3,349 lines hosting many subcommands/paths in one file. Split along the same one-file-per-subcommand pattern already used by de/. Pure refactor: no behavior change, byte-identical output. Verify with the determinism tests.",acceptance:["decompose.rs decomposed into a decompose/ submodule tree by subcommand/method", "no public CLI behavior change; output byte-identical", "cargo test passes including determinism_new_methods"],depends_on:[]},
+ {id:"TASK-021",epic:"Refactor",title:"split god-module de/mod.rs (2,507 LOC)",section:"review#28",description:"de/mod.rs is 2,507 lines. Extract cohesive pieces (dispatch, arg structs, paired/unpaired orchestration, provenance) into submodules under de/, matching the existing de/ split. Pure refactor: no behavior change, byte-identical output.",acceptance:["de/mod.rs reduced to dispatch + thin orchestration; logic moved to submodules", "no public CLI behavior change; output byte-identical", "cargo test passes"],depends_on:["TASK-019"]},
+ {id:"TASK-022",epic:"Determinism",title:"byte-identity tests across all RNG-bearing commands",section:"review#30",description:"determinism_new_methods.rs covers only nmf/missingness-ica/--adjust-for. Parametrize the byte-identity harness across every RNG/iterative command: null, bootstrap, ratio, align bootstrap, de ensemble, standard decompose ica, robust-paired. Each: two runs with a fixed seed must produce byte-identical outputs (excluding the run-uuid/timestamp sidecar fields).",acceptance:["byte-identity tests added for null, bootstrap, ratio, align-bootstrap, de-ensemble, decompose-ica, robust-paired", "tests exclude run_uuid/started_at/finished_at from comparison", "all new determinism tests pass"],depends_on:["TASK-017"]}
+];
+
+const COLUMNS = ["backlog","in_progress","blocked","review","done"];
+
+// Server state mirror, refreshed every 2s. Shape: { "TASK-XXX": {status, owner, branch, claimed_at, updated_at} }
+let serverState = {};
+let lastPollAt = 0;
+let lastPollOk = false;
+
+async function pollState(){
+  try {
+    const r = await fetch("/state.json", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    serverState = await r.json();
+    lastPollAt = Date.now();
+    lastPollOk = true;
+  } catch (e) {
+    lastPollOk = false;
+  }
+  render();
+}
+
+function effectiveStatus(t){
+  const s = serverState[t.id];
+  return s ? s.status : "backlog";
+}
+
+// Drag-drop and modal status changes call this; it POSTs to the server.
+// The next poll picks up the change.
+async function setStatus(id, status, note){
+  try {
+    const r = await fetch("/tasks/" + encodeURIComponent(id) + "/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: status, note: note || "" }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({error: "unknown"}));
+      flashError(id, err.error || "error", err.detail || "");
+      return false;
+    }
+    pollState();    // immediate refresh
+    return true;
+  } catch (e) {
+    flashError(id, "network", e.message);
+    return false;
+  }
+}
+
+function flashError(id, code, detail){
+  const card = document.querySelector(`.card[data-id="${id}"]`);
+  if (card) {
+    card.style.outline = "2px solid var(--blocked)";
+    setTimeout(() => { card.style.outline = ""; }, 1500);
+  }
+  console.warn("kanban error for", id, code, detail);
+}
+
+function unique(arr){ return [...new Set(arr)].sort(); }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function populateFilters(){
+  const epicSel = document.getElementById("epicFilter");
+  const sectSel = document.getElementById("sectionFilter");
+  unique(TASKS.map(t => t.epic)).forEach(e => epicSel.insertAdjacentHTML("beforeend", `<option>${escapeHtml(e)}</option>`));
+  unique(TASKS.flatMap(t => t.section.split(/,\s*/))).forEach(s => sectSel.insertAdjacentHTML("beforeend", `<option>${escapeHtml(s)}</option>`));
+}
+
+function matchesFilters(t){
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const e = document.getElementById("epicFilter").value;
+  const s = document.getElementById("sectionFilter").value;
+  if (e && t.epic !== e) return false;
+  if (s && !t.section.split(/,\s*/).includes(s)) return false;
+  if (!q) return true;
+  const hay = [t.id, t.title, t.section, t.epic, t.description, (t.depends_on||[]).join(" "), (t.acceptance||[]).join(" ")].join(" ").toLowerCase();
+  return hay.includes(q);
+}
+
+function relAge(isoStr){
+  if (!isoStr) return null;
+  const ms = Date.now() - new Date(isoStr).getTime();
+  if (!isFinite(ms) || ms < 0) return null;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60);
+  if (h < 48) return h + "h";
+  return Math.floor(h / 24) + "d";
+}
+
+function cardHtml(t){
+  const depChips = (t.depends_on || []).slice(0,3).map(d => `<span class="chip dep">${escapeHtml(d)}</span>`).join("");
+  const more = (t.depends_on || []).length > 3 ? `<span class="chip dep">+${t.depends_on.length - 3}</span>` : "";
+  const ss = serverState[t.id] || {};
+  const ownerChip = ss.owner ? `<span class="chip owner">${escapeHtml(ss.owner)}</span>` : "";
+  const age = relAge(ss.updated_at);
+  const statusLabel = ss.status ? ss.status.replace("_", " ") : "backlog";
+  const ageChip = age ? `<span class="chip age">${escapeHtml(statusLabel)} ${age}</span>` : "";
+  return `
+    <div class="card" draggable="true" data-id="${t.id}">
+      <div class="card-head">
+        <span class="card-id">${escapeHtml(t.id)}</span>
+        <span>${escapeHtml(t.section)}</span>
+      </div>
+      <div class="card-title">${escapeHtml(t.title)}</div>
+      <div class="card-meta">
+        <span class="chip epic">${escapeHtml(t.epic)}</span>
+        ${ownerChip}${ageChip}${depChips}${more}
+      </div>
+    </div>`;
+}
+
+function render(){
+  COLUMNS.forEach(col => {
+    const colEl = document.querySelector(`.column[data-status="${col}"] .cards`);
+    const items = TASKS.filter(t => effectiveStatus(t) === col && matchesFilters(t));
+    colEl.innerHTML = items.length ? items.map(cardHtml).join("") : `<div class="empty">No tasks</div>`;
+    document.querySelector(`.column[data-status="${col}"] .col-count`).textContent = items.length;
+  });
+  const total = TASKS.length;
+  const done = TASKS.filter(t => effectiveStatus(t) === "done").length;
+  const ip = TASKS.filter(t => effectiveStatus(t) === "in_progress").length;
+  const blk = TASKS.filter(t => effectiveStatus(t) === "blocked").length;
+  document.getElementById("stats").textContent = `${total} tasks · ${done} done · ${ip} in progress · ${blk} blocked`;
+  const ageSec = lastPollAt ? Math.floor((Date.now() - lastPollAt) / 1000) : null;
+  const liveEl = document.getElementById("liveStatus");
+  if (lastPollOk && ageSec !== null && ageSec < 5) {
+    liveEl.innerHTML = `<span class="live-ok">● connected</span>`;
+  } else {
+    liveEl.innerHTML = `<span class="live-stale">● stale ${ageSec ?? "?"}s</span>`;
+  }
+  wireDnd();
+  wireCardClicks();
+}
+
+function wireCardClicks(){
+  document.querySelectorAll(".card").forEach(card => {
+    card.addEventListener("click", e => {
+      if (card.classList.contains("dragging")) return;
+      openModal(card.dataset.id);
+    });
+  });
+}
+
+function openModal(id){
+  const t = TASKS.find(x => x.id === id);
+  if (!t) return;
+  const status = effectiveStatus(t);
+  const dependentsHtml = (t.depends_on || []).length
+    ? t.depends_on.map(d => `<span class="chip dep">${escapeHtml(d)}</span>`).join(" ")
+    : `<span class="chip">None</span>`;
+  const blockers = (t.depends_on || []).filter(d => {
+    const dep = TASKS.find(x => x.id === d);
+    return dep && effectiveStatus(dep) !== "done";
+  });
+  const blockerWarn = blockers.length ? `<div class="row"><div class="label">Currently blocked by</div><div class="val">${blockers.map(b => `<span class="chip dep">${escapeHtml(b)}</span>`).join(" ")}</div></div>` : "";
+  document.getElementById("modal").innerHTML = `
+    <button class="close" onclick="closeModal()">×</button>
+    <div class="mid">${escapeHtml(t.id)}</div>
+    <h3>${escapeHtml(t.title)}</h3>
+    <div class="row"><div class="label">Epic</div><div class="val"><span class="chip epic">${escapeHtml(t.epic)}</span> <span class="chip">${escapeHtml(t.section)}</span></div></div>
+    <div class="row"><div class="label">Description</div><div class="val">${escapeHtml(t.description)}</div></div>
+    <div class="row"><div class="label">Acceptance criteria</div><div class="val acc"><ul>${(t.acceptance || []).map(a => `<li>${escapeHtml(a)}</li>`).join("")}</ul></div></div>
+    <div class="row"><div class="label">Depends on</div><div class="val deplist">${dependentsHtml}</div></div>
+    ${blockerWarn}
+    <div class="row"><div class="label">Note (required for review→in_progress, review→blocked)</div>
+      <div class="val"><input id="noteInp" type="text" style="width:100%;padding:6px 8px;border:1px solid var(--line-strong);border-radius:6px" placeholder="reason or context"/></div>
+    </div>
+    <div class="actions">
+      <label class="label" style="align-self:center">Status:</label>
+      <select id="statusSel">
+        ${COLUMNS.map(c => `<option value="${c}" ${c === status ? "selected" : ""}>${c.replace("_"," ")}</option>`).join("")}
+      </select>
+      <button onclick="applyStatus('${t.id}')">Update</button>
+      <button onclick="closeModal()">Close</button>
+    </div>
+  `;
+  document.getElementById("modalBg").classList.add("show");
+}
+
+function closeModal(){ document.getElementById("modalBg").classList.remove("show"); }
+function applyStatus(id){
+  const v = document.getElementById("statusSel").value;
+  const note = document.getElementById("noteInp").value || "";
+  setStatus(id, v, note).then(ok => { if (ok) closeModal(); });
+}
+
+function wireDnd(){
+  let dragId = null;
+  document.querySelectorAll(".card").forEach(card => {
+    card.addEventListener("dragstart", e => { dragId = card.dataset.id; card.classList.add("dragging"); });
+    card.addEventListener("dragend", e => { card.classList.remove("dragging"); });
+  });
+  document.querySelectorAll(".column").forEach(col => {
+    col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("drop-target"); });
+    col.addEventListener("dragleave", e => { col.classList.remove("drop-target"); });
+    col.addEventListener("drop", e => {
+      e.preventDefault();
+      col.classList.remove("drop-target");
+      if (dragId) setStatus(dragId, col.dataset.status);
+      dragId = null;
+    });
+  });
+}
+
+document.getElementById("q").addEventListener("input", render);
+document.getElementById("epicFilter").addEventListener("change", render);
+document.getElementById("sectionFilter").addEventListener("change", render);
+document.getElementById("exportBtn").addEventListener("click", async () => {
+  try {
+    const r = await fetch("/state.json", { cache: "no-store" });
+    const data = await r.json();
+    const out = { exported_at: new Date().toISOString(), state: data };
+    const blob = new Blob([JSON.stringify(out, null, 2)], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "kanban_state.json"; a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert("Export failed: " + e.message);
+  }
+});
+document.getElementById("modalBg").addEventListener("click", e => { if (e.target.id === "modalBg") closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+populateFilters();
+pollState();
+setInterval(pollState, 2000);
+</script>
+</body>
+</html>
