@@ -158,21 +158,28 @@ pub struct Xoshiro256pp {
 }
 
 impl Xoshiro256pp {
-    /// Construct from a seed, applying the central [`fold_zero_seed`] rule
-    /// and filling the 4-word state from a splitmix64 stream.
+    /// Construct from a seed and fill the 4-word state from a splitmix64
+    /// stream.
     ///
     /// The splitmix init word is pre-advanced by one `GOLDEN_GAMMA` before
     /// the first `splitmix64_step`. This reproduces, byte-for-byte, the
     /// legacy `ica.rs::Xoshiro256pp` seeding (`sm = seed + GAMMA`, then a
-    /// closure that adds another `GAMMA` per word). Preserving that exact
-    /// stream is load-bearing: the decomposition family (ICA, NMF, VCA,
-    /// GSEA, archetype null, alignment bootstrap) consumes only the raw
+    /// closure that adds another `GAMMA` per word) for EVERY seed. Preserving
+    /// that exact stream is load-bearing: the decomposition family (ICA, NMF,
+    /// VCA, GSEA, archetype null, alignment bootstrap) consumes only the raw
     /// `next_normal()` / `next_u64()` stream, so its outputs MUST be
     /// unchanged by this consolidation. Only the *bounded-integer* draws
     /// change (modulo → unbiased), which is the intentional correctness fix.
+    ///
+    /// NOTE: unlike [`SplitMix64`], this path deliberately does NOT apply
+    /// [`fold_zero_seed`]. Legacy `ica.rs` never folded the seed, so folding
+    /// here would shift the seed-0 stream by one `GOLDEN_GAMMA` and silently
+    /// change ICA/NMF/VCA/decompose point estimates at `seed == 0`. The raw
+    /// `seed + GAMMA` splitmix expansion cannot produce an all-zero xoshiro
+    /// state for any seed (including 0), so the zero-fold is unnecessary here.
     #[inline]
     pub fn new(seed: u64) -> Self {
-        let mut sm = fold_zero_seed(seed).wrapping_add(GOLDEN_GAMMA);
+        let mut sm = seed.wrapping_add(GOLDEN_GAMMA);
         let state = [
             splitmix64_step(&mut sm),
             splitmix64_step(&mut sm),
@@ -256,11 +263,27 @@ mod tests {
         for _ in 0..16 {
             assert_eq!(a.next_u64(), b.next_u64());
         }
-        let mut c = Xoshiro256pp::new(0);
-        let mut d = Xoshiro256pp::new(GOLDEN_GAMMA);
-        for _ in 0..16 {
-            assert_eq!(c.next_u64(), d.next_u64());
-        }
+    }
+
+    #[test]
+    fn xoshiro_seed_zero_preserves_legacy_stream() {
+        // Xoshiro256pp deliberately does NOT fold seed==0: legacy ica.rs seeded
+        // from `sm = seed + GAMMA` directly, so the seed-0 state must be the
+        // splitmix expansion of the RAW seed (mix(2G), mix(3G), mix(4G),
+        // mix(5G)), preserving ICA/NMF/decompose point estimates at seed 0.
+        let mut sm = 0u64.wrapping_add(GOLDEN_GAMMA);
+        let expected = [
+            splitmix64_step(&mut sm),
+            splitmix64_step(&mut sm),
+            splitmix64_step(&mut sm),
+            splitmix64_step(&mut sm),
+        ];
+        assert_eq!(Xoshiro256pp::new(0).state, expected);
+        // And folding would have made these equal — they must NOT be, or the
+        // seed-0 stream silently shifted by one GOLDEN_GAMMA (the bug fixed here).
+        let mut z = Xoshiro256pp::new(0);
+        let mut g = Xoshiro256pp::new(GOLDEN_GAMMA);
+        assert_ne!(z.next_u64(), g.next_u64());
     }
 
     #[test]

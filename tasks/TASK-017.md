@@ -5,7 +5,7 @@
 **Owner:** orchestrator
 **Branch:** (pending)
 **Started:** 2026-05-29T13:08:21+00:00
-**Updated:** 2026-05-29T20:21:30Z
+**Updated:** 2026-05-29T21:05:26+00:00
 <!-- kanban-status:end -->
 
 ## Plan
@@ -102,3 +102,7 @@ Reviewable in one module: `crates/atman-core/src/rng.rs`. Follow-ups (out of sco
 `nmf.rs` derives uniforms via `next_normal().abs()` (works, deterministic) and could
 move to `next_f64`; the `Xoshiro256pp::new` GAMMA pre-advance is a stream-compat shim
 that a future "clean break" release could drop alongside a one-time fixture refresh.
+
+### Codex adversarial-review fix (orchestrator)
+
+Codex flagged (MEDIUM): Xoshiro256pp::new applied fold_zero_seed BEFORE the GOLDEN_GAMMA pre-advance, so for seed==0 the stream became mix(3G..6G) instead of the legacy mix(2G..5G) — silently changing ICA/NMF/VCA/decompose point estimates at seed 0 (the one case the "point estimates unchanged" claim missed). Fix: the xoshiro stream-compat path now uses the RAW seed (`seed + GAMMA`, no zero-fold), reproducing legacy seeding byte-for-byte for EVERY seed including 0 (the splitmix expansion can't yield an all-zero xoshiro state, so the fold is unnecessary here). SplitMix64 (null/bootstrap bounded-draw RNGs) keeps fold_zero_seed, matching their legacy seed==0 special-casing. Replaced the test that encoded the buggy fold (asserted new(0)==new(GAMMA)) with `xoshiro_seed_zero_preserves_legacy_stream` (pins seed-0 state to the legacy mix(2G..5G) expansion and asserts new(0) != new(GAMMA)). atman-core (245) + decompose/ica/nmf/unmix/null/bootstrap determinism suites all green.
