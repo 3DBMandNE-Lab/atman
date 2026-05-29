@@ -1,11 +1,11 @@
 # TASK-003 — io: strict QC-flag parsing + unify float formatters
 
 <!-- kanban-status:start -->
-**Status:** review
+**Status:** done
 **Owner:** orchestrator
 **Branch:** worktree-agent-add24c59d666539a7
 **Started:** 2026-05-29T06:28:26+00:00
-**Updated:** 2026-05-29T07:40:54+00:00
+**Updated:** 2026-05-29T07:53:19+00:00
 <!-- kanban-status:end -->
 
 ## Plan
