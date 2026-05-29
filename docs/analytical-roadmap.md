@@ -893,3 +893,45 @@ Atman now covers the standalone release surface targeted by this roadmap:
   meta-analysis commands are implemented.
 - The core CLI does not require Python, notebooks, services, or external
   workflow infrastructure.
+
+## Dependency notes
+
+### `statrs` (0.17) — symbol-usage audit
+
+Audited 2026-05-29 (TASK-014). `statrs` is the workspace's distribution-CDF
+provider; every use is a closed-form CDF/quantile or special function, never
+matrix linear algebra and never random sampling.
+
+Symbols actually imported across `atman` + `atman-core`:
+
+- `distribution::ContinuousCDF` (trait) — `.cdf()` on the below distributions.
+- `distribution::DiscreteCDF` (trait) — `.cdf()` for the discrete case.
+- `distribution::Normal` — z-tests, normal-approx p-values
+  (`align_bootstrap`, `ensemble`, `network_differential`, `studentized_range`,
+  `multivariate_t`, `coupling`, `meta`, `ratio`, `detectability`, `robust_stats`,
+  and the normal fallback path in `de`).
+- `distribution::StudentsT` — moderated/empirical-Bayes t-tests
+  (`limma`, `msqrob`, `de`, `moderated`, `robust_stats`, `ratio`, `null`).
+- `distribution::FisherSnedecor` — F-test tail probabilities (`limma`, `de`).
+- `distribution::Hypergeometric` — ORA / over-representation exact tail
+  (`decompose_unmix`).
+- `function::gamma::ln_gamma` — log-gamma for the studentized-range and
+  multivariate-t densities (`studentized_range`, `multivariate_t`).
+
+Transitive footprint and whether it is justified:
+
+`statrs` pulls `nalgebra` (+ `nalgebra-macros`), `rand 0.8.5`, `approx`, and
+`num-traits`. The workspace uses **none** of the features those transitive crates
+exist to serve: no `MultivariateNormal`/`Dirichlet` (the only `statrs`
+distributions backed by `nalgebra`), and no sampling (`rand` is `statrs`'s
+`Distribution::sample` path). So the `nalgebra` + `rand` weight is paid for
+features we do not use — it is *not* justified by current usage, only tolerated.
+
+Decision: keep `statrs` as-is for this task (audit only). The scalar CDFs and
+`ln_gamma` we depend on are correct, well-tested, and match published reference
+values, and re-implementing them deterministically would re-litigate numerical
+accuracy for no provenance gain. The transitive bloat is a candidate for a
+future task — either a Cargo feature gate that drops `nalgebra`/`rand` if
+`statrs` exposes one, or replacing the handful of CDFs with small in-tree
+implementations (the `de.rs` normal-fallback comment already hints the team has
+considered avoiding `StudentsT` allocation in hot paths). Do not act on that here.

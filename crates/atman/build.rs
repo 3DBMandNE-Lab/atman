@@ -4,7 +4,9 @@
 //!
 //! Sets:
 //! - `ATMAN_GIT_SHA` — `git rev-parse HEAD`, or `"unknown"` when built
-//!   outside a git checkout.
+//!   outside a git checkout. A `-dirty` suffix is appended when the
+//!   working tree has uncommitted tracked changes at build time, so a
+//!   binary built from a dirty tree never claims a clean commit.
 //! - `ATMAN_TARGET` — Cargo `TARGET` triple (e.g. `aarch64-apple-darwin`).
 //! - `ATMAN_RUSTC_VERSION` — `rustc --version` verbatim, or `"unknown"`.
 //! - `ATMAN_CARGO_LOCK_SHA256` — SHA-256 of the workspace `Cargo.lock`,
@@ -15,7 +17,7 @@
 use std::{path::Path, process::Command};
 
 fn main() {
-    let sha = capture_command("git", &["rev-parse", "HEAD"]);
+    let sha = git_sha_with_dirty();
     println!("cargo:rustc-env=ATMAN_GIT_SHA={sha}");
 
     let target = std::env::var("TARGET").unwrap_or_default();
@@ -61,6 +63,37 @@ fn main() {
                 println!("cargo:rerun-if-changed=../../.git/{rest}");
             }
         }
+    }
+}
+
+/// Resolve the build-time git SHA, appending a `-dirty` suffix when the
+/// working tree has uncommitted tracked changes.
+///
+/// `git status --porcelain` emits one line per changed/untracked path and
+/// nothing at all for a clean tree, so a non-empty (successful) output marks
+/// the tree dirty. Untracked-only files would also flag dirty here, so the
+/// command is restricted to tracked modifications via `--untracked-files=no`,
+/// matching the task's "uncommitted tracked changes" definition.
+///
+/// When `git` is unavailable the base SHA is `"unknown"` (preserving the
+/// existing fallback) and no suffix is added — we never claim dirtiness we
+/// cannot observe. Side-effect-free and deterministic.
+fn git_sha_with_dirty() -> String {
+    let sha = capture_command("git", &["rev-parse", "HEAD"]);
+    if sha == "unknown" {
+        return sha;
+    }
+    let status = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .output();
+    let dirty = matches!(
+        status,
+        Ok(o) if o.status.success() && !o.stdout.iter().all(u8::is_ascii_whitespace)
+    );
+    if dirty {
+        format!("{sha}-dirty")
+    } else {
+        sha
     }
 }
 
