@@ -323,7 +323,13 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
     let matrices: Vec<CohortMatrix> = cohort_dirs
         .iter()
         .zip(labels.iter())
-        .map(|(dir, label)| load_cohort_matrix(dir, label, args.max_missing_fraction, impute_mean))
+        .map(|(dir, label)| {
+            // bootstrap aligns programs across cohorts and does not
+            // label individual samples, so the per-cohort sample_order
+            // is not needed here.
+            load_cohort_matrix(dir, label, args.max_missing_fraction, impute_mean)
+                .map(|(m, _sample_order)| m)
+        })
         .collect::<Result<Vec<_>>>()?;
     // Enforce common protein universe across cohorts by intersecting
     // their label sets and restricting each matrix to the
@@ -421,12 +427,19 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
     Ok(())
 }
 
+/// Returns the cohort abundance matrix together with the `sample_order`
+/// that its rows are indexed by. `sample_order` is the single source of
+/// truth for which `sample_id` each matrix row (and any downstream
+/// projected activation) belongs to: it is built from the MEASUREMENTS
+/// file in first-seen order over non-QC, finite rows — NOT from
+/// samples.tsv. Callers that need to label rows MUST use this vector
+/// rather than re-deriving an order from samples.tsv.
 fn load_cohort_matrix(
     dir: &Path,
     label: &str,
     max_missing_fraction: f64,
     impute_mean: bool,
-) -> Result<CohortMatrix> {
+) -> Result<(CohortMatrix, Vec<String>)> {
     let file = "measurements.tsv";
     let records = read_measurements_long(&dir.join(file))?;
     if records.is_empty() {
@@ -506,11 +519,14 @@ fn load_cohort_matrix(
             }
         }
     }
-    Ok(CohortMatrix {
-        label: label.to_string(),
-        data,
-        protein_labels: kept,
-    })
+    Ok((
+        CohortMatrix {
+            label: label.to_string(),
+            data,
+            protein_labels: kept,
+        },
+        sample_order,
+    ))
 }
 
 /// Restrict each cohort's matrix to the intersection of protein label
@@ -1342,7 +1358,7 @@ fn run_project(args: ProjectArgs) -> Result<()> {
     // `load_cohort_matrix` returns proteins keyed by assay_id; the
     // atlas is keyed by `--label-col` (default gene_symbol), so remap
     // the cohort's protein labels via the cohort's proteins.tsv.
-    let mut cohort_matrix = load_cohort_matrix(
+    let (mut cohort_matrix, sample_order) = load_cohort_matrix(
         &args.cohort_dir,
         "cohort",
         args.max_missing_fraction,
@@ -1430,10 +1446,27 @@ fn run_project(args: ProjectArgs) -> Result<()> {
              line up with the transformed cohort columns"
         );
     }
-    // Subjects are the original sample_ids for the cohort — recover
-    // them by re-reading samples.tsv (load_cohort_matrix doesn't
-    // preserve them). Use read_samples.
-    let subject_ids = {
+    // Subjects are the original sample_ids for the cohort. Use the
+    // `sample_order` returned by `load_cohort_matrix` as the single
+    // source of truth: it is exactly the order the matrix rows (and
+    // hence the projected activations) are built from. Re-deriving an
+    // order from samples.tsv would risk attaching activations to the
+    // wrong sample whenever the file order differs from the
+    // measurement first-seen order — even when the counts coincide.
+    let subject_ids = sample_order;
+    if subject_ids.len() != transformed.len() {
+        bail!(
+            "sample_id count {} != transformed matrix rows {}; \
+             this should not happen — report as a bug",
+            subject_ids.len(),
+            transformed.len()
+        );
+    }
+    // Consistency guard: every sample the matrix was built from must
+    // be declared in samples.tsv. This catches the inverse error (a
+    // measured sample missing from the sample sheet) without letting
+    // samples.tsv dictate the activation labels.
+    {
         use std::io::Read;
         let path = args.cohort_dir.join("samples.tsv");
         let mut text = String::new();
@@ -1447,22 +1480,19 @@ fn run_project(args: ProjectArgs) -> Result<()> {
             .iter()
             .position(|c| *c == "sample_id")
             .context("samples.tsv missing sample_id")?;
-        let mut subs = Vec::new();
-        for line in lines {
-            let row: Vec<&str> = line.split('\t').collect();
-            if let Some(&sid) = row.get(sid_idx) {
-                subs.push(sid.to_string());
-            }
+        let declared: BTreeSet<String> = lines
+            .filter_map(|line| {
+                let row: Vec<&str> = line.split('\t').collect();
+                row.get(sid_idx).map(|s| s.to_string())
+            })
+            .collect();
+        if let Some(missing) = subject_ids.iter().find(|s| !declared.contains(*s)) {
+            bail!(
+                "sample {:?} has measurements but is absent from samples.tsv; \
+                 cannot label projected activations",
+                missing
+            );
         }
-        subs
-    };
-    if subject_ids.len() != transformed.len() {
-        bail!(
-            "sample_id count {} != transformed matrix rows {}; \
-             this should not happen — report as a bug",
-            subject_ids.len(),
-            transformed.len()
-        );
     }
 
     let result = project(
