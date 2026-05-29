@@ -244,9 +244,17 @@ atman detectability \
     --design "~ age + sex + batch" \
     --min-samples 5 \
     --min-detected 3 \
+    --min-detected-per-condition 2 \
     --min-missing 3 \
     --output out/detectability.tsv
 ```
+
+The abundance layer additionally requires `--min-detected-per-condition`
+(default 2) detected samples in *each* condition. This suppresses one-sided
+splits — for example a protein detected in 3 cases and 0 controls — where the
+condition coefficient carries no real between-group contrast even though the
+global detected count clears `--min-detected`. Such rows are tagged
+`one_sided_detection` in `skip_reason` and report no abundance effect.
 
 Output columns include detection counts by group, `detection_or`,
 `detection_q`, `abundance_effect_detected_only`, `abundance_q`, and a

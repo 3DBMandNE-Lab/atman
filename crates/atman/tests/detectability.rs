@@ -58,6 +58,111 @@ diann_report\tP2\t\tABUND1\tms\t\n",
     std::fs::write(dir.join("measurements.tsv"), buf).unwrap();
 }
 
+/// One protein (ONESIDE) is detected only in Case (6 finite) and below-LOD in every
+/// Control (0 finite). The global `min_detected` guard passes (6 >= 3), but there is no
+/// between-group contrast, so the abundance layer must be suppressed by the
+/// per-condition minimum and tagged `one_sided_detection`.
+fn write_one_sided_fixture(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("samples.tsv"),
+        "\
+sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\tage\n\
+K1\tK1\tCase\t0\tcsf\t1\t60\n\
+K2\tK2\tCase\t0\tcsf\t2\t61\n\
+K3\tK3\tCase\t0\tcsf\t3\t62\n\
+K4\tK4\tCase\t0\tcsf\t4\t63\n\
+K5\tK5\tCase\t0\tcsf\t5\t64\n\
+K6\tK6\tCase\t0\tcsf\t6\t65\n\
+C1\tC1\tControl\t0\tcsf\t7\t60\n\
+C2\tC2\tControl\t0\tcsf\t8\t61\n\
+C3\tC3\tControl\t0\tcsf\t9\t62\n\
+C4\tC4\tControl\t0\tcsf\t10\t63\n\
+C5\tC5\tControl\t0\tcsf\t11\t64\n\
+C6\tC6\tControl\t0\tcsf\t12\t65\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("proteins.tsv"),
+        "\
+platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n\
+diann_report\tP1\t\tONESIDE\tms\t\n",
+    )
+    .unwrap();
+    let mut buf = String::from("platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\tabundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\tdetection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n");
+    let mut order = 1u64;
+    for sample in [
+        "K1", "K2", "K3", "K4", "K5", "K6", "C1", "C2", "C3", "C4", "C5", "C6",
+    ] {
+        let case = sample.starts_with('K');
+        // Detected only in Case; every Control is below LOD.
+        let below = if case { 0 } else { 1 };
+        let value = 10.0;
+        buf.push_str(&format!(
+            "diann_report\t{sample}\tP1\tONESIDE\tms\t\t{value}\t{value}\tlog2_intensity\tPASS\tPASS\t\t{below}\t0\t\t\t{order}\n"
+        ));
+        order += 1;
+    }
+    std::fs::write(dir.join("measurements.tsv"), buf).unwrap();
+}
+
+#[test]
+fn detectability_suppresses_abundance_for_one_sided_detection() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("input");
+    let output_path = tmp.path().join("detectability.tsv");
+    write_one_sided_fixture(&input);
+
+    let output = run_atman(&[
+        "detectability",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--groups",
+        "Case-Control",
+        "--design",
+        "~ 1",
+        "--min-samples",
+        "5",
+        "--min-detected",
+        "3",
+        "--min-missing",
+        "3",
+        "--output",
+        output_path.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let table = std::fs::read_to_string(&output_path).unwrap();
+    let header = table.lines().next().unwrap();
+    let cols: Vec<&str> = header.split('\t').collect();
+    let idx = |name: &str| cols.iter().position(|c| *c == name).unwrap();
+    let row = table
+        .lines()
+        .skip(1)
+        .find(|l| l.contains("ONESIDE"))
+        .expect("ONESIDE row present");
+    let fields: Vec<&str> = row.split('\t').collect();
+    // 6 detected in Case, 0 in Control: global min_detected passes but there is no
+    // between-group contrast, so the abundance layer must be empty and suppressed.
+    assert_eq!(fields[idx("n_detected_a")], "6");
+    assert_eq!(fields[idx("n_detected_b")], "0");
+    assert!(
+        fields[idx("abundance_effect_detected_only")].is_empty(),
+        "abundance effect must be suppressed for one-sided detection; row: {row}"
+    );
+    assert!(
+        fields[idx("abundance_p")].is_empty(),
+        "abundance p must be empty for one-sided detection; row: {row}"
+    );
+    assert!(
+        fields[idx("skip_reason")].contains("one_sided_detection"),
+        "skip_reason must flag one_sided_detection; row: {row}"
+    );
+}
+
 #[test]
 fn detectability_writes_detection_and_abundance_layers() {
     let tmp = tempfile::tempdir().unwrap();
