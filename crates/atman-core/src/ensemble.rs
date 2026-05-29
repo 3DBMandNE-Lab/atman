@@ -2,8 +2,8 @@
 //!
 //! Input: per-method per-protein `(mean_diff, p_value, bh_q)` triples
 //! keyed by `(comparison_label, assay_id)`. Output: per-protein
-//! ensemble summary with Stouffer-combined p, majority sign, and a
-//! VALIDATED / PROVISIONAL / INSUFFICIENT grade.
+//! ensemble summary with a method-agreement / sign-consistency grade,
+//! plus a Stouffer-combined p reported as a heuristic only.
 //!
 //! Conventions:
 //! - `mean_diff` uses atman's `mean_a − mean_b` convention for every
@@ -12,6 +12,26 @@
 //!   method-not-applicable for that protein and excluded from counts.
 //! - Significance uses per-method BH-q against a caller-supplied
 //!   threshold (default 0.05).
+//!
+//! ## Why the grade is NOT driven by a combined p-value
+//!
+//! Every ensemble method (`paired-t`, `welch-t`, `ols`, `mixed`,
+//! `limma`, `msqrob`) is fit on the SAME abundance matrix, so their
+//! per-method p-values are strongly positively correlated. Stouffer's
+//! method (see [`combine_stouffer`]) assumes the inputs are
+//! INDEPENDENT; under positive correlation it is anti-conservative —
+//! the combined p (and the BH-q derived from it) is smaller than the
+//! evidence warrants. Feeding that into a VALIDATED grade would
+//! over-state confidence.
+//!
+//! The grade therefore uses only quantities that do not assume
+//! independence: how many methods *individually* clear per-method
+//! BH-q significance (`n_significant`) and how consistent their
+//! effect sign is (`n_sign_consistent` / `n_applied`). `ensemble_p`
+//! and the `ensemble_q` derived from it are retained as a
+//! convenience ranking heuristic ONLY — they are NOT a calibrated
+//! p-value, NOT used by [`assign_grade`], and must not be read as
+//! evidence of statistical significance.
 
 use statrs::distribution::{ContinuousCDF, Normal};
 
@@ -42,20 +62,21 @@ impl EnsembleGrade {
 
 /// Thresholds for [`assign_grade`] and [`aggregate_per_protein`].
 ///
-/// `q_threshold` is used two ways: once inside
-/// [`aggregate_per_protein`] to count per-method significant
-/// findings (informational — `n_significant`), and once inside
-/// [`assign_grade`] as the `ensemble_q` bar for VALIDATED /
-/// PROVISIONAL assignment.
+/// `q_threshold` is the per-method BH-q bar applied inside
+/// [`aggregate_per_protein`] to count how many methods individually
+/// call the protein significant (`n_significant`). That count, with
+/// sign consistency, drives the grade — the combined `ensemble_q` is
+/// no longer a grade determinant (see module docs).
 #[derive(Debug, Clone, Copy)]
 pub struct GradeThresholds {
-    /// Per-method BH-q threshold (counts `n_significant`) AND the
-    /// ensemble-BH q-threshold for VALIDATED / PROVISIONAL.
+    /// Per-method BH-q threshold used to count `n_significant`.
     pub q_threshold: f64,
-    /// Sign-consistency fraction required for VALIDATED.
+    /// Both the per-method significant fraction AND the sign-consistency
+    /// fraction must reach this for VALIDATED.
     pub validated_sign_fraction: f64,
-    /// Sign-consistency fraction required for PROVISIONAL. Below
-    /// this, INSUFFICIENT.
+    /// Both the per-method significant fraction AND the sign-consistency
+    /// fraction must reach this for PROVISIONAL. Below this,
+    /// INSUFFICIENT.
     pub provisional_sign_fraction: f64,
 }
 
@@ -81,22 +102,32 @@ pub struct EnsembleRow {
 }
 
 /// Assign a VALIDATED / PROVISIONAL / INSUFFICIENT grade to one
-/// protein given its ensemble BH-q (computed across proteins within
-/// a comparison) and its sign-consistency fraction.
+/// protein from how many methods *independently* agree, NOT from a
+/// combined p-value.
+///
+/// The grade reads two independence-free quantities:
+/// - the per-method significant fraction `n_significant / n_applied`
+///   — how many of the fitted methods individually clear per-method
+///   BH-q significance; and
+/// - the sign-consistency fraction `n_sign_consistent / n_applied`
+///   — how many fitted methods share the majority effect direction.
+///
+/// This deliberately avoids the Stouffer-combined `ensemble_q`,
+/// which is anti-conservative here because all methods share the
+/// same abundance matrix (see module docs).
 ///
 /// Grade criteria:
 /// - **INSUFFICIENT** when no method fit the protein
-///   (`n_applied == 0`) or when `ensemble_q` is missing or
-///   `>= thresholds.q_threshold`.
-/// - **VALIDATED** when `ensemble_q < q_threshold` AND the
-///   sign-consistency fraction reaches
-///   `validated_sign_fraction` (default 1.00).
-/// - **PROVISIONAL** when `ensemble_q < q_threshold` AND the
-///   sign-consistency fraction reaches
-///   `provisional_sign_fraction` (default 0.50).
+///   (`n_applied == 0`).
+/// - **VALIDATED** when BOTH the significant fraction AND the
+///   sign-consistency fraction reach `validated_sign_fraction`
+///   (default 1.00 — every method significant and agreeing on sign).
+/// - **PROVISIONAL** when BOTH fractions reach
+///   `provisional_sign_fraction` (default 0.50 — a majority of
+///   methods significant and agreeing on sign).
 /// - Otherwise INSUFFICIENT.
 pub fn assign_grade(
-    ensemble_q: Option<f64>,
+    n_significant: usize,
     n_applied: usize,
     n_sign_consistent: usize,
     thresholds: GradeThresholds,
@@ -104,16 +135,15 @@ pub fn assign_grade(
     if n_applied == 0 {
         return EnsembleGrade::Insufficient;
     }
-    let Some(q) = ensemble_q else {
-        return EnsembleGrade::Insufficient;
-    };
-    if !q.is_finite() || q >= thresholds.q_threshold {
-        return EnsembleGrade::Insufficient;
-    }
+    let sig_frac = n_significant as f64 / n_applied as f64;
     let sign_frac = n_sign_consistent as f64 / n_applied as f64;
-    if sign_frac >= thresholds.validated_sign_fraction {
+    if sig_frac >= thresholds.validated_sign_fraction
+        && sign_frac >= thresholds.validated_sign_fraction
+    {
         EnsembleGrade::Validated
-    } else if sign_frac >= thresholds.provisional_sign_fraction {
+    } else if sig_frac >= thresholds.provisional_sign_fraction
+        && sign_frac >= thresholds.provisional_sign_fraction
+    {
         EnsembleGrade::Provisional
     } else {
         EnsembleGrade::Insufficient
@@ -123,6 +153,14 @@ pub fn assign_grade(
 /// Stouffer's Z-score combination. Returns `None` when no finite
 /// p-values are present. Equal weights; exact-zero p clamped to 1e-300
 /// and exact-one p clamped to `1 - 1e-16` to keep `Φ⁻¹` finite.
+///
+/// HEURISTIC ONLY. Stouffer's method assumes the combined p-values
+/// are independent. The ensemble methods are all fit on the same
+/// abundance matrix, so their p-values are positively correlated and
+/// this combination is anti-conservative. The result (and the
+/// `ensemble_q` BH-adjusted from it) is exposed purely as a ranking
+/// convenience — it is NOT a calibrated p-value and is NOT used to
+/// assign grades (see [`assign_grade`] and module docs).
 pub fn combine_stouffer(p_values: &[f64]) -> Option<f64> {
     let normal = Normal::new(0.0, 1.0).expect("N(0,1) construction is infallible");
     let mut z_sum = 0.0;
@@ -148,8 +186,10 @@ pub fn combine_stouffer(p_values: &[f64]) -> Option<f64> {
 /// comparison has produced an `ensemble_q`.
 ///
 /// `n_significant` is the count of methods whose per-method BH-q was
-/// below `thresholds.q_threshold`. It is informational only, not a
-/// grade determinant in the current design.
+/// below `thresholds.q_threshold`. It (with sign consistency) is the
+/// grade determinant — see [`assign_grade`]. The Stouffer
+/// `ensemble_p` produced here is a heuristic only (see
+/// [`combine_stouffer`]).
 pub fn aggregate_per_protein(inputs: &[EnsembleInput], thresholds: GradeThresholds) -> EnsembleRow {
     let mut applied_p: Vec<f64> = Vec::new();
     let mut applied_signs: Vec<f64> = Vec::new();
@@ -283,46 +323,41 @@ mod tests {
     }
 
     #[test]
-    fn assign_grade_validated_requires_significant_ensemble_q_and_full_sign() {
+    fn assign_grade_validated_requires_all_methods_significant_and_full_sign() {
         let t = GradeThresholds::default();
-        assert_eq!(assign_grade(Some(1e-4), 4, 4, t), EnsembleGrade::Validated);
+        // assign_grade(n_significant, n_applied, n_sign_consistent, t).
+        // 4/4 significant AND 4/4 sign-consistent → VALIDATED.
+        assert_eq!(assign_grade(4, 4, 4, t), EnsembleGrade::Validated);
     }
 
     #[test]
-    fn assign_grade_provisional_when_sign_partial() {
+    fn assign_grade_provisional_when_significant_and_sign_are_majority() {
         let t = GradeThresholds::default();
-        // 2/3 sign-consistent → below validated (1.0) threshold but
-        // at/above provisional (0.5). ensemble_q significant.
-        assert_eq!(
-            assign_grade(Some(1e-4), 3, 2, t),
-            EnsembleGrade::Provisional
-        );
+        // 2/3 significant AND 2/3 sign-consistent → below validated
+        // (1.0) but at/above provisional (0.5).
+        assert_eq!(assign_grade(2, 3, 2, t), EnsembleGrade::Provisional);
     }
 
     #[test]
-    fn assign_grade_insufficient_when_ensemble_q_fails() {
+    fn assign_grade_does_not_validate_on_sign_alone() {
         let t = GradeThresholds::default();
-        // ensemble_q above threshold regardless of sign consistency.
-        assert_eq!(
-            assign_grade(Some(0.5), 4, 4, t),
-            EnsembleGrade::Insufficient
-        );
-        // Missing ensemble_q.
-        assert_eq!(assign_grade(None, 4, 4, t), EnsembleGrade::Insufficient);
-        // No applicable methods.
-        assert_eq!(
-            assign_grade(Some(1e-4), 0, 0, t),
-            EnsembleGrade::Insufficient
-        );
+        // All methods agree on sign but only 1/4 is significant →
+        // significant fraction 0.25 < provisional 0.5 → INSUFFICIENT.
+        // (Under the old combined-p design this could have validated.)
+        assert_eq!(assign_grade(1, 4, 4, t), EnsembleGrade::Insufficient);
     }
 
     #[test]
-    fn assign_grade_insufficient_when_majority_sign_fails_provisional_threshold() {
+    fn assign_grade_insufficient_when_no_methods_applied() {
         let t = GradeThresholds::default();
-        // 2/5 sign-consistent → below provisional (0.5).
-        assert_eq!(
-            assign_grade(Some(1e-4), 5, 2, t),
-            EnsembleGrade::Insufficient
-        );
+        assert_eq!(assign_grade(0, 0, 0, t), EnsembleGrade::Insufficient);
+    }
+
+    #[test]
+    fn assign_grade_insufficient_when_sign_fails_provisional_threshold() {
+        let t = GradeThresholds::default();
+        // 5/5 significant but only 2/5 sign-consistent → below
+        // provisional (0.5) on sign → INSUFFICIENT.
+        assert_eq!(assign_grade(5, 5, 2, t), EnsembleGrade::Insufficient);
     }
 }
