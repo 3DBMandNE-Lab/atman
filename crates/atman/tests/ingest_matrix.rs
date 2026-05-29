@@ -197,6 +197,111 @@ fn sample_median(values: &mut [f64]) -> f64 {
     }
 }
 
+/// Parse one named numeric column of measurements.tsv, grouped by sample_id,
+/// skipping QC-dropped rows. Used to compare `abundance` vs `abundance_raw`.
+fn parse_named_column_by_sample(
+    contents: &str,
+    col_name: &str,
+) -> std::collections::HashMap<String, Vec<f64>> {
+    let mut lines = contents.lines();
+    let header = lines.next().expect("header");
+    let cols: Vec<&str> = header.split('\t').collect();
+    let sid = cols.iter().position(|c| *c == "sample_id").unwrap();
+    let col = cols
+        .iter()
+        .position(|c| *c == col_name)
+        .unwrap_or_else(|| panic!("missing column {col_name}"));
+    let dropped = cols.iter().position(|c| *c == "dropped_by_qc").unwrap();
+    let mut out: std::collections::HashMap<String, Vec<f64>> = Default::default();
+    for line in lines {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.get(dropped).copied() == Some("1") {
+            continue;
+        }
+        let Some(v) = fields
+            .get(col)
+            .and_then(|s| (!s.is_empty()).then(|| s.parse::<f64>().ok()).flatten())
+        else {
+            continue;
+        };
+        out.entry(fields[sid].to_string()).or_default().push(v);
+    }
+    out
+}
+
+/// TASK-001 fidelity: `abundance_raw` must hold the pre-normalization input
+/// value, NOT the normalized `abundance`. With S1 shifted up 4 log2 units,
+/// median normalization moves `abundance` but must leave `abundance_raw`
+/// equal to the raw inputs {14,16,18,20}.
+#[test]
+fn ingest_matrix_abundance_raw_is_pre_normalization() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path();
+    let out = input.join("out");
+    std::fs::write(
+        input.join("samples.tsv"),
+        "sample_id\tcondition\nS1\tControl\nS2\tCase\nS3\tControl\n",
+    )
+    .unwrap();
+    std::fs::write(
+        input.join("matrix.tsv"),
+        "\
+assay\tS1\tS2\tS3\n\
+A1\t14\t10\t12\n\
+A2\t16\t12\t14\n\
+A3\t18\t14\t16\n\
+A4\t20\t16\t18\n",
+    )
+    .unwrap();
+
+    let output = run_atman(&[
+        "ingest-matrix",
+        "--matrix",
+        input.join("matrix.tsv").to_str().unwrap(),
+        "--samples",
+        input.join("samples.tsv").to_str().unwrap(),
+        "--output-dir",
+        out.to_str().unwrap(),
+        "--platform",
+        "diann_report",
+        "--abundance-unit",
+        "log2_diann_pg_quantity",
+        "--condition-col",
+        "condition",
+        "--assay-id-col",
+        "assay",
+        "--normalize",
+        "median",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let contents = std::fs::read_to_string(out.join("measurements.tsv")).unwrap();
+    let raw = parse_named_column_by_sample(&contents, "abundance_raw");
+    let norm = parse_named_column_by_sample(&contents, "abundance");
+
+    // abundance_raw for S1 is exactly the raw inputs, untouched by normalization.
+    let mut s1_raw = raw.get("S1").cloned().unwrap();
+    s1_raw.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(s1_raw, vec![14.0, 16.0, 18.0, 20.0], "abundance_raw mutated");
+
+    // Median normalization shifts S1's working abundance, so the two columns
+    // must differ for at least one row — proving abundance_raw is not a copy
+    // of the normalized value (the original bug).
+    let s1_norm = norm.get("S1").unwrap();
+    let s1_raw_unsorted = raw.get("S1").unwrap();
+    assert!(
+        s1_norm
+            .iter()
+            .zip(s1_raw_unsorted)
+            .any(|(n, r)| (n - r).abs() > 1e-9),
+        "abundance and abundance_raw identical after normalization — raw not preserved"
+    );
+}
+
 #[test]
 fn ingest_matrix_median_normalization_equalizes_sample_medians() {
     let tmp = tempfile::tempdir().unwrap();
