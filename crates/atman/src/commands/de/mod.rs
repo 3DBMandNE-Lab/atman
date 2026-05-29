@@ -49,12 +49,14 @@ pub struct Args {
     #[arg(long, default_value = "paired-t")]
     test: String,
 
-    /// Biological-replicate key. Currently fixed to the canonical
-    /// `subject_id` column from samples.tsv; the legacy alias
-    /// `participant` is also accepted for backward compatibility.
-    /// Required for `paired-t` and `moderated`; ignored for the
-    /// unpaired tests (`welch-t`, `ols`, `mixed`, `limma`, `msqrob`,
-    /// `ensemble`).
+    /// Biological-replicate key: the samples.tsv column used to pair
+    /// observations. Defaults to the canonical `subject_id` column, but
+    /// may be overridden to any column present in samples.tsv; its value
+    /// then replaces the in-memory `subject_id` used for the paired join.
+    /// The legacy alias `participant` is also accepted for backward
+    /// compatibility. Required for `paired-t` and `moderated`; ignored
+    /// for the unpaired tests (`welch-t`, `ols`, `mixed`, `limma`,
+    /// `msqrob`, `ensemble`).
     #[arg(long, default_value = "subject_id")]
     paired_by: String,
 
@@ -195,8 +197,11 @@ pub struct Args {
 
     /// Post-hoc contrast adjustment method. `""` (default) disables
     /// post-hoc; `sidak` uses `p_adj = 1 − (1 − p)^m` across the
-    /// `--contrast-list`. `tukey` and `dunnett` are rejected until
-    /// DEBT-5 and DEBT-6 ship.
+    /// `--contrast-list`; `tukey` runs the Tukey HSD studentized-range
+    /// adjustment over all pairs of the post-hoc factor's levels; and
+    /// `dunnett` compares each non-control level to the control level.
+    /// All three are fully implemented and dispatched. Each requires
+    /// `--test ols` with a `--design`.
     #[arg(long, default_value = "")]
     post_hoc: String,
 
@@ -522,7 +527,7 @@ pub fn run(args: Args) -> Result<()> {
             }
         }
         other => anyhow::bail!(
-            "unknown --post-hoc {other:?}; supported: sidak (tukey / dunnett pending)"
+            "unknown --post-hoc {other:?}; supported: sidak, tukey, dunnett"
         ),
     }
     if args.test == "ensemble" {
@@ -1267,12 +1272,7 @@ pub fn run(args: Args) -> Result<()> {
     let finished_at = SystemTime::now();
     let mut inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
-        &[
-            "measurements.tsv",
-            "measurements.tsv",
-            "samples.tsv",
-            "proteins.tsv",
-        ],
+        &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     )?;
     // Hash each --adjust-for file and add to inputs so the sidecar
     // captures full chained-input provenance.
