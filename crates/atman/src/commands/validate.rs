@@ -119,12 +119,7 @@ pub fn run(args: Args) -> Result<()> {
         let finished_at = SystemTime::now();
         let inputs_sha256 = hash_canonical_inputs(
             &args.input_dir,
-            &[
-                "measurements.tsv",
-                "measurements.tsv",
-                "samples.tsv",
-                "proteins.tsv",
-            ],
+            &["measurements.tsv", "samples.tsv", "proteins.tsv"],
         )?;
         let sidecar = sidecar_path_for(path);
         write_run_sidecar(
