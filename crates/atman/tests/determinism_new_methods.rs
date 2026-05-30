@@ -23,8 +23,10 @@ fn manifest_dir() -> std::path::PathBuf {
 
 /// Compare two TSV files byte-for-byte.
 fn assert_tsv_byte_identical(path_a: &Path, path_b: &Path, label: &str) {
-    let bytes_a = std::fs::read(path_a).unwrap_or_else(|_| panic!("read {}", path_a.display()));
-    let bytes_b = std::fs::read(path_b).unwrap_or_else(|_| panic!("read {}", path_b.display()));
+    let bytes_a =
+        std::fs::read(path_a).unwrap_or_else(|e| panic!("read {}: {e}", path_a.display()));
+    let bytes_b =
+        std::fs::read(path_b).unwrap_or_else(|e| panic!("read {}: {e}", path_b.display()));
     assert_eq!(
         bytes_a,
         bytes_b,
@@ -37,9 +39,10 @@ fn assert_tsv_byte_identical(path_a: &Path, path_b: &Path, label: &str) {
 
 /// Parse .run.json sidecar and extract input/output SHA fields for comparison.
 fn extract_run_json_shas(path: &Path) -> (serde_json::Value, serde_json::Value) {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|_| panic!("read {}", path.display()));
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let j: serde_json::Value =
-        serde_json::from_str(&text).unwrap_or_else(|_| panic!("parse {}", path.display()));
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
 
     let input_sha = j["inputs_sha256"].clone();
     let output_files = j["output_files"].clone();
