@@ -16,18 +16,23 @@ another machine. See `docs/release-checklist.md` for the generic publish flow.
 - [x] Full suite green locally (490 passed / 0 failed) and the byte-identity
       determinism gates pass in release profile — on **darwin only**.
 
-## 2. Local verification to run before tagging is "final"
+## 2. Local verification — DONE (2026-05-30)
 
-Run the canonical gate from `docs/release-checklist.md` and confirm clean:
-
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-      (note: the campaign left some pre-existing clippy warnings in unrelated
-      modules — decide whether `-D warnings` must be clean for release or
-      whether to scope the denials)
-- [ ] `cargo test --workspace --release`
-- [ ] `cargo package -p atman-core` then `cargo package -p atman`
-- [ ] `docker build -t atman:1.1.0 .` succeeds and `--help` runs
+- [x] `cargo fmt --all -- --check` — clean (the tree was not fmt-clean; ran
+      `cargo fmt --all`, layout-only, no behavior change).
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` — **clean (exit 0)**.
+      ~40 pre-existing style lints (28 in `atman-core` numeric kernels, ~12 in
+      the command layer + test targets) were fixed: real iterator/slice/closure
+      rewrites where behavior-identical, scoped `#[allow(...)]` with comments on
+      load-bearing lockstep-index loops. Verified byte-identical via the
+      determinism + golden suites; reviewed for numeric preservation.
+- [x] `cargo test --workspace --release` — 490 passed, 0 failed.
+- [x] `cargo package -p atman-core` — clean. `cargo package -p atman` fails
+      only on the documented publish-order constraint (needs `atman-core` on
+      crates.io first); moot for a local/non-crates.io release.
+- [x] `docker build -t atman:1.1.0 .` + `--version`/`--help` — success. Builds
+      on `rust:1.94-slim-bookworm`, so this also validated a **Linux release
+      build** (see §3).
 
 ## 3. Cross-platform / CI (needs another machine or a remote)
 
