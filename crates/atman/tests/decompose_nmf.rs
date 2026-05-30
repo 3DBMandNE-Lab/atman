@@ -1,3 +1,7 @@
+// Matrix-math variables use uppercase names (X, H, W) to mirror the standard
+// NMF notation X ≈ W·H; keep them rather than forcing snake_case.
+#![allow(non_snake_case)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::{Command, Output};
 
@@ -13,7 +17,7 @@ fn read_loadings_tsv(path: &std::path::Path) -> Vec<(String, BTreeMap<String, f6
     let lines: Vec<&str> = text.lines().collect();
 
     // Skip #-prefixed version comment line if present.
-    let data_start = if lines.get(0).map(|l| l.starts_with('#')).unwrap_or(false) {
+    let data_start = if lines.first().map(|l| l.starts_with('#')).unwrap_or(false) {
         1
     } else {
         0
@@ -48,14 +52,11 @@ fn read_loadings_tsv(path: &std::path::Path) -> Vec<(String, BTreeMap<String, f6
 
         programs
             .entry(program)
-            .or_insert_with(BTreeMap::new)
+            .or_default()
             .insert(gene_symbol, loading);
     }
 
-    programs
-        .into_iter()
-        .map(|(prog, genes)| (prog, genes))
-        .collect()
+    programs.into_iter().collect()
 }
 
 /// Computes Jaccard similarity of top-N genes (by absolute loading) between two gene-loading maps.
@@ -127,7 +128,7 @@ fn read_activations_tsv(path: &std::path::Path) -> BTreeMap<String, BTreeMap<Str
     let lines: Vec<&str> = text.lines().collect();
 
     // Skip #-prefixed version comment line if present.
-    let data_start = if lines.get(0).map(|l| l.starts_with('#')).unwrap_or(false) {
+    let data_start = if lines.first().map(|l| l.starts_with('#')).unwrap_or(false) {
         1
     } else {
         0
@@ -159,7 +160,7 @@ fn read_activations_tsv(path: &std::path::Path) -> BTreeMap<String, BTreeMap<Str
 
         samples
             .entry(sample_id)
-            .or_insert_with(BTreeMap::new)
+            .or_default()
             .insert(program, activation);
     }
 
@@ -178,7 +179,7 @@ fn frobenius_reconstruction_error(
     let lines: Vec<&str> = text.lines().collect();
 
     // Skip #-prefixed version comment line if present.
-    let data_start = if lines.get(0).map(|l| l.starts_with('#')).unwrap_or(false) {
+    let data_start = if lines.first().map(|l| l.starts_with('#')).unwrap_or(false) {
         1
     } else {
         0
@@ -201,7 +202,7 @@ fn frobenius_reconstruction_error(
         let abundance: f64 = parts[2].parse().unwrap_or(0.0);
 
         X.entry(sample_id)
-            .or_insert_with(BTreeMap::new)
+            .or_default()
             .insert(gene_symbol, abundance);
     }
 
@@ -221,7 +222,7 @@ fn frobenius_reconstruction_error(
                     let reconstructed = W_val * H_val;
                     X_hat
                         .entry(sample_id.clone())
-                        .or_insert_with(BTreeMap::new)
+                        .or_default()
                         .entry(gene_symbol.clone())
                         .and_modify(|v| *v += reconstructed)
                         .or_insert(reconstructed);
@@ -326,7 +327,7 @@ fn run_nmf_parity_test(beta_loss: &str, reference_tsv_path: &str) {
     let mut ingest_order = 0u64;
 
     let genes_vec: Vec<String> = genes.iter().cloned().collect();
-    for (_row_idx, (sample_id, gene_symbol, abundance)) in measurements.iter().enumerate() {
+    for (sample_id, gene_symbol, abundance) in measurements.iter() {
         let gene_idx = genes_vec.iter().position(|g| g == gene_symbol).unwrap();
         let assay_id = format!("A{:03}", gene_idx);
         ingest_order += 1;
@@ -450,7 +451,7 @@ fn read_stability_tsv(path: &std::path::Path) -> Vec<(String, f64, usize)> {
     let lines: Vec<&str> = text.lines().collect();
 
     // Skip #-prefixed version comment if present.
-    let data_start = if lines.get(0).map(|l| l.starts_with('#')).unwrap_or(false) {
+    let data_start = if lines.first().map(|l| l.starts_with('#')).unwrap_or(false) {
         1
     } else {
         0
@@ -702,7 +703,7 @@ fn read_k_sweep_tsv(path: &std::path::Path) -> Vec<(usize, String, f64, String, 
     let lines: Vec<&str> = text.lines().collect();
 
     // Skip #-prefixed comment lines.
-    let data_start = if lines.get(0).map(|l| l.starts_with('#')).unwrap_or(false) {
+    let data_start = if lines.first().map(|l| l.starts_with('#')).unwrap_or(false) {
         1
     } else {
         0

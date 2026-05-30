@@ -61,6 +61,8 @@ fn write_plex_fixture(
         // Preserve per-sample absence count but reassign to random proteins.
         // Deterministic shuffle: linear-congruential pseudo-random with fixed seed.
         let mut rng_state: u64 = 0xDEADBEEFCAFEBABE;
+        // `s` indexes `absent_for[s]` across a clear + re-fill loop driven by an RNG.
+        #[allow(clippy::needless_range_loop)]
         for s in 0..total_samples {
             let count = absent_for[s].len();
             absent_for[s].clear();
@@ -240,7 +242,7 @@ fn recover_plex_infers_pairs_within_plex() {
             .push(cols[sid_col].to_string());
     }
     assert_eq!(by_patient.len(), 4);
-    for (_pid, members) in &by_patient {
+    for members in by_patient.values() {
         assert_eq!(members.len(), 2, "every patient should have 2 samples");
     }
     // Specifically check that T100 and P101 are paired.

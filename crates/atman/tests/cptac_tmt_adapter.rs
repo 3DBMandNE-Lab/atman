@@ -111,7 +111,7 @@ fn cptac_tmt_adapter_recovers_paired_condition_from_real_subset() {
     assert_eq!(by_gene["A2M"][1], "2", "A2M NCBIGeneID");
     assert_eq!(by_gene["A1CF"][1], "29974", "A1CF NCBIGeneID");
     assert_eq!(by_gene["AAAS"][1], "8086", "AAAS NCBIGeneID");
-    for (_, row) in &by_gene {
+    for row in by_gene.values() {
         assert_eq!(row[0], "cptac_tmt_proteome");
         assert_eq!(row[4], "CPTAC_HCC", "panel = CPTAC_<tumor-tag>");
     }
@@ -135,8 +135,12 @@ fn cptac_tmt_adapter_recovers_paired_condition_from_real_subset() {
         "npx_source_str should preserve full raw precision"
     );
     let abundance: f64 = f[6].parse().unwrap();
+    // Keep the full raw literal to mirror the fixture exactly; f64 rounds it,
+    // which is fine for this 1e-9 drift check.
+    #[allow(clippy::excessive_precision)]
+    let expected = 0.82994022391227695;
     assert!(
-        (abundance - 0.82994022391227695).abs() < 1e-9,
+        (abundance - expected).abs() < 1e-9,
         "abundance value drifted from raw"
     );
 

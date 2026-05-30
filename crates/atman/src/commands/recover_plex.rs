@@ -619,15 +619,11 @@ fn infer_pairs(
                 if used[i] {
                     continue;
                 }
-                let diff = if b_stem >= a_stem {
-                    b_stem - a_stem
-                } else {
-                    a_stem - b_stem
-                };
+                let diff = b_stem.abs_diff(*a_stem);
                 if diff > max_stem_diff {
                     continue;
                 }
-                if best.map_or(true, |(d, _)| diff < d) {
+                if best.is_none_or(|(d, _)| diff < d) {
                     best = Some((diff, i));
                 }
             }

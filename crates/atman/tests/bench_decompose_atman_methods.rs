@@ -187,6 +187,9 @@ fn write_nmf_fixture(dir: &Path) {
     let mut h = vec![vec![0.0_f64; N_FEATURES]; N_ARCHETYPES];
     let mut load_cursor = 0usize;
     let u_leak = lcg_uniform(2002, n_loadings); // for sparse leakage
+
+    // `k` and `j` are 2D indices into `h[k][j]` and drive block-structure arithmetic.
+    #[allow(clippy::needless_range_loop)]
     for k in 0..N_ARCHETYPES {
         for j in 0..N_FEATURES {
             let in_block = j >= k * BLOCK && j < (k + 1) * BLOCK;
@@ -217,6 +220,8 @@ fn write_nmf_fixture(dir: &Path) {
 
     // --- X = W @ H + noise ---
     let mut x = vec![vec![0.0_f64; N_FEATURES]; N_SAMPLES];
+    // `i` and `j` are 2D indices into `x[i][j]` plus `noise_flat` (flat-indexed by i*P+j).
+    #[allow(clippy::needless_range_loop)]
     for i in 0..N_SAMPLES {
         for j in 0..N_FEATURES {
             let signal: f64 = (0..N_ARCHETYPES).map(|k| w[i][k] * h[k][j]).sum();
@@ -231,6 +236,8 @@ fn write_nmf_fixture(dir: &Path) {
         .collect();
 
     let mut planted = String::from("archetype_id\tprotein\tloading\n");
+    // `k`/`j` index `arch_ids[k]`, `gene_ids[j]`, and `h[k][j]` in lockstep.
+    #[allow(clippy::needless_range_loop)]
     for k in 0..N_ARCHETYPES {
         for j in 0..N_FEATURES {
             planted.push_str(&format!(
@@ -248,6 +255,8 @@ fn write_nmf_fixture(dir: &Path) {
         abundance.push_str(gid);
     }
     abundance.push('\n');
+    // `i`/`j` index `x[i][j]` in lockstep with the sample-row construction.
+    #[allow(clippy::needless_range_loop)]
     for i in 0..N_SAMPLES {
         abundance.push_str(&format!("S{i:03}"));
         for j in 0..N_FEATURES {

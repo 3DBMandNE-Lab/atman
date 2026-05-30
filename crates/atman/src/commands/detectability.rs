@@ -461,6 +461,8 @@ fn logistic(design: &[Vec<f64>], y: &[f64], max_iter: usize, tol: f64) -> Option
         if max_delta < tol {
             let cov = inverse_from_cholesky(&l);
             let mut se = Vec::with_capacity(p);
+            // `j` indexes the diagonal `cov[j][j]`, not a whole row, so enumerate() does not apply.
+            #[allow(clippy::needless_range_loop)]
             for j in 0..p {
                 let v = cov[j][j];
                 if !v.is_finite() || v <= 0.0 {
