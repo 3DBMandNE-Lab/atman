@@ -12,7 +12,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`atman detectability` — two-layer detection + abundance differential
   screen.** Separates "is this protein detected differently between
-  conditions?" (a logistic/contingency test on the present-vs-missing
+  conditions?" (a logistic regression on the present-vs-missing
   pattern, with log-odds-ratio effect size) from "is it abundant
   differently where detected?" (OLS on the detected-only subset). Treats
   below-LOD / missing as genuinely missing (MNAR), never imputed. The

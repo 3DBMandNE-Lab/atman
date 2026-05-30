@@ -232,6 +232,12 @@ pub fn read_measurements_long(path: &Path) -> Result<Vec<MeasurementRecord>> {
         } else {
             row[c_abund_raw].parse().context("abundance_raw parse")?
         };
+        // NOTE: a non-finite (`NaN`) value in the `abundance` / `abundance_raw`
+        // columns is INTENTIONAL — it is the canonical MNAR/below-LOD missingness
+        // marker that the missingness-aware paths (e.g. missingness-ICA) read and
+        // model. Finite-assuming consumers must go through
+        // `MeasurementRecord::effective_abundance()`, which returns `None` for
+        // non-finite values; the reader therefore does NOT reject them.
         let abundance = if abund_str.is_empty() {
             abundance_from_unit(unit, abundance_raw_value)
         } else {
@@ -588,8 +594,28 @@ pub fn write_proteins(path: &Path, proteins: &[ProteinIdentity]) -> Result<()> {
 /// `0.4000` → `0.4`. This matches the formatting rule observed
 /// empirically in the published Olink Explore NPX files used as the
 /// byte-exact reproduction reference.
+/// Sanitize a *data-derived* string (e.g. a `panel` value read from an
+/// untrusted `measurements.tsv`) for safe use as a single output-filename
+/// component. Without this, a crafted panel like `../../evil` would make
+/// `out_dir.join(...)` resolve outside `out_dir`. Strict-failure: reject any
+/// value carrying a path separator or directory-traversal rather than silently
+/// rewriting it. A legitimate panel name (e.g. `Cardiometabolic`) is unaffected.
+fn safe_filename_component(raw: &str) -> Result<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        bail!("empty panel name cannot form an output filename");
+    }
+    if s == "." || s == ".." || s.contains('/') || s.contains('\\') || s.contains('\0') {
+        bail!(
+            "panel name {raw:?} is not a safe output-filename component \
+             (contains a path separator or traversal)"
+        );
+    }
+    Ok(s.to_ascii_lowercase())
+}
+
 pub fn write_wide_panel(out_dir: &Path, panel: &WidePanel) -> Result<PathBuf> {
-    let filename = format!("{}_npx.csv", panel.panel.to_ascii_lowercase());
+    let filename = format!("{}_npx.csv", safe_filename_component(&panel.panel)?);
     let path = out_dir.join(filename);
     let mut buf = String::new();
     buf.push_str("Participant,Exposure,SampleID");
@@ -670,7 +696,7 @@ pub fn write_fold_change_panel(
     panel: &FoldChangePanel,
     comparisons: &[atman_core::fold_change::Comparison],
 ) -> Result<PathBuf> {
-    let filename = format!("{}_log2_fc.csv", panel.panel.to_ascii_lowercase());
+    let filename = format!("{}_log2_fc.csv", safe_filename_component(&panel.panel)?);
     let path = out_dir.join(filename);
     let mut buf = String::from("Assay");
     for c in comparisons {
@@ -1113,6 +1139,24 @@ fn push_opt_f64(buf: &mut String, v: Option<f64>) {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn safe_filename_component_blocks_traversal_and_separators() {
+        // Legitimate panel names pass (lowercased).
+        assert_eq!(
+            safe_filename_component("Cardiometabolic").unwrap(),
+            "cardiometabolic"
+        );
+        assert_eq!(safe_filename_component("Panel 2").unwrap(), "panel 2");
+        // Data-derived traversal / separators are rejected (strict-failure),
+        // so a crafted `panel` column cannot escape the output directory.
+        for bad in ["..", ".", "../evil", "a/b", "a\\b", "../../tmp/x", ""] {
+            assert!(
+                safe_filename_component(bad).is_err(),
+                "expected rejection for {bad:?}"
+            );
+        }
+    }
 
     #[test]
     fn atomic_write_creates_file_with_content() {
