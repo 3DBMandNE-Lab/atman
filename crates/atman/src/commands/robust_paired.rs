@@ -208,6 +208,9 @@ pub fn run(args: Args) -> Result<()> {
                 } else {
                     0.0
                 };
+                // `drop_idx` is the leave-one-out index, compared against the inner
+                // enumerated index `i` to exclude one pair; it is not a simple element index.
+                #[allow(clippy::needless_range_loop)]
                 for drop_idx in 0..n_full {
                     let mut sub: Vec<(f64, f64)> = Vec::with_capacity(n_full - 1);
                     for (i, (a, b)) in pairs_only.iter().enumerate() {
@@ -432,23 +435,23 @@ fn collect_pairs(
     for (sid, cond, pid) in pairing {
         let entry = by_pair.entry(pid.clone()).or_insert((None, None));
         if cond == cond_a {
-            if entry.0.is_some() {
+            if let Some(existing) = &entry.0 {
                 bail!(
                     "pair {:?} has more than one {} sample ({} and {})",
                     pid,
                     cond_a,
-                    entry.0.as_ref().unwrap(),
+                    existing,
                     sid
                 );
             }
             entry.0 = Some(sid.clone());
         } else if cond == cond_b {
-            if entry.1.is_some() {
+            if let Some(existing) = &entry.1 {
                 bail!(
                     "pair {:?} has more than one {} sample ({} and {})",
                     pid,
                     cond_b,
-                    entry.1.as_ref().unwrap(),
+                    existing,
                     sid
                 );
             }

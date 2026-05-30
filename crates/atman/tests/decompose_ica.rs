@@ -319,7 +319,7 @@ fn decompose_ica_min_stable_seed_fraction_zero_disables_flag() {
     let flags: Vec<&str> = text
         .lines()
         .skip(1)
-        .map(|line| line.split('\t').last().unwrap())
+        .map(|line| line.split('\t').next_back().unwrap())
         .collect();
     assert!(!flags.is_empty());
     assert!(

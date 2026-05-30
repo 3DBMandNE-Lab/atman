@@ -383,13 +383,14 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
     Ok(())
 }
 
+/// Result of loading the NMF-specific fixture:
+/// `(protein_labels, planted_loadings, abundance, k)`.
+type NmfFixture = (Vec<String>, Vec<Vec<f64>>, Vec<Vec<f64>>, usize);
+
 /// Load the NMF-specific fixture, returning
 /// `(protein_labels, planted_loadings, abundance, k)`.
 /// `k_override` replaces the planted count when provided.
-fn load_nmf_fixture(
-    fixture: &Path,
-    k_override: Option<usize>,
-) -> Result<(Vec<String>, Vec<Vec<f64>>, Vec<Vec<f64>>, usize)> {
+fn load_nmf_fixture(fixture: &Path, k_override: Option<usize>) -> Result<NmfFixture> {
     let (protein_labels, planted) = read_planted_loadings(fixture)
         .with_context(|| format!("reading NMF fixture planted_loadings from {:?}", fixture))?;
     let (_, abundance) = read_abundance(fixture, &protein_labels)

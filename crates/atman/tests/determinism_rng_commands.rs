@@ -13,7 +13,7 @@
 //!   - `de --test ensemble` (multi-method ensemble DE)
 //!   - `decompose ica`   (standard FastICA, multi-seed stability)
 //!   - `robust-paired`   (leave-one-pair-out diagnostic; deterministic by
-//!                        construction — no seed — but covered for byte-identity)
+//!     construction — no seed — but covered for byte-identity)
 //!
 //! Each test runs the command TWICE into two separate output dirs and asserts the
 //! produced output files are byte-identical. The `.run.json` sidecar carries

@@ -454,6 +454,8 @@ pub(super) fn nmf_run(args: NmfArgs) -> Result<()> {
                 let mut hht = vec![vec![0.0_f64; k_surv]; k_surv];
                 for a in 0..k_surv {
                     for b in 0..k_surv {
+                        // `j` indexes two rows (`h_fixed[a][j]` and `h_fixed[b][j]`) in lockstep.
+                        #[allow(clippy::needless_range_loop)]
                         for j in 0..n_assays {
                             hht[a][b] += h_fixed[a][j] * h_fixed[b][j];
                         }
@@ -632,7 +634,7 @@ pub(super) fn nmf_run(args: NmfArgs) -> Result<()> {
                 };
                 let mean_kl_str = row
                     .mean_kl
-                    .map(|v| format_float(v))
+                    .map(format_float)
                     .unwrap_or_else(|| "NA".to_string());
                 let selected = if row.k == sweep_result.selected_k {
                     "1"

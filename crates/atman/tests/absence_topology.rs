@@ -71,6 +71,8 @@ fn write_fixture(
     let mut buf = String::from("platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\tabundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\tdetection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n");
     let mut row_order = 1u64;
     for s in 0..n_samples {
+        // `p` indexes `absent_samples_for[p]` and is also emitted as the protein/assay id.
+        #[allow(clippy::needless_range_loop)]
         for p in 0..total_proteins {
             if absent_samples_for[p].contains(&s) {
                 continue;

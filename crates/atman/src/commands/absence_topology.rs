@@ -180,6 +180,9 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    // `i` is both the union-find node id (`find(&mut parent, i)`) and the index into
+    // `clusterable_idx`, so it is load-bearing beyond a simple index.
+    #[allow(clippy::needless_range_loop)]
     for i in 0..m {
         let r = find(&mut parent, i);
         groups.entry(r).or_default().push(clusterable_idx[i]);

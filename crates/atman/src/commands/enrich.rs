@@ -194,7 +194,7 @@ fn run_gsea(args: GseaCliArgs) -> Result<()> {
     let qs = bh_fdr(&p_values);
     let mut rows: Vec<GseaWriteRow> = raw
         .into_iter()
-        .zip(qs.into_iter())
+        .zip(qs)
         .map(|(r, q)| GseaWriteRow {
             set_name: r.set_name,
             set_size: r.set_size,
@@ -325,7 +325,7 @@ fn read_ranked_genes(
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if !(p.is_finite() && (0.0..=1.0).contains(&p)) || !dir.is_finite() {
+                if !(p.is_finite() && (0.0..=1.0).contains(&p) && dir.is_finite()) {
                     continue;
                 }
                 let p_floor = p.max(1e-300);
