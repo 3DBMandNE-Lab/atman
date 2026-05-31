@@ -50,7 +50,8 @@ pub struct Args {
     /// to a sample of condition B by minimal sample_id-stem distance, accepting only
     /// stem-distance ≤ `--pair-stem-distance`. Format: "A-B" (e.g. "tumor-paired_non_tumor").
     /// When inference is unique and complete, a `patient_id` column is added to the
-    /// augmented samples output (if requested) and `inferred_pairs.tsv` is written.
+    /// augmented samples output (if requested) and a companion pairs TSV
+    /// (`<output-stem>_pairs.tsv`) is written. Requires numeric sample-id stems.
     #[arg(long)]
     infer_pairs: Option<String>,
 

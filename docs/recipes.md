@@ -260,9 +260,17 @@ Output columns include detection counts by group, `detection_or`,
 `detection_q`, `abundance_effect_detected_only`, `abundance_q`, and a
 classification: `detection_shifted`, `abundance_shifted`,
 `coupled_shift`, `not_significant`, or `uninformative_sparse`. A companion
-`*_summary.tsv` flags designs where the detection layer is structurally
-uninformative, for example plex-balanced TMT data where almost every protein
-has identical detected/missing counts across conditions.
+summary TSV (written next to `--output` as `<output-stem>_summary.tsv`) flags
+designs where the detection layer is structurally uninformative, for example
+plex-balanced TMT data where almost every protein has identical
+detected/missing counts across conditions.
+
+Additional knobs: `--design` defaults to `~ 1` (condition only); `--q-threshold`
+(default 0.05) sets the FDR cut used for the classification column; the logistic
+detection model is fit by IRLS with `--max-iter` (default 50) and `--tol`
+(default 1e-7). Strict-failure: a comparison with fewer than `--min-samples`
+complete samples in *either* condition (after covariate filtering) is a hard
+error, not a silent skip.
 
 ## TMT plex recovery from absence pattern
 
@@ -284,14 +292,19 @@ Outputs:
 
 - `recovered_plex.tsv` — per-sample `recovered_plex_id`, cluster size, mean
   within-cluster Jaccard distance.
-- `recovered_plex_quality.tsv` — global metrics including
-  `mean_within_jaccard_distance`, `mean_between_jaccard_distance`,
+- the quality TSV (written next to `--output` as `<output-stem>_quality.tsv`,
+  i.e. `recovered_plex_quality.tsv` for the path above) — global metrics
+  including `mean_within_jaccard_distance`, `mean_between_jaccard_distance`,
   `separation_ratio`, and a `diagnostic` of `plex_coherent`,
-  `weak_plex_signal`, `atypical_cluster_size`, or
-  `absence_not_plex_coherent`.
+  `weak_plex_signal`, `atypical_cluster_size`, `absence_not_plex_coherent`, or
+  `single_cluster` (every sample collapsed into one component).
 - Optional `--augmented-samples-output` writes a copy of `samples.tsv` with
   a new `recovered_plex_id` column. Only emitted when
   `diagnostic == plex_coherent`, to avoid downstream poisoning.
+
+`--expected-cluster-size` (default 11, for TMT-11) is used only to flag
+`atypical_cluster_size` when recovered plexes are far from the expected
+multiplicity; it does not affect clustering.
 
 Use the recovered id as a covariate in any downstream design, e.g.
 `atman detectability --design "~ recovered_plex_id"` or
@@ -304,11 +317,14 @@ canonical schema doesn't carry a real patient id, `--infer-pairs A-B` matches
 each sample of condition A to its nearest-stem-distance partner of condition
 B *within the same recovered plex*. Inference succeeds only when every A has
 a unique B partner at distance ≤ `--pair-stem-distance` (default 1); on
-success the augmented samples file gains a `patient_id` column and a
-companion `*_pairs.tsv` lists the pairs and their stem distances. If you ask
-for `--infer-pairs` on a detection-coherent plex but inference cannot
-complete (no unique partner within the distance bound), the command fails
-loudly rather than emitting a success with no pairs file. Use the
+success the augmented samples file gains a `patient_id` column and a companion
+pairs file (`<output-stem>_pairs.tsv`) lists the pairs and their stem distances.
+Matching requires **numeric sample-id stems** (the trailing digits of each
+`sample_id`); ids without a numeric stem are a hard error. The generated
+`patient_id` values are synthetic (`pair_0001`, `pair_0002`, …), not real
+patient identifiers. If you ask for `--infer-pairs` on a detection-coherent plex
+but inference cannot complete (no unique partner within the distance bound), the
+command fails loudly rather than emitting a success with no pairs file. Use the
 recovered patient id as the pairing covariate in DE, e.g.
 `atman detectability --design "~ patient_id"`.
 
@@ -332,9 +348,12 @@ Outputs:
 
 - `absence_topology.tsv` — per-protein `cluster_id`, `cluster_size`,
   `n_absent`, `mean_within_jaccard_distance`.
-- `absence_topology_quality.tsv` — global metrics including
-  `separation_ratio`, `n_complete`, `n_singletons`, and a `diagnostic` of
-  `protein_coherent`, `weak_signal`, or `absence_not_protein_coherent`.
+- the quality TSV (written next to `--output` as `<output-stem>_quality.tsv`,
+  i.e. `absence_topology_quality.tsv` for the path above) — global metrics
+  including `separation_ratio`, `n_complete`, `n_singletons`, and a `diagnostic`
+  of `protein_coherent`, `weak_signal`, `absence_not_protein_coherent`,
+  `single_cluster`, or `no_clusterable_proteins` (no protein clears
+  `--min-absent`).
 
 On CPTAC TMT data the dominant pattern is per-protein-unique fragility
 (most clusterable proteins land in singletons), but small fragility cliques
@@ -354,15 +373,19 @@ atman robust-paired \
     --input-dir out \
     --groups "tumor-paired_non_tumor" \
     --paired-by patient_id \
+    --min-pairs 5 \
     --output out/robust_paired.tsv
 ```
 
 Pairing comes from a column in `samples.tsv` (default `patient_id`) — for
 example, the column emitted by `atman recover-plex --infer-pairs`. The
-companion `*_summary.tsv` reports how many proteins are simultaneously
-significant under the full test (q < 0.05) and robust under jackknife
-(`sign_stability ≥ 0.999` AND `p_lt_05_stability ≥ 0.95`); the gap exposes
-calls that depend on a small number of subjects.
+companion summary TSV (`<output-stem>_summary.tsv`) reports how many proteins
+are simultaneously significant under the full test (q < 0.05) and robust under
+jackknife (`sign_stability ≥ 0.999` AND `p_lt_05_stability ≥ 0.95`); the gap
+exposes calls that depend on a small number of subjects. Strict-failure: a
+comparison with fewer than `--min-pairs` (default 5) complete pairs is a hard
+error, and a `--paired-by` value mapping to two samples of the same condition
+(a malformed pair) is rejected rather than silently resolved.
 
 ## Module discovery (WGCNA soft-threshold)
 
