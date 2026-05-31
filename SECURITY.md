@@ -60,16 +60,21 @@ the same trust you would a shell script:
   (MIT / Apache-2.0 / BSD / ISC / Zlib / Unicode-3.0 and equivalents), compatible
   with atman's `MIT OR Apache-2.0`. No copyleft-only dependencies. A CycloneDX
   SBOM is generated per release at `docs/sbom-1.1.0.cdx.json`.
-- **Advisories (`cargo audit`, as of 1.1.0):** two findings, both transitive via
-  `statrs → nalgebra` and **not reachable from atman's code paths**:
-  - `RUSTSEC-2026-0097` — `rand 0.8.5` "unsound with a custom logger using
-    `rand::rng()`". atman never calls `rand`'s sampling APIs (it ships its own
-    deterministic `atman_core::rng`); `rand` is pulled in only by `statrs`'s
-    distribution machinery, which atman uses for scalar CDFs/quantiles only.
-  - `RUSTSEC-2024-0436` — `paste` unmaintained (transitive via `nalgebra`).
-  Both stem from the unused `statrs → nalgebra/rand` weight documented under
-  "Dependency notes" in `docs/analytical-roadmap.md`. Mitigation options for a
-  future release: drop/replace `statrs` to shed `nalgebra`/`rand`, or scope these
-  advisories in a `cargo-deny`/`cargo-audit` CI gate with this justification.
-- **Recommended for CI:** `cargo audit` (or `cargo deny`) on every build, and a
-  fresh SBOM per release.
+- **Advisories (`cargo audit`):** `cargo audit` runs in CI (the `audit` job) and
+  scans `Cargo.lock` against the RustSec database on every build.
+  - **Fixed in 1.1.0:** `RUSTSEC-2026-0104` (reachable panic in
+    `rustls-webpki` CRL parsing, on the `enrich gprofiler` TLS path) — resolved
+    by updating `rustls-webpki` to 0.103.13.
+  - **Scoped ignores** (in `.cargo/audit.toml`) — two advisories that are
+    transitive via `statrs → nalgebra` and **not reachable from atman's code
+    paths**:
+    - `RUSTSEC-2026-0097` — `rand 0.8.5` "unsound with a custom logger using
+      `rand::rng()`". atman never calls `rand`'s sampling APIs (it ships its own
+      deterministic `atman_core::rng`); `rand` is pulled in only by `statrs`'s
+      distribution machinery, which atman uses for scalar CDFs/quantiles only.
+    - `RUSTSEC-2024-0436` — `paste` unmaintained (transitive via `nalgebra`).
+  The ignores are scoped to those specific IDs, so any **new** advisory still
+  fails CI. They stem from the unused `statrs → nalgebra/rand` weight documented
+  under "Dependency notes" in `docs/analytical-roadmap.md`; dropping/replacing
+  `statrs` would let us remove both ignores.
+- **Per release:** regenerate the CycloneDX SBOM (`docs/sbom-<version>.cdx.json`).

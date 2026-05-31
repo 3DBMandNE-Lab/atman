@@ -1,0 +1,18 @@
+# cargo-audit configuration. See SECURITY.md "Dependencies & supply chain".
+#
+# Both ignored advisories are TRANSITIVE via `statrs -> nalgebra` and are NOT
+# reachable from atman's code paths. atman uses statrs only for scalar
+# distribution CDFs/quantiles; it ships its own deterministic RNG
+# (`atman_core::rng`) and never calls rand's sampling APIs. These are scoped
+# (not suppressed wholesale) so any NEW advisory still fails the audit.
+#
+# Revisit when statrs/nalgebra are dropped or updated (would let us remove these).
+[advisories]
+ignore = [
+    # rand 0.8.5 — "unsound with a custom logger using rand::rng()".
+    # Unreachable: atman does not use rand's RNG/sampling; pulled in only by
+    # statrs's distribution machinery.
+    "RUSTSEC-2026-0097",
+    # paste 1.0.15 — unmaintained (transitive via nalgebra's macros).
+    "RUSTSEC-2024-0436",
+]

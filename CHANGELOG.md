@@ -177,6 +177,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `de --test ensemble`, `null`) — `measurements.tsv` was listed twice in
   the canonical-input set recorded in the run sidecar.
 
+### Security
+
+- **Updated `rustls-webpki` to 0.103.13** — resolves `RUSTSEC-2026-0104`, a
+  reachable panic in certificate-revocation-list parsing reachable via the
+  `enrich gprofiler` HTTPS path.
+- **Hardened data-derived output paths.** `atman matrix` / `atman fold-change`
+  built per-panel CSV filenames from the untrusted `panel` column; a crafted
+  value (e.g. `../../x`) could write outside `--output-dir`. The data-derived
+  filename component is now sanitized and rejected on a path separator or `..`.
+- Added a `cargo audit` CI gate (`.cargo/audit.toml` scopes two
+  transitive-and-unreachable advisories with justification), a CycloneDX SBOM
+  (`docs/sbom-1.1.0.cdx.json`), a `SECURITY.md` threat model, and
+  adversarial-input robustness tests + a `fuzz/` scaffold.
+
 ### Documented divergences (atman vs the named reference)
 
 - **msqrob2 path with `--adjust-for`:** log_fc is bit-identical (Δ ≤ 2.89e-14);

@@ -79,13 +79,13 @@ host, and the repo is local-only so CI has never actually run.
       179 components); all transitive licenses permissive (MIT/Apache/BSD/ISC/
       Zlib/Unicode), no copyleft. `cargo audit` run.
 - [x] **`README.pdf` / `mdpdf.log`** confirmed untracked + gitignored — not shipped.
-- [ ] **`cargo audit` advisories — your call.** Two findings, both transitive via
-      `statrs → nalgebra` and **unreachable from atman** (RUSTSEC-2026-0097
-      `rand` unsoundness via a path atman never calls; RUSTSEC-2024-0436 `paste`
-      unmaintained). Options: accept + scope them in a `cargo-deny`/`cargo-audit`
-      CI gate with the justification in `SECURITY.md`, or drop/replace `statrs`
-      to shed `nalgebra`/`rand` (larger change). Recommend accept-and-scope for
-      1.1.0.
+- [x] **`cargo audit` gate in place.** CI runs `cargo audit` (the `audit` job).
+      The two transitive-and-unreachable advisories (RUSTSEC-2026-0097 `rand`,
+      RUSTSEC-2024-0436 `paste`, via `statrs → nalgebra`) are scoped in
+      `.cargo/audit.toml` with justification (any *new* advisory still fails).
+      The gate also caught a **reachable** one — RUSTSEC-2026-0104
+      (`rustls-webpki` CRL-parsing panic on the gprofiler TLS path) — now fixed
+      by bumping `rustls-webpki` to 0.103.13. `cargo audit` is clean.
 
 ## 6. Publish mechanics (when 2–4 are satisfied)
 
