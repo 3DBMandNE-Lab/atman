@@ -243,55 +243,67 @@ fn run_decompose(args: DecomposeArgs) -> Result<()> {
 
         if args.check_determinism {
             // Re-run and byte-compare the recovered loadings.
-            let second_flat: Option<Vec<u8>> = if tool == "atman" || tool.starts_with("atman.") {
+            let second_flat: Option<Result<Vec<u8>>> = if tool == "atman"
+                || tool.starts_with("atman.")
+            {
                 let suffix = if tool == "atman" {
                     "ica"
                 } else {
                     &tool["atman.".len()..]
                 };
+                // Capture the re-run as a `Result` so a failure is visible
+                // (logged + scored 0.0) instead of silently collapsing to a
+                // NaN that looks like "determinism not checked". A single
+                // tool's re-run failure must not abort the whole benchmark —
+                // other tools' rows are still recorded.
                 match suffix {
-                    "ica" => run_atman_native_ica(
-                        &abundance,
-                        k,
-                        args.seed,
-                        args.max_iter,
-                        args.tol,
-                        &protein_labels,
-                        tool,
-                    )
-                    .ok()
-                    .map(|r| r.recovered_flat),
-                    "nmf" => load_nmf_fixture(&nmf_fixture, args.k).ok().and_then(
+                    "ica" => Some(
+                        run_atman_native_ica(
+                            &abundance,
+                            k,
+                            args.seed,
+                            args.max_iter,
+                            args.tol,
+                            &protein_labels,
+                            tool,
+                        )
+                        .map(|r| r.recovered_flat),
+                    ),
+                    "nmf" => Some(load_nmf_fixture(&nmf_fixture, args.k).and_then(
                         |(nmf_pl, _, nmf_ab, nmf_k)| {
                             run_atman_native_nmf(&nmf_ab, nmf_k, args.seed, &nmf_pl, tool)
-                                .ok()
                                 .map(|r| r.recovered_flat)
                         },
+                    )),
+                    "missingness-ica" => Some(
+                        run_atman_native_mnar_ica(
+                            &abundance,
+                            k,
+                            args.seed,
+                            args.max_iter,
+                            args.tol,
+                            &protein_labels,
+                            tool,
+                        )
+                        .map(|r| r.recovered_flat),
                     ),
-                    "missingness-ica" => run_atman_native_mnar_ica(
-                        &abundance,
-                        k,
-                        args.seed,
-                        args.max_iter,
-                        args.tol,
-                        &protein_labels,
-                        tool,
-                    )
-                    .ok()
-                    .map(|r| r.recovered_flat),
                     _ => None,
                 }
             } else if let Some(d) = &args.adapters_dir {
-                run_external_adapter(tool, fixture, d, args.seed, k)
-                    .ok()
-                    .map(|r| r.recovered_flat)
+                Some(run_external_adapter(tool, fixture, d, args.seed, k).map(|r| r.recovered_flat))
             } else {
                 None
             };
             tr.determinism_score = match second_flat {
-                Some(ref s) if *s == tr.recovered_flat => 1.0,
-                Some(_) => 0.0,
                 None => f64::NAN,
+                Some(Ok(ref s)) if *s == tr.recovered_flat => 1.0,
+                Some(Ok(_)) => 0.0,
+                Some(Err(e)) => {
+                    eprintln!(
+                        "bench: determinism re-run of {tool} failed: {e:#}; recording determinism_score=0.0"
+                    );
+                    0.0
+                }
             };
         }
         rows.push(ToolEntry {
@@ -563,6 +575,19 @@ fn run_external_adapter(
     seed: u64,
     k: usize,
 ) -> Result<ToolRunResult> {
+    // The tool label is interpolated into a script filename and joined onto
+    // `adapters_dir`; reject anything that could escape that directory before
+    // it reaches the filesystem.
+    if tool.is_empty()
+        || tool.contains('/')
+        || tool.contains('\\')
+        || tool.contains("..")
+        || tool.contains('\0')
+    {
+        bail!(
+            "invalid adapter tool label {tool:?}: must not be empty or contain '/', '\\', '..', or NUL"
+        );
+    }
     let script = adapters_dir.join(format!("{tool}.sh"));
     if !script.exists() {
         bail!("adapter {script:?} does not exist");

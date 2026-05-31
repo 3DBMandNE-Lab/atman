@@ -140,12 +140,24 @@ stages:
         output_dir.to_str().unwrap(),
         "--allow-drift",
     ]);
+    let allowed_stderr = String::from_utf8_lossy(&allowed.stderr);
+    // --allow-drift must suppress the drift guard: the run gets past
+    // consistency checking and into stage execution.
     assert!(
-        allowed.status.success() || !allowed.status.success(),
-        "dry run; we only care that it doesn't error on drift detection"
+        !allowed_stderr.contains("plan content drift"),
+        "--allow-drift should suppress the drift error, got: {allowed_stderr}"
     );
-    // The second stage command is 'false' which exits 1; without --continue-on-error
-    // run should bail. We already asserted it handles drift; exit is orthogonal.
+    // The (only) stage runs `false`, which exits 1; without
+    // --continue-on-error the run must surface that stage failure.
+    assert!(
+        !allowed.status.success(),
+        "run should fail because stage `noop` (command `false`) exits non-zero"
+    );
+    assert!(
+        allowed_stderr.contains("stage noop exited")
+            || allowed_stderr.contains("one or more stages failed"),
+        "expected a stage-failure message, got: {allowed_stderr}"
+    );
 }
 
 #[test]

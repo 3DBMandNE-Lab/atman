@@ -155,7 +155,7 @@ struct ManifestRow {
 }
 
 fn execute_stage(stage: &Stage, cwd: &Path, plan: &Plan, plan_hash: &str) -> Result<ManifestRow> {
-    let input_hash = hash_paths(cwd, &stage.inputs);
+    let input_hash = hash_paths(cwd, &stage.inputs)?;
     let start = Instant::now();
     let started_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -174,7 +174,7 @@ fn execute_stage(stage: &Stage, cwd: &Path, plan: &Plan, plan_hash: &str) -> Res
         eprintln!("--- stage {} stderr ---", stage.id);
         eprintln!("{}", String::from_utf8_lossy(&output.stderr).trim_end());
     }
-    let output_hash = hash_paths(cwd, &stage.outputs);
+    let output_hash = hash_paths(cwd, &stage.outputs)?;
     Ok(ManifestRow {
         plan_name: plan.name.clone(),
         plan_commit: plan.plan_commit.clone().unwrap_or_default(),
@@ -196,19 +196,19 @@ fn execute_stage(stage: &Stage, cwd: &Path, plan: &Plan, plan_hash: &str) -> Res
     })
 }
 
-fn hash_paths(cwd: &Path, paths: &[String]) -> String {
+fn hash_paths(cwd: &Path, paths: &[String]) -> Result<String> {
     if paths.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
     // Sort for determinism; hash concatenation of (relative path, file hash).
     let mut parts: Vec<(String, String)> = paths
         .iter()
         .map(|p| {
             let abs = cwd.join(p);
-            let hash = hash_file_or_missing(&abs);
-            (p.clone(), hash)
+            let hash = hash_file_or_missing(&abs)?;
+            Ok((p.clone(), hash))
         })
-        .collect();
+        .collect::<Result<_>>()?;
     parts.sort();
     let mut buf = Vec::new();
     for (path, file_hash) in parts {
@@ -217,13 +217,19 @@ fn hash_paths(cwd: &Path, paths: &[String]) -> String {
         buf.extend_from_slice(file_hash.as_bytes());
         buf.push(b'\n');
     }
-    sha256_hex(&buf)
+    Ok(sha256_hex(&buf))
 }
 
-fn hash_file_or_missing(path: &Path) -> String {
+/// Hash a declared input/output. A genuinely absent path hashes to the
+/// sentinel `"MISSING"`; any other I/O error (permission denied, corrupted
+/// read) is propagated rather than masquerading as an absent file, so a
+/// manifest never silently records `"MISSING"` for a file that exists but
+/// could not be read.
+fn hash_file_or_missing(path: &Path) -> Result<String> {
     match std::fs::read(path) {
-        Ok(bytes) => sha256_hex(&bytes),
-        Err(_) => "MISSING".to_string(),
+        Ok(bytes) => Ok(sha256_hex(&bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("MISSING".to_string()),
+        Err(e) => Err(e).with_context(|| format!("hashing declared path {:?}", path)),
     }
 }
 
@@ -328,8 +334,8 @@ stages:
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a"), "one").unwrap();
         std::fs::write(tmp.path().join("b"), "two").unwrap();
-        let h1 = hash_paths(tmp.path(), &["a".to_string(), "b".to_string()]);
-        let h2 = hash_paths(tmp.path(), &["b".to_string(), "a".to_string()]);
+        let h1 = hash_paths(tmp.path(), &["a".to_string(), "b".to_string()]).unwrap();
+        let h2 = hash_paths(tmp.path(), &["b".to_string(), "a".to_string()]).unwrap();
         assert_eq!(h1, h2);
     }
 }

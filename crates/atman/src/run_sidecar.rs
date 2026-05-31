@@ -19,6 +19,17 @@
 //! Re-exported from `crate::io` so callers can write
 //! `use crate::io::write_run_sidecar;` in the same spirit as the other TSV
 //! helpers.
+//!
+//! ## The sidecar is provenance metadata, not a reproducible output
+//!
+//! Each sidecar embeds a fresh per-run `run_uuid` and wall-clock
+//! `started_at`/`finished_at` timestamps, so the sidecar file is
+//! deliberately **not** byte-identical across runs even when the analysis
+//! is fully deterministic. Byte-for-byte reproduction checks must compare
+//! the command's *primary outputs* (the TSVs, whose hashes the sidecar
+//! records under `output_files`), never the sidecar itself. The sidecar
+//! answers "how was this produced"; the `output_files` hashes answer "did
+//! it reproduce."
 
 use std::{
     collections::BTreeMap,

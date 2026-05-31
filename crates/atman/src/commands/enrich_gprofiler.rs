@@ -138,6 +138,12 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
         .with_context(|| format!("creating cache dir {:?}", args.cache_dir))?;
 
     let mut all_rows: Vec<GprofilerRow> = Vec::new();
+    // Per-query provenance of the g:Profiler response that actually produced
+    // the output. The response (cached or live) is the true input to parsing,
+    // so its hash belongs in the sidecar alongside the file inputs — otherwise
+    // two runs with identical `inputs_sha256` could yield different enrichment
+    // from a changed cache file or a drifted live API, with no audit signal.
+    let mut response_provenance: Vec<Value> = Vec::new();
     for (query_name, genes) in queries {
         let genes_sorted: Vec<String> = genes
             .iter()
@@ -158,7 +164,8 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
         };
         let key = cache_key(&canonical);
         let cache_path = args.cache_dir.join(format!("{key}.json"));
-        let response_json = if cache_path.exists() {
+        let from_cache = cache_path.exists();
+        let response_json = if from_cache {
             std::fs::read_to_string(&cache_path)
                 .with_context(|| format!("reading cache {:?}", cache_path))?
         } else if args.offline {
@@ -174,6 +181,12 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
             atomic_write(&cache_path, response.as_bytes())?;
             response
         };
+        response_provenance.push(json!({
+            "query": query_name,
+            "cache_key": key,
+            "response_sha256": format!("sha256:{}", sha256_hex(response_json.as_bytes())),
+            "from_cache": from_cache,
+        }));
         let parsed: Value = serde_json::from_str(&response_json)
             .with_context(|| format!("parsing g:Profiler JSON from {:?}", cache_path))?;
         let rows = parse_response(&query_name, &parsed)?;
@@ -202,6 +215,11 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
         input_entries.push(("query-tsv", p.as_path()));
     }
     let inputs_sha256 = hash_labeled_inputs(&input_entries)?;
+    let mut extras = serde_json::Map::new();
+    extras.insert(
+        "gprofiler_responses".to_string(),
+        Value::Array(response_provenance),
+    );
     let sidecar = sidecar_path_for(&args.output);
     write_run_sidecar(
         &sidecar,
@@ -225,7 +243,7 @@ pub fn run_gprofiler(args: GprofilerArgs) -> Result<()> {
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-        None,
+        Some(extras),
     )?;
     eprintln!("enrich gprofiler: sidecar={}", sidecar.display());
     Ok(())
@@ -242,6 +260,13 @@ fn build_request_body(req: &CanonicalRequest) -> String {
         "all_results": false,
         "ordered": false,
         "no_iea": false,
+        // Pin evidence retrieval explicitly rather than relying on the
+        // upstream default: we populate the `intersections` output column, so
+        // intersecting genes must be returned. Making this deterministic also
+        // means the parser can treat a missing `intersections` for a term with
+        // `intersection_size > 0` as a hard error (lost data) instead of
+        // silently emitting an empty cell.
+        "no_evidences": false,
         "combined": false,
         "measure_underrepresentation": false,
         "domain_scope": "custom",
@@ -436,44 +461,44 @@ fn parse_response(query_name: &str, root: &Value) -> Result<Vec<GprofilerRow>> {
         .and_then(|v| v.as_array())
         .with_context(|| format!("g:Profiler response missing `result` array for {query_name}"))?;
     let mut out = Vec::with_capacity(results.len());
-    for entry in results {
+    for (idx, entry) in results.iter().enumerate() {
+        // `query` may legitimately be omitted by g:Profiler (single-query
+        // submissions echo nothing back); fall back to the caller's name.
+        // Every other field is load-bearing for the output row, so a missing
+        // or wrong-typed value is a hard error rather than a silent default
+        // (empty string / NaN / 0), which would corrupt enrichment results
+        // without any audit signal.
         let query = entry
             .get("query")
             .and_then(|v| v.as_str())
             .unwrap_or(query_name);
-        let source = entry.get("source").and_then(|v| v.as_str()).unwrap_or("");
-        let native = entry.get("native").and_then(|v| v.as_str()).unwrap_or("");
-        let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let p_value = entry
-            .get("p_value")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(f64::NAN);
-        let intersection_size = entry
-            .get("intersection_size")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        let query_size = entry
-            .get("query_size")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        let term_size = entry.get("term_size").and_then(|v| v.as_i64()).unwrap_or(0);
-        let effective_domain_size = entry
-            .get("effective_domain_size")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        let intersections = entry
-            .get("intersections")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_array())
-                    .flat_map(|inner| inner.iter().filter_map(|s| s.as_str()))
-                    .collect::<BTreeSet<&str>>()
-                    .into_iter()
-                    .collect::<Vec<_>>()
-                    .join(";")
-            })
-            .unwrap_or_default();
+        let source = require_str(entry, "source", query_name, idx)?;
+        let native = require_str(entry, "native", query_name, idx)?;
+        let name = require_str(entry, "name", query_name, idx)?;
+        let p_value = require_f64(entry, "p_value", query_name, idx)?;
+        let intersection_size = require_i64(entry, "intersection_size", query_name, idx)?;
+        let query_size = require_i64(entry, "query_size", query_name, idx)?;
+        let term_size = require_i64(entry, "term_size", query_name, idx)?;
+        let effective_domain_size =
+            require_i64(entry, "effective_domain_size", query_name, idx)?;
+        // With `no_evidences: false` in the request, any term with a non-zero
+        // intersection must carry an `intersections` array; a missing or
+        // wrong-typed value there is silent data loss, so it is a hard error.
+        // An empty intersection (size 0) legitimately has no array.
+        let intersections = match entry.get("intersections").and_then(|v| v.as_array()) {
+            Some(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_array())
+                .flat_map(|inner| inner.iter().filter_map(|s| s.as_str()))
+                .collect::<BTreeSet<&str>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(";"),
+            None if intersection_size > 0 => bail!(
+                "g:Profiler result[{idx}] for query {query:?} reports intersection_size={intersection_size} but has no `intersections` array; request must set no_evidences=false"
+            ),
+            None => String::new(),
+        };
         out.push(GprofilerRow {
             query: query.to_string(),
             source: source.to_string(),
@@ -488,6 +513,24 @@ fn parse_response(query_name: &str, root: &Value) -> Result<Vec<GprofilerRow>> {
         });
     }
     Ok(out)
+}
+
+fn require_str<'a>(entry: &'a Value, field: &str, query: &str, idx: usize) -> Result<&'a str> {
+    entry.get(field).and_then(|v| v.as_str()).with_context(|| {
+        format!("g:Profiler result[{idx}] for query {query:?} missing string field `{field}`")
+    })
+}
+
+fn require_f64(entry: &Value, field: &str, query: &str, idx: usize) -> Result<f64> {
+    entry.get(field).and_then(|v| v.as_f64()).with_context(|| {
+        format!("g:Profiler result[{idx}] for query {query:?} missing numeric field `{field}`")
+    })
+}
+
+fn require_i64(entry: &Value, field: &str, query: &str, idx: usize) -> Result<i64> {
+    entry.get(field).and_then(|v| v.as_i64()).with_context(|| {
+        format!("g:Profiler result[{idx}] for query {query:?} missing integer field `{field}`")
+    })
 }
 
 fn write_rows(path: &Path, rows: &[GprofilerRow]) -> Result<()> {

@@ -558,26 +558,29 @@ the plan content changes (unless `--allow-drift` is passed).
 
 ```yaml
 # plan.yaml
+name: dube_heat_2023
 plan_commit: "2026-04-20.v1"
 stages:
-  - name: ingest
+  - id: ingest
     inputs: [example_data/dube_heat_2023/*.csv]
     outputs: [out/samples.tsv, out/proteins.tsv, out/measurements.tsv]
-    cmd: >
+    command: >
       python3 adapters/generic/olink_explore_to_atman.py
       --output-dir out example_data/dube_heat_2023/*.csv
-  - name: de
+  - id: de
     inputs: [out/measurements.tsv, out/samples.tsv]
     outputs: [out/de_results.tsv, out/de_report.tsv]
-    cmd: >
+    command: >
       atman de --input-dir out --output-dir out
       --test paired-t
       --groups "PT1-PR1,PR2-PR1" --min-pairs 5
 ```
 
 ```bash
-atman run --plan plan.yaml --manifest out/plan_manifest.tsv
+atman run --plan plan.yaml --output-dir out
 ```
+
+The manifest is written to `<output-dir>/plan_manifest.tsv`.
 
 ## Decomposition: discovering protein programs
 

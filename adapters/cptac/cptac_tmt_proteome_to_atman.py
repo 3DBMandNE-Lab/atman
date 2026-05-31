@@ -184,6 +184,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Suppress per-cohort progress messages on stderr.",
     )
+    p.add_argument(
+        "--allow-missing-values",
+        action="store_true",
+        help=(
+            "Tolerate structurally bad cells (rows shorter than the header, "
+            "non-numeric abundance values) by skipping them. Without this "
+            "flag such cells are a hard error. Blank cells (genuinely absent "
+            "TMT measurements) are always skipped and only counted."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -322,79 +332,132 @@ def main(argv: list[str] | None = None) -> int:
     proteins_path = args.output_dir / "proteins.tsv"
     measurements_path = args.output_dir / "measurements.tsv"
 
-    with samples_path.open("w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f, delimiter="\t", lineterminator="\n")
-        w.writerow(SAMPLES_HEADER)
-        for order, sample_id in enumerate(sample_ids, start=1):
-            condition, subject_id = assign_condition_subject(
-                sample_id,
-                sample_id_regex,
-                condition_key_map,
-                args.default_condition,
-            )
-            w.writerow([sample_id, subject_id, condition, 0, "tissue", order])
+    # Write to temp files and promote atomically only on success: a
+    # strict-mode failure (SystemExit) mid-stream must not leave partial or
+    # orphaned canonical outputs behind for a downstream `atman validate`.
+    samples_tmp = samples_path.with_name(samples_path.name + ".tmp")
+    proteins_tmp = proteins_path.with_name(proteins_path.name + ".tmp")
+    measurements_tmp = measurements_path.with_name(measurements_path.name + ".tmp")
 
     panel = f"CPTAC_{args.tumor_tag}"
     proteins_seen: set[str] = set()
     measurement_order = 0
-    with proteins_path.open("w", encoding="utf-8", newline="") as fp, \
-         measurements_path.open("w", encoding="utf-8", newline="") as fm:
-        wp = csv.writer(fp, delimiter="\t", lineterminator="\n")
-        wm = csv.writer(fm, delimiter="\t", lineterminator="\n")
-        wp.writerow(PROTEINS_HEADER)
-        wm.writerow(MEASUREMENTS_HEADER)
-        for row in rows:
-            if not row:
-                continue
-            gene_symbol = row[gene_idx].strip()
-            if gene_symbol in summary_labels or not gene_symbol:
-                continue
-            assay_id = (
-                row[ncbi_idx].strip() if ncbi_idx is not None and len(row) > ncbi_idx
-                else gene_symbol
-            )
-            if not assay_id:
-                assay_id = gene_symbol
-            if assay_id not in proteins_seen:
-                wp.writerow([args.platform, assay_id, "", gene_symbol, panel, ""])
-                proteins_seen.add(assay_id)
-            for col_idx, sample_id in kept_cols:
-                if col_idx >= len(row):
-                    continue
-                cell = row[col_idx].strip()
-                if not cell:
-                    continue
-                try:
-                    value = float(cell)
-                except ValueError:
-                    continue
-                measurement_order += 1
-                wm.writerow(
-                    [
-                        args.platform,
-                        sample_id,
-                        assay_id,
-                        gene_symbol,
-                        panel,
-                        cell,
-                        f"{value:.10g}",
-                        f"{value:.10g}",
-                        args.abundance_unit,
-                        "PASS",
-                        "PASS",
-                        "",
-                        0,
-                        0,
-                        "",
-                        "",
-                        measurement_order,
-                    ]
+    blank_cells = 0  # genuinely absent TMT values; always skipped, only counted
+    short_cells = 0  # row shorter than the sample column index
+    nonnumeric_cells = 0  # value present but not parseable as a float
+    promoted: list = []  # canonical paths already moved into place, for rollback
+    try:
+        with samples_tmp.open("w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f, delimiter="\t", lineterminator="\n")
+            w.writerow(SAMPLES_HEADER)
+            for order, sample_id in enumerate(sample_ids, start=1):
+                condition, subject_id = assign_condition_subject(
+                    sample_id,
+                    sample_id_regex,
+                    condition_key_map,
+                    args.default_condition,
                 )
+                w.writerow([sample_id, subject_id, condition, 0, "tissue", order])
+
+        with proteins_tmp.open("w", encoding="utf-8", newline="") as fp, \
+             measurements_tmp.open("w", encoding="utf-8", newline="") as fm:
+            wp = csv.writer(fp, delimiter="\t", lineterminator="\n")
+            wm = csv.writer(fm, delimiter="\t", lineterminator="\n")
+            wp.writerow(PROTEINS_HEADER)
+            wm.writerow(MEASUREMENTS_HEADER)
+            for row in rows:
+                if not row:
+                    continue
+                gene_symbol = row[gene_idx].strip()
+                if gene_symbol in summary_labels or not gene_symbol:
+                    continue
+                assay_id = (
+                    row[ncbi_idx].strip() if ncbi_idx is not None and len(row) > ncbi_idx
+                    else gene_symbol
+                )
+                if not assay_id:
+                    assay_id = gene_symbol
+                if assay_id not in proteins_seen:
+                    wp.writerow([args.platform, assay_id, "", gene_symbol, panel, ""])
+                    proteins_seen.add(assay_id)
+                for col_idx, sample_id in kept_cols:
+                    if col_idx >= len(row):
+                        short_cells += 1
+                        if not args.allow_missing_values:
+                            raise SystemExit(
+                                f"[{args.tumor_tag}] row for assay {assay_id!r} has "
+                                f"{len(row)} fields but sample {sample_id!r} is at "
+                                f"column {col_idx}; pass --allow-missing-values to skip "
+                                f"structurally short rows"
+                            )
+                        continue
+                    cell = row[col_idx].strip()
+                    if not cell:
+                        blank_cells += 1
+                        continue
+                    try:
+                        value = float(cell)
+                    except ValueError:
+                        nonnumeric_cells += 1
+                        if not args.allow_missing_values:
+                            raise SystemExit(
+                                f"[{args.tumor_tag}] non-numeric abundance {cell!r} for "
+                                f"assay {assay_id!r} sample {sample_id!r}; pass "
+                                f"--allow-missing-values to skip such cells"
+                            )
+                        continue
+                    measurement_order += 1
+                    wm.writerow(
+                        [
+                            args.platform,
+                            sample_id,
+                            assay_id,
+                            gene_symbol,
+                            panel,
+                            cell,
+                            f"{value:.10g}",
+                            f"{value:.10g}",
+                            args.abundance_unit,
+                            "PASS",
+                            "PASS",
+                            "",
+                            0,
+                            0,
+                            "",
+                            "",
+                            measurement_order,
+                        ]
+                    )
+
+        # All three files written cleanly — promote them into place. Track
+        # which canonicals were promoted so a failure partway through the
+        # (non-atomic, per-file) replaces can be rolled back to all-or-nothing.
+        for tmp, final in (
+            (samples_tmp, samples_path),
+            (proteins_tmp, proteins_path),
+            (measurements_tmp, measurements_path),
+        ):
+            tmp.replace(final)
+            promoted.append(final)
+    except BaseException:
+        # Strict-mode SystemExit or any other failure (including a replace()
+        # that throws mid-promotion): remove any not-yet-promoted temps and
+        # roll back any canonicals already promoted in this run, so no partial
+        # set of outputs survives. SystemExit is a BaseException, so catch at
+        # that level rather than Exception.
+        for path in (samples_tmp, proteins_tmp, measurements_tmp, *promoted):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        raise
 
     if not args.quiet:
         print(
             f"[{args.tumor_tag}] wrote {samples_path}, {proteins_path}, "
-            f"{measurements_path} ({measurement_order} measurements, {len(proteins_seen)} proteins)",
+            f"{measurements_path} ({measurement_order} measurements, {len(proteins_seen)} proteins; "
+            f"skipped {blank_cells} blank, {short_cells} short-row, "
+            f"{nonnumeric_cells} non-numeric cells)",
             file=sys.stderr,
         )
     return 0
