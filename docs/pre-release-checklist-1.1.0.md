@@ -51,14 +51,16 @@ host, and the repo is local-only so CI has never actually run.
       `absence-topology`, `recover-plex`, `robust-paired`). Every documented
       claim, default, output column, and skip/fail condition was checked. The
       one overclaim found is fixed (detectability does a logistic regression, not
-      a "contingency" test). **Your remaining call:** confirm the descriptions
-      match *intent* (the precision is now verified; the science is yours).
-      Non-blocking polish noted by the audit (optional): docs omit a few flags
-      (`detectability --q-threshold`/`--design`/`--max-iter`/`--tol`,
-      `recover-plex --expected-cluster-size`, `robust-paired --min-pairs`
-      default), two diagnostic enum values (`single_cluster`,
-      `no_clusterable_proteins`), the stem-derived `*_quality.tsv` filenames, and
-      that `recover-plex --infer-pairs` needs numeric sample-id stems.
+      a "contingency" test). The non-blocking polish is also done: recipes.md now
+      documents the previously-omitted flags (`detectability`
+      `--q-threshold`/`--design`/`--max-iter`/`--tol`, `recover-plex`
+      `--expected-cluster-size`, `robust-paired --min-pairs`), the missing
+      diagnostic values (`single_cluster`, `no_clusterable_proteins`), the
+      stem-derived `*_quality.tsv` / `*_pairs.tsv` / `*_summary.tsv` filenames,
+      the `--infer-pairs` numeric-stem requirement + synthetic `pair_NNNN` ids,
+      and the strict-failure hard-error paths. **Your remaining call:** confirm
+      the descriptions match *intent* (the precision is now verified; the science
+      is yours).
 - [x] **Behavior changes release-noted** — CHANGELOG `[1.1.0]` Changed/Fixed
       sections cover RNG output changes (regenerate cached outputs), strict QC,
       `recover-plex --infer-pairs` hard-fail, and the stricter ensemble grade;
