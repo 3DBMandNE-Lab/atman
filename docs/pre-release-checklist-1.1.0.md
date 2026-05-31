@@ -45,32 +45,47 @@ host, and the repo is local-only so CI has never actually run.
 - [ ] If/when a remote is added: push and confirm `.github/workflows/ci.yml`
       goes green with the 1.94 toolchain + thread-pinning env.
 
-## 4. Decisions only you can make
+## 4. Decisions only you can make — LARGELY DONE (2026-05-30)
 
-- [ ] **Domain sign-off on the four new commands' docs.** Their CHANGELOG and
-      `docs/recipes.md` descriptions (`detectability`, `absence-topology`,
-      `recover-plex`, `robust-paired`) were written from reading the code —
-      confirm they match intent before publishing.
-- [ ] **Release-note the behavior changes** so users aren't surprised:
-      - RNG unification changes absolute outputs of `null`, `bootstrap`,
-        `ratio`, `decompose null`, `decompose unmix --n-boot`, GSEA permutation,
-        `align bootstrap`, Dunnett-Hsu MC (same-seed reruns still
-        byte-identical) → regenerate any cached outputs from those commands.
-      - Strict QC parsing now errors on unrecognized `qc_sample`/`qc_assay`.
-      - `recover-plex --infer-pairs` now hard-fails on a coherent plex.
-      - `de --test ensemble` grading is stricter (method agreement, not the
-        combined p) — fewer VALIDATED calls.
-- [ ] **clippy denial policy** (see §2).
+- [x] **Docs verified against code** for the four new commands (`detectability`,
+      `absence-topology`, `recover-plex`, `robust-paired`). Every documented
+      claim, default, output column, and skip/fail condition was checked. The
+      one overclaim found is fixed (detectability does a logistic regression, not
+      a "contingency" test). **Your remaining call:** confirm the descriptions
+      match *intent* (the precision is now verified; the science is yours).
+      Non-blocking polish noted by the audit (optional): docs omit a few flags
+      (`detectability --q-threshold`/`--design`/`--max-iter`/`--tol`,
+      `recover-plex --expected-cluster-size`, `robust-paired --min-pairs`
+      default), two diagnostic enum values (`single_cluster`,
+      `no_clusterable_proteins`), the stem-derived `*_quality.tsv` filenames, and
+      that `recover-plex --infer-pairs` needs numeric sample-id stems.
+- [x] **Behavior changes release-noted** — CHANGELOG `[1.1.0]` Changed/Fixed
+      sections cover RNG output changes (regenerate cached outputs), strict QC,
+      `recover-plex --infer-pairs` hard-fail, and the stricter ensemble grade;
+      trust-boundary changes are in `SECURITY.md`.
+- [x] **clippy denial policy** — resolved by making `-D warnings` clean (§2).
 
-## 5. Not done — out of scope for the fix campaign
+## 5. Security / supply chain — DONE (2026-05-30)
 
-- [ ] Security review of input parsing / file handling.
-- [ ] Fuzzing of the TSV readers.
-- [ ] SBOM generation + dependency/license-compliance audit (note: `statrs`
-      pulls `nalgebra` + `rand 0.8` transitively, both unused — documented and
-      consciously retained; see `docs/analytical-roadmap.md` "Dependency notes").
-- [ ] Confirm `README.pdf` / `mdpdf.log` (gitignored, untracked) are not
-      shipped in any release artifact.
+- [x] **Security review** of input parsing / paths / network / `run`. No
+      CRITICAL/HIGH; no `unsafe`. Fixed the one MEDIUM (data-derived output
+      filename path-traversal in `write_wide_panel`/`write_fold_change_panel`,
+      now sanitized + regression-tested). Trust model documented in `SECURITY.md`.
+- [x] **Adversarial-input robustness** — `crates/atman/tests/adversarial_input.rs`
+      (ragged/missing-column/binary/truncated/empty → graceful error, no panic),
+      plus a `fuzz/` cargo-fuzz scaffold for the TSV readers. **Remaining:** run
+      `cargo +nightly fuzz run <target>` in CI (needs nightly; see `fuzz/README.md`).
+- [x] **SBOM + license audit** — `docs/sbom-1.1.0.cdx.json` (CycloneDX,
+      179 components); all transitive licenses permissive (MIT/Apache/BSD/ISC/
+      Zlib/Unicode), no copyleft. `cargo audit` run.
+- [x] **`README.pdf` / `mdpdf.log`** confirmed untracked + gitignored — not shipped.
+- [ ] **`cargo audit` advisories — your call.** Two findings, both transitive via
+      `statrs → nalgebra` and **unreachable from atman** (RUSTSEC-2026-0097
+      `rand` unsoundness via a path atman never calls; RUSTSEC-2024-0436 `paste`
+      unmaintained). Options: accept + scope them in a `cargo-deny`/`cargo-audit`
+      CI gate with the justification in `SECURITY.md`, or drop/replace `statrs`
+      to shed `nalgebra`/`rand` (larger change). Recommend accept-and-scope for
+      1.1.0.
 
 ## 6. Publish mechanics (when 2–4 are satisfied)
 
