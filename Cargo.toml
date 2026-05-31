@@ -1,5 +1,8 @@
 [workspace]
 members = ["crates/atman-core", "crates/atman"]
+# `fuzz/` is a cargo-fuzz project requiring a nightly toolchain + libfuzzer; it
+# is its own workspace and excluded from the stable `--workspace` build/test.
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]
