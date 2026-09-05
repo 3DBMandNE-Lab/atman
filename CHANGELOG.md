@@ -40,11 +40,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`axes contrast`** skips bootstrap replicates whose resample leaves a
   categorical term with a single level (new `boot_n_skipped` column)
   instead of aborting.
+- **`atman run`**: `vars:` with `${name}` substitution, `--dry-run`
+  validation (input provenance across stages), a trailing `sidecar_hash`
+  manifest column hashing each output's `.run.json`, and
+  `--strict-outputs` (default on) failing a stage whose declared output is
+  missing.
+- **`atman scale absolute`**: per-sample total-protein rescaling
+  (`a − log2(Σ 2^a) + log2(total_protein)`) for Reiber-style exponents.
+- **`atman axes icc`**: one-way random-effects ICC(1) with unbalanced `k0`.
+- **`atman axes tree`** and **`atman concordance --tree-*`**: average-linkage
+  trees (cosine or Euclidean over displacement/centroid leaves; `1 −
+  Spearman` over effect tables) with bootstrap clade support, scipy-style
+  linkage tables, and Newick output.
+- **`atman enrich ora --query-tsv`**: hand-made gene lists (one family per
+  `query` value) against a `--universe`; output gains a trailing `query`
+  column.
+- **`atman de`**: `--require-cols` / `--require-numeric` sample filters.
+- **`atman score weighted --summary-only`**.
 
 ### Changed
 
 - `de_results.tsv` has two new trailing columns `n_a`, `n_b`; readers that
   index by header are unaffected.
+- `plan_manifest.tsv` (`atman run`) has a new trailing column
+  `sidecar_hash`, and a stage whose declared output is missing now records
+  `exit_code 2` and aborts unless `--strict-outputs false`.
+- `enrich ora` output has a new trailing column `query`.
 
 - **`atman decompose nmf --max-missing-fraction`** — drop assays whose
   missing-sample fraction exceeds a configurable threshold (default 0.0,

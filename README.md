@@ -168,7 +168,10 @@ atman axes groups        per-group score summaries, Kruskal–Wallis, reference-
 atman axes anchor        Spearman anchoring of scores to clinical covariates (bootstrap CI, partial)
 atman axes displacement  case-minus-control displacement vectors and pairwise cosines
 atman axes loco          leave-one-cohort-out stability of group centroids
-atman run                execute a plan YAML/JSON and emit a hash manifest
+atman axes icc           ICC(1) trait stability of scores across repeated samples
+atman axes tree          average-linkage tree of contrasts with bootstrap clade support (Newick)
+atman scale absolute     per-sample total-protein rescaling for Reiber-style exponents
+atman run                execute a plan YAML/JSON and emit a hash manifest (vars, --dry-run, sidecar hashes)
 ```
 
 **Data flow**
