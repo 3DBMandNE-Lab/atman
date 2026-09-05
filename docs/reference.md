@@ -83,34 +83,38 @@ genes, three signatures: up-loaded, down-loaded, scattered). All 12
 
 Non-negative matrix factorization via multiplicative updates (Brunet et al.
 2004). Recovers *k* non-negative latent protein programs whose product
-reconstructs the log-abundance matrix. Multi-seed stability framework assesses
+reconstructs the input matrix. Multi-seed stability framework assesses
 robustness across random initializations.
 
 **Flags:**
-- `--k <INT>` — fixed rank (overrides `--k-selection`)
-- `--k-selection <RULE>` — auto-selection rule: `cophenetic-knee` (default) or `rss-knee`
-- `--k-min <INT>` — minimum k for sweep (default 2)
-- `--k-max <INT>` — maximum k for sweep (default 8)
-- `--beta-loss <STR>` — loss function: `frobenius` (default, squared error) or `kullback-leibler`
-- `--init <STR>` — initialization: `random` (default), `nndsvd`, or `nndsvda`
-- `--solver <STR>` — update algorithm: `mu` (default, multiplicative updates)
-- `--max-iter <INT>` — iteration limit (default 500)
-- `--tol <FLOAT>` — convergence tolerance on reconstruction error (default 1e-4)
-- `--seed <INT>` — master PRNG seed for initialization and noise (default 42)
-- `--n-seeds <INT>` — number of independent runs (default 1)
-- `--min-stable-seed-fraction <FLOAT>` — fraction threshold for reporting stability (default 0.7)
-- `--stability-metric <STR>` — reproducibility metric: `cophenetic-correlation` (default) or `sihouette`
-- `--stability-top-n <INT>` — top *n* loadings to use for correlation (default 50)
+- `--k <INT>` — fixed rank; required when `--k-selection fixed` (the default)
+- `--k-selection <RULE>` — `fixed` (default, uses `--k`), `cophenetic-knee`, or `rss-knee`
+- `--k-min <INT>` — minimum k for the automatic sweep (≥ 2); required when `--k-selection` is not `fixed` (no default)
+- `--k-max <INT>` — maximum k for the automatic sweep (≤ 50, > `--k-min`); required when `--k-selection` is not `fixed` (no default)
+- `--beta-loss <STR>` — loss function: `frobenius` (default, squared error) or `kullback-leibler` (alias `kl`)
+- `--init <STR>` — initialization: `nndsvda` (default, deterministic) or `random`
+- `--solver <STR>` — update algorithm: `mu` (default; the only supported value — multiplicative updates)
+- `--max-iter <INT>` — iteration limit (default 400)
+- `--tol <FLOAT>` — convergence tolerance on the per-iteration change in Frobenius error (default 1e-6)
+- `--seed <INT>` — PRNG seed, used only when `--init random` (default 42)
+- `--n-seeds <INT>` — number of independent runs (default 1); `> 1` enables multi-seed stability filtering
+- `--seed-base <INT>` — base seed for multi-seed runs, `seed_i = seed_base + i` (default 42)
+- `--min-stable-seed-fraction <FLOAT>` — fraction of seeds a program must survive in to pass multi-seed filtering (default 0.9)
+- `--stability-metric <STR>` — reproducibility metric: `jaccard-top20` only (Jaccard overlap of the top-`--stability-top-n` loadings)
+- `--stability-top-n <INT>` — top *n* loadings used by the stability metric (default 20)
+- `--max-missing-fraction <FLOAT>` — drop assays whose missing-sample fraction exceeds this value (default 0.0, strict complete-case; mirrors `decompose ica`); the sidecar records the resolved value plus `n_assays_retained`/`n_assays_dropped_missingness`
+- `--transform <STR>` — pre-decomposition transform: `none` (default; NMF requires non-negative input and rejects negative values loudly), `exp2-clip` (`2^clamp(x, -c, +c)` — restores a non-negative ratio scale from log2-ratio input while winsorizing extreme tails), or `shift-min` (`x - min(X)` over the whole matrix — a sensitivity alternative to `exp2-clip`)
+- `--transform-clamp <FLOAT>` — clamp radius `c` for `--transform exp2-clip` (default 6.0 when omitted); only valid together with `--transform exp2-clip` — a hard error otherwise
 - `--output-loadings <PATH>` — protein weights per component (required)
-- `--output-activations <PATH>` — per-sample component activations (required)
-- `--output-stability <PATH>` — cross-seed reproducibility scores
-- `--output-k-sweep <PATH>` — k-selection diagnostic metrics
+- `--output-activations <PATH>` — per-sample component activations (optional)
+- `--output-stability <PATH>` — cross-seed reproducibility scores (written only when `--n-seeds > 1`)
+- `--output-k-sweep <PATH>` — k-selection diagnostic metrics (written only when `--k-selection` is automatic)
 
 **Output formats:**
-- `loadings.tsv`: rows are proteins, columns are components (0-indexed), header includes component indices
-- `activations.tsv`: rows are samples, columns are components; long format compatible with `--adjust-for`
-- `stability.tsv`: reproducibility metrics per component across seed pairs
-- `k_sweep.tsv`: k selection metrics (cophenetic, RSS) for each k tested
+- `loadings.tsv`: `program\tassay_id\tgene_symbol\tloading` (long format, one row per assay per program)
+- `activations.tsv`: `sample_id\tprogram\tactivation`; long format compatible with `--adjust-for`
+- `stability.tsv`: `program\tstable_seed_fraction\tn_seeds_present`
+- `k_sweep.tsv`: `k\tcophenetic\tmean_rss\tmean_kl\tselected`
 
 See `docs/recipes.md` for the canonical Fig 3 admixture-adjusted DE chain.
 
@@ -148,7 +152,15 @@ age,sex,batch` are passed, the design matrix is `~ condition +
 - `msqrob` — external covariates added to protein-level model
 - `ols` — design formula extended with external covariate columns
 - `mixed` — fixed-effects formula extended
-- `welch-t`, `paired-t` — covariates are silently ignored (unpairable design)
+- `welch-t` — routes to plain OLS internally, with the external covariates in
+  the design (no HC3 robust SE — that would require a new dependency)
+- `paired-t` — routes to a paired-difference ANCOVA: per-subject
+  `d = abundance_b − abundance_a` regressed via OLS on the per-subject
+  covariate differences (`d ~ 1 + Δcov_1 + ...`); the intercept is the
+  adjusted mean paired difference
+
+(see tests K6/K7 in `crates/atman/tests/de_adjust_for.rs`, which parity-check
+both routings against R references)
 
 **Sidecar:** `de_results.tsv.run.json` records `inputs_sha256` entry for the
 `--adjust-for` path and its input hash, enabling full reproducibility.
@@ -182,6 +194,50 @@ Sidecars for all `align` subcommands now record:
 This enables downstream auditing: readers can trace whether a set of aligned
 programs came from ICA, NMF, or a mixed ensemble, and reproduce the exact
 alignment parameters from the sidecar.
+
+**`align bootstrap --decomposition`:** per-resample decomposition method,
+applied identically to the point estimate, every bootstrap resample, and
+every jackknife replicate.
+- `--decomposition <STR>` — `ica` (default, FastICA, byte-identical to prior
+  releases) or `nmf` (single-seed multiplicative-updates NMF per resample)
+- `--beta-loss <STR>` — NMF loss: `frobenius` (default) or `kullback-leibler`
+  (alias `kl`). Ignored for `--decomposition ica`.
+- `--init <STR>` — NMF initialization: `random` (default, seeded from the
+  same SplitMix64 derivation the ICA branch uses) or `nndsvda`. Ignored for
+  `--decomposition ica`.
+- `--nmf-max-iter <INT>` — NMF max multiplicative-update iterations per seed
+  per cohort (default 500). Only used with `--decomposition nmf`.
+- `--nmf-tol <FLOAT>` — NMF convergence tolerance (default 1e-5). Only used
+  with `--decomposition nmf`.
+- `--transform <STR>` — pre-decomposition transform for `--decomposition
+  nmf`: `none` (default; requires non-negative input, rejected loudly
+  otherwise), `exp2-clip`, or `shift-min`. Re-applied fresh to every
+  per-resample matrix (point estimate, each bootstrap resample, each
+  jackknife replicate) rather than cached once. Ignored for `ica`.
+- `--transform-clamp <FLOAT>` — clamp radius `c` for `--transform exp2-clip`
+  (default 6.0 when omitted); only valid together with `--transform
+  exp2-clip` — a hard error otherwise.
+
+Non-finite (`NaN`/±∞) loadings from either decomposition are rejected loudly,
+naming the cohort and call site (point estimate / bootstrap iteration /
+jackknife replicate), rather than flowing silently into cosine similarity,
+archetype grouping, and the bootstrap/BCa accumulators downstream. The
+sidecar's `decomposition_method` echoes the `--decomposition` flag value, and
+`transform_clamp` records the *resolved* clamp (e.g. 6.0 when `--transform
+exp2-clip` is passed without an explicit `--transform-clamp`), not the raw,
+possibly-null CLI value.
+
+**`align project --transform`:** gains the NMF input transforms alongside the
+existing compositional ones. Valid values: `none`/`clr`/`alr`/`ratio-anchor`
+(compositional transforms; `ilr` is parsed but rejected in `align project` —
+it reorders coordinates so atlas labels would no longer line up with the
+transformed cohort columns) and `exp2-clip`/`shift-min` (the same NMF input
+transforms as `decompose nmf`, shared via `atman_core::nmf::apply_transform`).
+`--transform-clamp` follows the same rule as `decompose nmf` (only valid with
+`exp2-clip`, default 6.0 when omitted). `shift-min` always recomputes its
+shift on the cohort being projected — it does not reuse the atlas's
+training-time shift. The sidecar's `TransformRecord` fields (`transform_clamp`,
+`transform_shift`) record what was actually applied.
 
 ### Reference environment
 

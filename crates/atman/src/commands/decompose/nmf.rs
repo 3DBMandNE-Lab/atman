@@ -1,7 +1,8 @@
 use anyhow::{bail, Context, Result};
 use atman_core::nmf::{
-    multi_seed_nmf, nmf as nmf_core, select_k as nmf_select_k, BetaLoss, Init, KSelection,
-    MultiSeedConfig, NmfConfig, StabilityMetric as NmfStabilityMetric,
+    apply_transform, multi_seed_nmf, nmf as nmf_core, select_k as nmf_select_k, BetaLoss, Init,
+    KSelection, MultiSeedConfig, NmfConfig, StabilityMetric as NmfStabilityMetric, Transform,
+    DEFAULT_EXP2_CLIP_CLAMP,
 };
 use clap::Args as ClapArgs;
 use serde_json::json;
@@ -107,8 +108,22 @@ pub struct NmfArgs {
 
     /// Pre-decomposition transform. Default `none` (NMF requires non-negative
     /// input; atman will reject the input loudly if any value is < 0).
+    /// `exp2-clip`: `2^clamp(x, -c, +c)` (see `--transform-clamp`) — restores
+    /// a non-negative ratio scale from log2-ratio input while winsorizing
+    /// rare extreme tails. `shift-min`: `x - min(X)` over the whole matrix —
+    /// a sensitivity alternative to `exp2-clip`.
     #[arg(long, default_value = "none")]
     pub transform: String,
+
+    /// Clamp radius `c` for `--transform exp2-clip` (`2^clamp(x, -c, +c)`).
+    /// Only valid together with `--transform exp2-clip`; passing it with any
+    /// other `--transform` is a hard error. Default 6.0 when omitted.
+    #[arg(long)]
+    pub transform_clamp: Option<f64>,
+
+    /// Drop assays where the fraction of missing samples exceeds this value. 0 = strict complete-case.
+    #[arg(long, default_value_t = 0.0)]
+    pub max_missing_fraction: f64,
 }
 
 pub(super) fn nmf_run(args: NmfArgs) -> Result<()> {
@@ -220,8 +235,46 @@ pub(super) fn nmf_run(args: NmfArgs) -> Result<()> {
         bail!("need at least 2 samples for NMF, got {}", n_samples);
     }
 
-    let assay_order: Vec<String> = assay_meta.keys().cloned().collect();
+    if !(0.0..=1.0).contains(&args.max_missing_fraction) {
+        bail!("--max-missing-fraction must be in [0, 1]");
+    }
+
+    // Drop assays whose missing-sample fraction exceeds the configured
+    // threshold (same rule as `decompose ica`). The retained matrix must
+    // still be complete; any residual holes are caught by the dense-matrix
+    // build below.
+    let mut kept_assays: Vec<String> = Vec::new();
+    let mut n_assays_dropped_missingness = 0usize;
+    for assay in assay_meta.keys() {
+        let present = sample_order
+            .iter()
+            .filter(|s| abundance_by_key.contains_key(&(assay.clone(), (*s).clone())))
+            .count();
+        let missing_fraction = 1.0 - present as f64 / n_samples as f64;
+        if missing_fraction <= args.max_missing_fraction + 1e-12 {
+            kept_assays.push(assay.clone());
+        } else {
+            n_assays_dropped_missingness += 1;
+        }
+    }
+    if kept_assays.is_empty() {
+        bail!(
+            "no assays retained with --max-missing-fraction={} over {} samples in {:?}",
+            args.max_missing_fraction,
+            n_samples,
+            tsv
+        );
+    }
+    eprintln!(
+        "decompose nmf: retained {} assays, dropped {} for exceeding --max-missing-fraction={}",
+        kept_assays.len(),
+        n_assays_dropped_missingness,
+        args.max_missing_fraction
+    );
+
+    let assay_order: Vec<String> = kept_assays;
     let n_assays = assay_order.len();
+    let n_assays_retained = n_assays;
 
     if k_sel == KSelection::Fixed && k_fixed > n_samples.min(n_assays) {
         bail!(
@@ -249,29 +302,49 @@ pub(super) fn nmf_run(args: NmfArgs) -> Result<()> {
         }
     }
 
-    // ── apply transform (only "none" supported; validate non-negativity) ────
-    match args.transform.as_str() {
-        "none" => {
-            // Validate that all values are non-negative.
-            for (i, row) in data.iter().enumerate() {
-                for (j, &v) in row.iter().enumerate() {
-                    if v < 0.0 {
-                        bail!(
-                            "NMF (--transform none) requires non-negative input, but \
-                             sample={} assay={} has value {}. \
-                             Apply a non-negativity-preserving transform upstream \
-                             (e.g. shift to [0, ∞)) before calling decompose nmf.",
-                            sample_order[i], assay_order[j], v
-                        );
-                    }
+    // ── resolve --transform / --transform-clamp ─────────────────────────────
+    if args.transform_clamp.is_some() && args.transform != "exp2-clip" {
+        bail!(
+            "--transform-clamp is only valid together with --transform exp2-clip \
+             (got --transform {:?})",
+            args.transform
+        );
+    }
+    if let Some(c) = args.transform_clamp {
+        if !(c.is_finite() && c > 0.0) {
+            bail!("--transform-clamp must be finite and > 0, got {}", c);
+        }
+    }
+    let transform = match args.transform.as_str() {
+        "none" => Transform::None,
+        "exp2-clip" => Transform::Exp2Clip {
+            clamp: args.transform_clamp.unwrap_or(DEFAULT_EXP2_CLIP_CLAMP),
+        },
+        "shift-min" => Transform::ShiftMin,
+        other => bail!(
+            "--transform {:?}: expected `none`, `exp2-clip`, or `shift-min`",
+            other
+        ),
+    };
+
+    // ── apply transform (no-op for "none"); validate non-negativity ────────
+    let transform_record = apply_transform(&mut data, &transform);
+    if args.transform == "none" {
+        for (i, row) in data.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                if v < 0.0 {
+                    bail!(
+                        "NMF (--transform none) requires non-negative input, but \
+                         sample={} assay={} has value {}. \
+                         Apply a non-negativity-preserving transform upstream \
+                         (e.g. shift to [0, ∞)) before calling decompose nmf.",
+                        sample_order[i],
+                        assay_order[j],
+                        v
+                    );
                 }
             }
         }
-        other => bail!(
-            "--transform {:?}: only `none` is supported for decompose nmf in this release. \
-             CLR/log are not appropriate without thought; ensure your input is already non-negative.",
-            other
-        ),
     }
 
     // ── validate multi-seed args ────────────────────────────────────────────
@@ -704,6 +777,11 @@ pub(super) fn nmf_run(args: NmfArgs) -> Result<()> {
             "stability-metric": args.stability_metric,
             "stability-top-n": args.stability_top_n,
             "transform": args.transform,
+            "transform_clamp": transform_record.clamp,
+            "transform_shift": transform_record.shift,
+            "max-missing-fraction": args.max_missing_fraction,
+            "n_assays_retained": n_assays_retained,
+            "n_assays_dropped_missingness": n_assays_dropped_missingness,
             "output-loadings": args.output_loadings.display().to_string(),
             "output-activations": args.output_activations.as_ref().map(|p| p.display().to_string()),
             "output-stability": args.output_stability.as_ref().map(|p| p.display().to_string()),

@@ -36,7 +36,7 @@ pub mod types;
 pub mod variance_decomposition;
 
 pub use align_bootstrap::{
-    align_bootstrap, resample_rows, BootstrapParams, BootstrapRow, CohortMatrix,
+    align_bootstrap, resample_rows, BootstrapParams, BootstrapRow, CohortMatrix, Decomposition,
 };
 pub use compositional::{apply_transform, Transform};
 pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};

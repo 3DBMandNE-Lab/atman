@@ -1,8 +1,14 @@
 use anyhow::{bail, Context, Result};
 use atman_core::align::{build_archetypes, summarize_archetypes, AlignMetric, AlignedProgram};
-use atman_core::align_bootstrap::{align_bootstrap, BootstrapParams, BootstrapRow, CohortMatrix};
+use atman_core::align_bootstrap::{
+    align_bootstrap, BootstrapParams, BootstrapRow, CohortMatrix, Decomposition,
+};
 use atman_core::align_project::{project, Atlas, ProjectionMethod};
 use atman_core::compositional::{apply_transform, Transform};
+use atman_core::nmf::{
+    apply_transform as apply_nmf_transform, BetaLoss, Init, Transform as NmfTransform,
+    TransformRecord as NmfTransformRecord, DEFAULT_EXP2_CLIP_CLAMP,
+};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use csv::ReaderBuilder;
 use serde_json::json;
@@ -265,6 +271,50 @@ pub struct BootstrapArgs {
     #[arg(long, default_value_t = 0.05)]
     ci_alpha: f64,
 
+    /// Per-resample decomposition method. `ica` (default) is FastICA,
+    /// byte-identical to prior releases. `nmf` runs single-seed
+    /// multiplicative-updates NMF per resample instead — applied
+    /// identically to the point estimate, every bootstrap resample,
+    /// and every jackknife replicate.
+    #[arg(long, default_value = "ica")]
+    decomposition: String,
+
+    /// Beta-divergence loss for `--decomposition nmf`: `frobenius`
+    /// (default) or `kullback-leibler` (alias `kl`). Ignored for `ica`.
+    #[arg(long, default_value = "frobenius")]
+    beta_loss: String,
+
+    /// NMF initialization strategy for `--decomposition nmf`: `random`
+    /// (default, seeded from the same SplitMix64 derivation the ICA
+    /// branch uses) or `nndsvda`. Ignored for `ica`.
+    #[arg(long, default_value = "random")]
+    init: String,
+
+    /// NMF max multiplicative-update iterations per seed per cohort.
+    /// Only used with `--decomposition nmf`.
+    #[arg(long, default_value_t = 500)]
+    nmf_max_iter: usize,
+
+    /// NMF convergence tolerance. Only used with `--decomposition nmf`.
+    #[arg(long, default_value_t = 1e-5)]
+    nmf_tol: f64,
+
+    /// Pre-decomposition transform for `--decomposition nmf`: `none`
+    /// (default; requires non-negative input — rejected loudly
+    /// otherwise), `exp2-clip`, or `shift-min`. Re-applied fresh to
+    /// every per-resample matrix (point estimate, each bootstrap
+    /// resample, each jackknife replicate) rather than cached once.
+    /// Ignored for `ica`.
+    #[arg(long, default_value = "none")]
+    transform: String,
+
+    /// Clamp radius `c` for `--transform exp2-clip`
+    /// (`2^clamp(x, -c, +c)`). Only valid together with `--transform
+    /// exp2-clip`; passing it with any other `--transform` is a hard
+    /// error. Default 6.0 when omitted.
+    #[arg(long)]
+    transform_clamp: Option<f64>,
+
     /// Output TSV path. Summary with one row per point-estimate
     /// archetype.
     #[arg(long)]
@@ -352,6 +402,69 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         "spearman" => AlignMetric::Spearman,
         other => bail!("--metric {other:?}; expected cosine, jaccard, or spearman"),
     };
+    // Resolved effective `--transform-clamp`, for the sidecar's provenance
+    // record (the RESOLVED parameter set — `Some(DEFAULT_EXP2_CLIP_CLAMP)`
+    // when `--transform exp2-clip` is used without an explicit clamp, not
+    // the raw possibly-`None` flag value). Stays `None` for `--transform
+    // none`/`shift-min` (no clamp is in effect) and for `--decomposition
+    // ica` (transform is not applied at all).
+    let mut resolved_transform_clamp: Option<f64> = None;
+    let decomposition = match args.decomposition.as_str() {
+        "ica" => Decomposition::Ica {
+            max_iter: args.max_iter,
+            tol: args.tol,
+        },
+        "nmf" => {
+            let beta_loss = match args.beta_loss.as_str() {
+                "frobenius" => BetaLoss::Frobenius,
+                "kullback-leibler" | "kl" => BetaLoss::KullbackLeibler,
+                other => bail!(
+                    "--beta-loss {:?}: expected `frobenius` or `kullback-leibler`",
+                    other
+                ),
+            };
+            let init = match args.init.as_str() {
+                "nndsvda" => Init::Nndsvda,
+                "random" => Init::Random,
+                other => bail!("--init {:?}: expected `nndsvda` or `random`", other),
+            };
+            // Same `--transform-clamp` validation rule as `decompose nmf`:
+            // explicit value rejected unless `--transform exp2-clip`.
+            if args.transform_clamp.is_some() && args.transform != "exp2-clip" {
+                bail!(
+                    "--transform-clamp is only valid together with --transform exp2-clip \
+                     (got --transform {:?})",
+                    args.transform
+                );
+            }
+            if let Some(c) = args.transform_clamp {
+                if !(c.is_finite() && c > 0.0) {
+                    bail!("--transform-clamp must be finite and > 0, got {}", c);
+                }
+            }
+            let transform = match args.transform.as_str() {
+                "none" => NmfTransform::None,
+                "exp2-clip" => {
+                    let clamp = args.transform_clamp.unwrap_or(DEFAULT_EXP2_CLIP_CLAMP);
+                    resolved_transform_clamp = Some(clamp);
+                    NmfTransform::Exp2Clip { clamp }
+                }
+                "shift-min" => NmfTransform::ShiftMin,
+                other => bail!(
+                    "--transform {:?}: expected `none`, `exp2-clip`, or `shift-min`",
+                    other
+                ),
+            };
+            Decomposition::Nmf {
+                beta_loss,
+                init,
+                max_iter: args.nmf_max_iter,
+                tol: args.nmf_tol,
+                transform,
+            }
+        }
+        other => bail!("--decomposition {other:?}; expected ica or nmf"),
+    };
     let params = BootstrapParams {
         k: args.k,
         n_boot: args.n_boot,
@@ -359,8 +472,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         top_n: args.top_n,
         cosine_tau: args.cosine_tau,
         match_tau: args.match_tau,
-        max_iter: args.max_iter,
-        tol: args.tol,
+        decomposition,
         min_subjects: args.min_subjects,
         metric,
         ci_alpha: args.ci_alpha,
@@ -413,9 +525,20 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
             "max-missing-fraction": args.max_missing_fraction,
             "impute": args.impute,
             "ci-alpha": args.ci_alpha,
+            "beta-loss": args.beta_loss,
+            "init": args.init,
+            "nmf-max-iter": args.nmf_max_iter,
+            "nmf-tol": args.nmf_tol,
+            "transform": args.transform,
+            // Resolved effective clamp (6.0 default when --transform
+            // exp2-clip is used without an explicit --transform-clamp),
+            // not the raw flag — the sidecar records the resolved
+            // parameter set. null for none/shift-min/ica.
+            "transform-clamp": resolved_transform_clamp,
             "output": args.output.display().to_string(),
-            // bootstrap always runs FastICA internally — no external loadings TSV to sniff.
-            "decomposition_method": "ica",
+            // bootstrap always runs its chosen decomposition (ica|nmf)
+            // internally per resample — no external loadings TSV to sniff.
+            "decomposition_method": args.decomposition,
         }),
         &inputs_sha256,
         std::slice::from_ref(&args.output),
@@ -1081,16 +1204,26 @@ pub struct ProjectArgs {
     #[arg(long)]
     cohort_dir: PathBuf,
 
-    /// Compositional transform applied to the cohort matrix before
-    /// projection. Must match the transform used at atlas training
-    /// time (caller's responsibility to verify — the atlas's own
-    /// `transform_applied.json` records the training-time choice).
+    /// Transform applied to the cohort matrix before projection. Must match
+    /// the transform used at atlas training time (caller's responsibility to
+    /// verify — the atlas's own `transform_applied.json` records the
+    /// training-time choice). `none`/`clr`/`alr`/`ratio-anchor` are
+    /// compositional transforms; `exp2-clip`/`shift-min` are the NMF input
+    /// transforms (`2^clamp(x, -c, +c)` and `x - min(X)` respectively) shared
+    /// with `decompose nmf`. `shift-min` always recomputes its shift on THIS
+    /// cohort's matrix — it does not reuse the training-time shift.
     #[arg(long, default_value = "none")]
     transform: String,
 
     /// Reference gene symbol for `alr` / `ratio-anchor` transforms.
     #[arg(long)]
     alr_reference: Option<String>,
+
+    /// Clamp radius `c` for `--transform exp2-clip` (`2^clamp(x, -c, +c)`).
+    /// Only valid together with `--transform exp2-clip`; passing it with any
+    /// other `--transform` is a hard error. Default 6.0 when omitted.
+    #[arg(long)]
+    transform_clamp: Option<f64>,
 
     /// Projection method: `ls` (plain least-squares — fails when the
     /// atlas is rank-deficient) or `ridge` (default, with
@@ -1212,7 +1345,10 @@ fn parse_transform(
             })
         }
         "ilr" => Ok(Transform::Ilr),
-        other => bail!("unknown --transform {other:?}; expected none|clr|alr|ilr|ratio-anchor"),
+        other => bail!(
+            "unknown --transform {other:?}; expected \
+             none|clr|alr|ilr|ratio-anchor|exp2-clip|shift-min"
+        ),
     }
 }
 
@@ -1429,14 +1565,62 @@ fn run_project(args: ProjectArgs) -> Result<()> {
             *row = filtered;
         }
     }
+    // `--transform-clamp` only applies to `exp2-clip`; reject it otherwise
+    // (mirrors `decompose nmf --transform-clamp`).
+    if args.transform_clamp.is_some() && args.transform != "exp2-clip" {
+        bail!(
+            "--transform-clamp is only valid together with --transform exp2-clip \
+             (got --transform {:?})",
+            args.transform
+        );
+    }
+    if let Some(c) = args.transform_clamp {
+        if !(c.is_finite() && c > 0.0) {
+            bail!("--transform-clamp must be finite and > 0, got {}", c);
+        }
+    }
+
     // Apply the transform in the cohort's own protein ordering.
-    let transform = parse_transform(
-        &args.transform,
-        args.alr_reference.as_deref(),
-        &cohort_matrix.protein_labels,
-    )?;
-    let transformed = apply_transform(&cohort_matrix.data, transform)
-        .map_err(|e| anyhow::anyhow!("transform failed: {e}"))?;
+    //
+    // `exp2-clip` / `shift-min` are the NMF input transforms (shared with
+    // `decompose nmf` via `atman_core::nmf::apply_transform`); every other
+    // name is a compositional transform (`atman_core::compositional`). The
+    // two families use different core functions (in-place mutation +
+    // `TransformRecord` vs. an out-of-place `Result`), so they are branched
+    // here rather than unified into one call.
+    let (transformed, transform_record): (Vec<Vec<f64>>, NmfTransformRecord) =
+        match args.transform.as_str() {
+            "exp2-clip" => {
+                let clamp = args.transform_clamp.unwrap_or(DEFAULT_EXP2_CLIP_CLAMP);
+                let mut data = cohort_matrix.data.clone();
+                let record = apply_nmf_transform(&mut data, &NmfTransform::Exp2Clip { clamp });
+                (data, record)
+            }
+            "shift-min" => {
+                // Recomputes the shift on THIS cohort's matrix; the plan's
+                // intended semantics — no reuse of a training-time shift.
+                let mut data = cohort_matrix.data.clone();
+                let record = apply_nmf_transform(&mut data, &NmfTransform::ShiftMin);
+                (data, record)
+            }
+            other => {
+                let transform = parse_transform(
+                    other,
+                    args.alr_reference.as_deref(),
+                    &cohort_matrix.protein_labels,
+                )?;
+                let transformed = apply_transform(&cohort_matrix.data, transform)
+                    .map_err(|e| anyhow::anyhow!("transform failed: {e}"))?;
+                (
+                    transformed,
+                    NmfTransformRecord {
+                        name: other.to_string(),
+                        clamp: None,
+                        shift: None,
+                    },
+                )
+            }
+        };
     // For ILR the ordering changes; we emit a clear error because
     // post-transform labels won't match the atlas universe.
     if args.transform == "ilr" {
@@ -1551,6 +1735,8 @@ fn run_project(args: ProjectArgs) -> Result<()> {
             "label-col": args.label_col,
             "cohort-dir": args.cohort_dir.display().to_string(),
             "transform": args.transform,
+            "transform_clamp": transform_record.clamp,
+            "transform_shift": transform_record.shift,
             "alr-reference": args.alr_reference,
             "projection": args.projection,
             "ridge-lambda": args.ridge_lambda,

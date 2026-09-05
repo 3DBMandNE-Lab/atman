@@ -844,3 +844,340 @@ fn nmf_k_selection_cophenetic_picks_planted_k() {
         "loadings TSV should have 4 programs (the selected k)"
     );
 }
+
+// ── `--max-missing-fraction` assay filter (mirrors `decompose ica`) ──────────
+
+/// Builds a minimal canonical dir with `n_samples` samples and `n_assays`
+/// assays (assay ids `A000`, `A001`, ... in row order), omitting the single
+/// measurement at `(missing_assay_idx, missing_sample_idx)` to create exactly
+/// one missing cell. All abundances are non-negative (required by NMF's
+/// default `--transform none`).
+fn build_canonical_dir_with_one_missing_cell(
+    tmp_path: &std::path::Path,
+    n_samples: usize,
+    n_assays: usize,
+    missing_assay_idx: usize,
+    missing_sample_idx: usize,
+) -> std::path::PathBuf {
+    let input_dir = tmp_path.join("canonical_missing");
+    std::fs::create_dir_all(&input_dir).unwrap();
+
+    let headers = "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
+                   abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
+                   detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order";
+    let mut measurements_tsv = String::from(headers);
+    measurements_tsv.push('\n');
+    let mut ingest_order = 0u64;
+    for i in 0..n_samples {
+        let sample_id = format!("S{i:02}");
+        for j in 0..n_assays {
+            if j == missing_assay_idx && i == missing_sample_idx {
+                continue; // intentional hole
+            }
+            let assay_id = format!("A{j:03}");
+            let gene_symbol = format!("GENE{j:03}");
+            let value = 1.0 + (i as f64) * 0.1 + (j as f64) * 0.05;
+            ingest_order += 1;
+            measurements_tsv.push_str(&format!(
+                "proteomics\t{sample_id}\t{assay_id}\t{gene_symbol}\tP1\t{value:.6}\t{value:.6}\t{value:.6}\tlog2_scale\tPASS\tPASS\t\t0\t0\t\t\t{ingest_order}\n",
+            ));
+        }
+    }
+    std::fs::write(input_dir.join("measurements.tsv"), &measurements_tsv).unwrap();
+
+    let mut samples_tsv =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
+    for i in 0..n_samples {
+        samples_tsv.push_str(&format!("S{i:02}\tS{i:02}\tcase\t0\tcsf\t{}\n", i + 1));
+    }
+    std::fs::write(input_dir.join("samples.tsv"), samples_tsv).unwrap();
+
+    let mut proteins_tsv =
+        String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    for j in 0..n_assays {
+        proteins_tsv.push_str(&format!("proteomics\tA{j:03}\t\tGENE{j:03}\tP1\t\n"));
+    }
+    std::fs::write(input_dir.join("proteins.tsv"), proteins_tsv).unwrap();
+
+    input_dir
+}
+
+#[test]
+fn nmf_max_missing_fraction_drops_incomplete_assays() {
+    // Build a canonical dir where assay A001 is missing in 1 of 10 samples
+    // (missing fraction 0.1) and all other assays are complete.
+    let tmp = tempfile::tempdir().unwrap();
+    let n_samples = 10;
+    let n_assays = 5;
+    let missing_assay_idx = 1; // A001
+    let missing_sample_idx = 0; // S00
+    let input_dir = build_canonical_dir_with_one_missing_cell(
+        tmp.path(),
+        n_samples,
+        n_assays,
+        missing_assay_idx,
+        missing_sample_idx,
+    );
+
+    // With --max-missing-fraction 0.0 (the default), the incomplete assay
+    // (missing fraction 0.1 > 0.0) must be dropped and the run must succeed.
+    let loadings_default = tmp.path().join("loadings_default.tsv");
+    let out_default = run_atman(&[
+        "decompose",
+        "nmf",
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--k",
+        "2",
+        "--output-loadings",
+        loadings_default.to_str().unwrap(),
+    ]);
+    assert!(
+        out_default.status.success(),
+        "default-threshold NMF should succeed by dropping the incomplete assay A001; stderr:\n{}",
+        String::from_utf8_lossy(&out_default.stderr)
+    );
+    let loadings_text = std::fs::read_to_string(&loadings_default).unwrap();
+    assert!(
+        !loadings_text.contains("A001"),
+        "loadings should not contain the dropped assay A001:\n{}",
+        loadings_text
+    );
+
+    // With --max-missing-fraction 0.2, the assay's missing fraction (0.1) is
+    // under the threshold so it is retained -- but NMF cannot take holes, so
+    // the residual missing cell must cause a loud failure mentioning
+    // "complete matrix".
+    let loadings_lenient = tmp.path().join("loadings_lenient.tsv");
+    let out_lenient = run_atman(&[
+        "decompose",
+        "nmf",
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--k",
+        "2",
+        "--max-missing-fraction",
+        "0.2",
+        "--output-loadings",
+        loadings_lenient.to_str().unwrap(),
+    ]);
+    assert!(
+        !out_lenient.status.success(),
+        "NMF with a retained-but-incomplete assay must fail, not silently succeed"
+    );
+    let stderr_lenient = String::from_utf8_lossy(&out_lenient.stderr);
+    assert!(
+        stderr_lenient.contains("complete matrix"),
+        "expected stderr to mention 'complete matrix', got:\n{}",
+        stderr_lenient
+    );
+}
+
+// ── `--transform exp2-clip` / `shift-min` (Task 3) ───────────────────────────
+
+/// Builds a minimal canonical dir with `n_samples` samples and `n_assays`
+/// assays whose abundances span negative and positive values (simulating a
+/// log2-ratio-to-reference scale, e.g. CPTAC). No missing cells. Used to
+/// exercise `--transform exp2-clip` / `--transform shift-min`, which restore
+/// non-negativity from signed input; `--transform none` must keep rejecting
+/// this fixture.
+fn build_canonical_dir_with_negative_values(
+    tmp_path: &std::path::Path,
+    n_samples: usize,
+    n_assays: usize,
+) -> std::path::PathBuf {
+    let input_dir = tmp_path.join("canonical_negative");
+    std::fs::create_dir_all(&input_dir).unwrap();
+
+    let headers = "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
+                   abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
+                   detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order";
+    let mut measurements_tsv = String::from(headers);
+    measurements_tsv.push('\n');
+    let mut ingest_order = 0u64;
+    for i in 0..n_samples {
+        let sample_id = format!("S{i:02}");
+        for j in 0..n_assays {
+            let assay_id = format!("A{j:03}");
+            let gene_symbol = format!("GENE{j:03}");
+            // Log2-ratio-like: centered near 0, spans negative and positive.
+            let value = (i as f64) * 0.6 - 3.0 + (j as f64) * 0.4;
+            ingest_order += 1;
+            measurements_tsv.push_str(&format!(
+                "proteomics\t{sample_id}\t{assay_id}\t{gene_symbol}\tP1\t{value:.6}\t{value:.6}\t{value:.6}\tlog2_scale\tPASS\tPASS\t\t0\t0\t\t\t{ingest_order}\n",
+            ));
+        }
+    }
+    std::fs::write(input_dir.join("measurements.tsv"), &measurements_tsv).unwrap();
+
+    let mut samples_tsv =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
+    for i in 0..n_samples {
+        samples_tsv.push_str(&format!("S{i:02}\tS{i:02}\tcase\t0\tcsf\t{}\n", i + 1));
+    }
+    std::fs::write(input_dir.join("samples.tsv"), samples_tsv).unwrap();
+
+    let mut proteins_tsv =
+        String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    for j in 0..n_assays {
+        proteins_tsv.push_str(&format!("proteomics\tA{j:03}\t\tGENE{j:03}\tP1\t\n"));
+    }
+    std::fs::write(input_dir.join("proteins.tsv"), proteins_tsv).unwrap();
+
+    input_dir
+}
+
+/// Reads `<primary>.run.json` (the sidecar path convention from
+/// `sidecar_path_for`) and parses it as JSON.
+fn read_sidecar_json(primary_output: &std::path::Path) -> serde_json::Value {
+    let sidecar_path = format!("{}.run.json", primary_output.display());
+    let text = std::fs::read_to_string(&sidecar_path)
+        .unwrap_or_else(|e| panic!("reading sidecar {sidecar_path:?}: {e}"));
+    serde_json::from_str(&text).expect("parse sidecar JSON")
+}
+
+#[test]
+fn nmf_transform_exp2_clip_succeeds_on_negative_input_and_records_sidecar() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input_dir = build_canonical_dir_with_negative_values(tmp.path(), 8, 6);
+
+    let loadings_path = tmp.path().join("exp2clip_loadings.tsv");
+    let output = run_atman(&[
+        "decompose",
+        "nmf",
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--transform",
+        "exp2-clip",
+        "--transform-clamp",
+        "6",
+        "--k",
+        "2",
+        "--output-loadings",
+        loadings_path.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "decompose nmf --transform exp2-clip should succeed on negative input; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let sidecar = read_sidecar_json(&loadings_path);
+    assert_eq!(sidecar["args"]["transform"], "exp2-clip");
+    assert_eq!(
+        sidecar["args"]["transform_clamp"].as_f64(),
+        Some(6.0),
+        "sidecar args: {}",
+        sidecar["args"]
+    );
+    // exp2-clip never records a shift (that's shift-min's field).
+    assert!(sidecar["args"]["transform_shift"].is_null());
+
+    // Loadings must actually be non-negative-input-derived (i.e. NMF ran on
+    // a transformed, non-negative matrix) — the run succeeding at all is
+    // the load-bearing assertion here, but sanity-check the file is non-empty.
+    let loadings_text = std::fs::read_to_string(&loadings_path).unwrap();
+    assert!(loadings_text.lines().count() > 1, "loadings TSV is empty");
+}
+
+#[test]
+fn nmf_transform_shift_min_succeeds_on_negative_input_and_records_shift() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input_dir = build_canonical_dir_with_negative_values(tmp.path(), 8, 6);
+
+    let loadings_path = tmp.path().join("shiftmin_loadings.tsv");
+    let output = run_atman(&[
+        "decompose",
+        "nmf",
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--transform",
+        "shift-min",
+        "--k",
+        "2",
+        "--output-loadings",
+        loadings_path.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "decompose nmf --transform shift-min should succeed on negative input; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let sidecar = read_sidecar_json(&loadings_path);
+    assert_eq!(sidecar["args"]["transform"], "shift-min");
+    assert!(sidecar["args"]["transform_clamp"].is_null());
+    // The fixture's minimum cell is at (sample=0, assay=0): -3.0.
+    let shift = sidecar["args"]["transform_shift"]
+        .as_f64()
+        .expect("transform_shift should be a number");
+    assert!(
+        (shift - (-3.0)).abs() < 1e-9,
+        "expected transform_shift == -3.0 (fixture's global min), got {shift}"
+    );
+}
+
+#[test]
+fn nmf_transform_none_still_rejects_negative_input() {
+    // Same negative-valued fixture; `--transform none` (the default) must
+    // keep failing with the existing non-negativity bail, unaffected by the
+    // new exp2-clip / shift-min transforms.
+    let tmp = tempfile::tempdir().unwrap();
+    let input_dir = build_canonical_dir_with_negative_values(tmp.path(), 8, 6);
+
+    let loadings_path = tmp.path().join("none_loadings.tsv");
+    let output = run_atman(&[
+        "decompose",
+        "nmf",
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--transform",
+        "none",
+        "--k",
+        "2",
+        "--output-loadings",
+        loadings_path.to_str().unwrap(),
+    ]);
+    assert!(
+        !output.status.success(),
+        "decompose nmf --transform none must keep rejecting negative input"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires non-negative input"),
+        "expected the existing non-negativity bail message, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn nmf_transform_clamp_rejected_unless_transform_is_exp2_clip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input_dir = build_canonical_dir_with_negative_values(tmp.path(), 8, 6);
+
+    let loadings_path = tmp.path().join("rejected_clamp_loadings.tsv");
+    let output = run_atman(&[
+        "decompose",
+        "nmf",
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--transform",
+        "shift-min",
+        "--transform-clamp",
+        "3",
+        "--k",
+        "2",
+        "--output-loadings",
+        loadings_path.to_str().unwrap(),
+    ]);
+    assert!(
+        !output.status.success(),
+        "--transform-clamp with --transform shift-min must be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--transform-clamp") && stderr.contains("exp2-clip"),
+        "expected an error naming --transform-clamp and exp2-clip, got:\n{}",
+        stderr
+    );
+}

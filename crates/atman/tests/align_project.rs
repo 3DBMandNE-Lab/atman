@@ -537,3 +537,146 @@ fn align_project_refuses_on_empty_cohort_intersection() {
         assert!(cov == 0.0, "expected zero coverage, got {cov}");
     }
 }
+
+// ── `--transform exp2-clip` / `shift-min` (Task 3, shared with `decompose nmf`) ──
+
+#[test]
+fn align_project_exp2_clip_and_shift_min_transforms_run_and_record_sidecar() {
+    let tmp = tempfile::tempdir().unwrap();
+    let atlas_dir = tmp.path().join("atlas");
+    let cohort_dir = tmp.path().join("cohort");
+    write_atlas(&atlas_dir);
+    // Some coefficient rows (e.g. [2.0, -1.0]) yield negative abundances in
+    // this fixture, exercising the non-negativity-restoring transforms.
+    write_cohort(&cohort_dir, false);
+
+    let atlas_loadings = format!(
+        "COA={},COB={}",
+        atlas_dir.join("coa_loadings.tsv").display(),
+        atlas_dir.join("cob_loadings.tsv").display(),
+    );
+
+    // ── exp2-clip with an explicit --transform-clamp ────────────────────────
+    let output_dir_exp2 = tmp.path().join("projected_exp2clip");
+    let status = run_atman(&[
+        "align",
+        "project",
+        "--atlas-archetypes",
+        atlas_dir.join("archetypes.tsv").to_str().unwrap(),
+        "--atlas-loadings",
+        &atlas_loadings,
+        "--cohort-dir",
+        cohort_dir.to_str().unwrap(),
+        "--transform",
+        "exp2-clip",
+        "--transform-clamp",
+        "6",
+        "--projection",
+        "ls",
+        "--output-dir",
+        output_dir_exp2.to_str().unwrap(),
+    ]);
+    assert!(
+        status.status.success(),
+        "align project --transform exp2-clip failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&status.stdout),
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let sidecar: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(output_dir_exp2.join("projected_activations.tsv.run.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sidecar["args"]["transform"], "exp2-clip");
+    assert_eq!(
+        sidecar["args"]["transform_clamp"].as_f64(),
+        Some(6.0),
+        "sidecar args: {}",
+        sidecar["args"]
+    );
+    assert!(sidecar["args"]["transform_shift"].is_null());
+
+    // ── shift-min: recomputes the shift on this cohort's matrix ─────────────
+    let output_dir_shift = tmp.path().join("projected_shiftmin");
+    let status2 = run_atman(&[
+        "align",
+        "project",
+        "--atlas-archetypes",
+        atlas_dir.join("archetypes.tsv").to_str().unwrap(),
+        "--atlas-loadings",
+        &atlas_loadings,
+        "--cohort-dir",
+        cohort_dir.to_str().unwrap(),
+        "--transform",
+        "shift-min",
+        "--projection",
+        "ls",
+        "--output-dir",
+        output_dir_shift.to_str().unwrap(),
+    ]);
+    assert!(
+        status2.status.success(),
+        "align project --transform shift-min failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&status2.stdout),
+        String::from_utf8_lossy(&status2.stderr)
+    );
+    let sidecar2: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(output_dir_shift.join("projected_activations.tsv.run.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sidecar2["args"]["transform"], "shift-min");
+    assert!(sidecar2["args"]["transform_clamp"].is_null());
+    let shift = sidecar2["args"]["transform_shift"]
+        .as_f64()
+        .expect("transform_shift should be recorded for shift-min");
+    // The fixture has a negative cell (coef [2.0, -1.0] against loadings_a2),
+    // so the recomputed global min must be negative.
+    assert!(
+        shift < 0.0,
+        "expected a negative recomputed shift on this fixture, got {shift}"
+    );
+}
+
+#[test]
+fn align_project_rejects_transform_clamp_unless_exp2_clip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let atlas_dir = tmp.path().join("atlas");
+    let cohort_dir = tmp.path().join("cohort");
+    let output_dir = tmp.path().join("projected_rejected_clamp");
+    write_atlas(&atlas_dir);
+    write_cohort(&cohort_dir, false);
+
+    let status = run_atman(&[
+        "align",
+        "project",
+        "--atlas-archetypes",
+        atlas_dir.join("archetypes.tsv").to_str().unwrap(),
+        "--atlas-loadings",
+        &format!(
+            "COA={},COB={}",
+            atlas_dir.join("coa_loadings.tsv").display(),
+            atlas_dir.join("cob_loadings.tsv").display(),
+        ),
+        "--cohort-dir",
+        cohort_dir.to_str().unwrap(),
+        "--transform",
+        "none",
+        "--transform-clamp",
+        "3",
+        "--projection",
+        "ls",
+        "--output-dir",
+        output_dir.to_str().unwrap(),
+    ]);
+    assert!(
+        !status.status.success(),
+        "--transform-clamp with --transform none must be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&status.stderr);
+    assert!(
+        stderr.contains("--transform-clamp") && stderr.contains("exp2-clip"),
+        "expected an error naming --transform-clamp and exp2-clip, got:\n{}",
+        stderr
+    );
+}
