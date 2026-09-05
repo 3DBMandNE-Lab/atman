@@ -844,3 +844,131 @@ fn nmf_k_selection_cophenetic_picks_planted_k() {
         "loadings TSV should have 4 programs (the selected k)"
     );
 }
+
+// ── `--max-missing-fraction` assay filter (mirrors `decompose ica`) ──────────
+
+/// Builds a minimal canonical dir with `n_samples` samples and `n_assays`
+/// assays (assay ids `A000`, `A001`, ... in row order), omitting the single
+/// measurement at `(missing_assay_idx, missing_sample_idx)` to create exactly
+/// one missing cell. All abundances are non-negative (required by NMF's
+/// default `--transform none`).
+fn build_canonical_dir_with_one_missing_cell(
+    tmp_path: &std::path::Path,
+    n_samples: usize,
+    n_assays: usize,
+    missing_assay_idx: usize,
+    missing_sample_idx: usize,
+) -> std::path::PathBuf {
+    let input_dir = tmp_path.join("canonical_missing");
+    std::fs::create_dir_all(&input_dir).unwrap();
+
+    let headers = "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
+                   abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
+                   detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order";
+    let mut measurements_tsv = String::from(headers);
+    measurements_tsv.push('\n');
+    let mut ingest_order = 0u64;
+    for i in 0..n_samples {
+        let sample_id = format!("S{i:02}");
+        for j in 0..n_assays {
+            if j == missing_assay_idx && i == missing_sample_idx {
+                continue; // intentional hole
+            }
+            let assay_id = format!("A{j:03}");
+            let gene_symbol = format!("GENE{j:03}");
+            let value = 1.0 + (i as f64) * 0.1 + (j as f64) * 0.05;
+            ingest_order += 1;
+            measurements_tsv.push_str(&format!(
+                "proteomics\t{sample_id}\t{assay_id}\t{gene_symbol}\tP1\t{value:.6}\t{value:.6}\t{value:.6}\tlog2_scale\tPASS\tPASS\t\t0\t0\t\t\t{ingest_order}\n",
+            ));
+        }
+    }
+    std::fs::write(input_dir.join("measurements.tsv"), &measurements_tsv).unwrap();
+
+    let mut samples_tsv =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
+    for i in 0..n_samples {
+        samples_tsv.push_str(&format!("S{i:02}\tS{i:02}\tcase\t0\tcsf\t{}\n", i + 1));
+    }
+    std::fs::write(input_dir.join("samples.tsv"), samples_tsv).unwrap();
+
+    let mut proteins_tsv =
+        String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    for j in 0..n_assays {
+        proteins_tsv.push_str(&format!("proteomics\tA{j:03}\t\tGENE{j:03}\tP1\t\n"));
+    }
+    std::fs::write(input_dir.join("proteins.tsv"), proteins_tsv).unwrap();
+
+    input_dir
+}
+
+#[test]
+fn nmf_max_missing_fraction_drops_incomplete_assays() {
+    // Build a canonical dir where assay A001 is missing in 1 of 10 samples
+    // (missing fraction 0.1) and all other assays are complete.
+    let tmp = tempfile::tempdir().unwrap();
+    let n_samples = 10;
+    let n_assays = 5;
+    let missing_assay_idx = 1; // A001
+    let missing_sample_idx = 0; // S00
+    let input_dir = build_canonical_dir_with_one_missing_cell(
+        tmp.path(),
+        n_samples,
+        n_assays,
+        missing_assay_idx,
+        missing_sample_idx,
+    );
+
+    // With --max-missing-fraction 0.0 (the default), the incomplete assay
+    // (missing fraction 0.1 > 0.0) must be dropped and the run must succeed.
+    let loadings_default = tmp.path().join("loadings_default.tsv");
+    let out_default = run_atman(&[
+        "decompose",
+        "nmf",
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--k",
+        "2",
+        "--output-loadings",
+        loadings_default.to_str().unwrap(),
+    ]);
+    assert!(
+        out_default.status.success(),
+        "default-threshold NMF should succeed by dropping the incomplete assay A001; stderr:\n{}",
+        String::from_utf8_lossy(&out_default.stderr)
+    );
+    let loadings_text = std::fs::read_to_string(&loadings_default).unwrap();
+    assert!(
+        !loadings_text.contains("A001"),
+        "loadings should not contain the dropped assay A001:\n{}",
+        loadings_text
+    );
+
+    // With --max-missing-fraction 0.2, the assay's missing fraction (0.1) is
+    // under the threshold so it is retained -- but NMF cannot take holes, so
+    // the residual missing cell must cause a loud failure mentioning
+    // "complete matrix".
+    let loadings_lenient = tmp.path().join("loadings_lenient.tsv");
+    let out_lenient = run_atman(&[
+        "decompose",
+        "nmf",
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--k",
+        "2",
+        "--max-missing-fraction",
+        "0.2",
+        "--output-loadings",
+        loadings_lenient.to_str().unwrap(),
+    ]);
+    assert!(
+        !out_lenient.status.success(),
+        "NMF with a retained-but-incomplete assay must fail, not silently succeed"
+    );
+    let stderr_lenient = String::from_utf8_lossy(&out_lenient.stderr);
+    assert!(
+        stderr_lenient.contains("complete matrix"),
+        "expected stderr to mention 'complete matrix', got:\n{}",
+        stderr_lenient
+    );
+}

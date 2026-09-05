@@ -109,6 +109,10 @@ pub struct NmfArgs {
     /// input; atman will reject the input loudly if any value is < 0).
     #[arg(long, default_value = "none")]
     pub transform: String,
+
+    /// Drop assays where the fraction of missing samples exceeds this value. 0 = strict complete-case.
+    #[arg(long, default_value_t = 0.0)]
+    pub max_missing_fraction: f64,
 }
 
 pub(super) fn nmf_run(args: NmfArgs) -> Result<()> {
@@ -220,8 +224,46 @@ pub(super) fn nmf_run(args: NmfArgs) -> Result<()> {
         bail!("need at least 2 samples for NMF, got {}", n_samples);
     }
 
-    let assay_order: Vec<String> = assay_meta.keys().cloned().collect();
+    if !(0.0..=1.0).contains(&args.max_missing_fraction) {
+        bail!("--max-missing-fraction must be in [0, 1]");
+    }
+
+    // Drop assays whose missing-sample fraction exceeds the configured
+    // threshold (same rule as `decompose ica`). The retained matrix must
+    // still be complete; any residual holes are caught by the dense-matrix
+    // build below.
+    let mut kept_assays: Vec<String> = Vec::new();
+    let mut n_assays_dropped_missingness = 0usize;
+    for assay in assay_meta.keys() {
+        let present = sample_order
+            .iter()
+            .filter(|s| abundance_by_key.contains_key(&(assay.clone(), (*s).clone())))
+            .count();
+        let missing_fraction = 1.0 - present as f64 / n_samples as f64;
+        if missing_fraction <= args.max_missing_fraction + 1e-12 {
+            kept_assays.push(assay.clone());
+        } else {
+            n_assays_dropped_missingness += 1;
+        }
+    }
+    if kept_assays.is_empty() {
+        bail!(
+            "no assays retained with --max-missing-fraction={} over {} samples in {:?}",
+            args.max_missing_fraction,
+            n_samples,
+            tsv
+        );
+    }
+    eprintln!(
+        "decompose nmf: retained {} assays, dropped {} for exceeding --max-missing-fraction={}",
+        kept_assays.len(),
+        n_assays_dropped_missingness,
+        args.max_missing_fraction
+    );
+
+    let assay_order: Vec<String> = kept_assays;
     let n_assays = assay_order.len();
+    let n_assays_retained = n_assays;
 
     if k_sel == KSelection::Fixed && k_fixed > n_samples.min(n_assays) {
         bail!(
@@ -704,6 +746,9 @@ pub(super) fn nmf_run(args: NmfArgs) -> Result<()> {
             "stability-metric": args.stability_metric,
             "stability-top-n": args.stability_top_n,
             "transform": args.transform,
+            "max-missing-fraction": args.max_missing_fraction,
+            "n_assays_retained": n_assays_retained,
+            "n_assays_dropped_missingness": n_assays_dropped_missingness,
             "output-loadings": args.output_loadings.display().to_string(),
             "output-activations": args.output_activations.as_ref().map(|p| p.display().to_string()),
             "output-stability": args.output_stability.as_ref().map(|p| p.display().to_string()),
