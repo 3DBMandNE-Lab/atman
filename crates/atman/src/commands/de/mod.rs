@@ -412,7 +412,19 @@ pub fn run(args: Args) -> Result<()> {
     let n_require_cols_dropped = if require_cols.is_empty() {
         0
     } else {
-        require_columns(&mut samples, &samples_path, &require_cols)?
+        require_columns(&mut samples, &samples_path, &require_cols, false)?
+    };
+    let require_numeric: Vec<String> = args
+        .require_numeric
+        .iter()
+        .flat_map(|c| c.split(','))
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect();
+    let n_require_numeric_dropped = if require_numeric.is_empty() {
+        0
+    } else {
+        require_columns(&mut samples, &samples_path, &require_numeric, true)?
     };
     if args.include_controls {
         for s in samples.iter_mut() {
@@ -1314,6 +1326,10 @@ pub fn run(args: Args) -> Result<()> {
         json!(n_require_cols_dropped),
     );
     extras.insert(
+        "n_require_numeric_dropped".into(),
+        json!(n_require_numeric_dropped),
+    );
+    extras.insert(
         "gene_symbol_collapse".into(),
         json!({
             "rule": collapse.as_str(),
@@ -1367,6 +1383,7 @@ pub fn run(args: Args) -> Result<()> {
             "subset": args.subset,
             "collapse-others": args.collapse_others,
             "require-cols": require_cols,
+            "require-numeric": require_numeric,
             "max-missing-fraction": args.max_missing_fraction,
             "collapse-genes": collapse.as_str(),
         }),

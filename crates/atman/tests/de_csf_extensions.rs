@@ -421,3 +421,45 @@ fn de_require_cols_drops_samples_missing_a_value() {
     assert!(!r.status.success());
     assert!(String::from_utf8_lossy(&r.stderr).contains("nope"));
 }
+
+#[test]
+fn de_require_numeric_drops_placeholder_strings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    std::fs::create_dir_all(&input).unwrap();
+    dup_fixture(&input);
+    std::fs::write(input.join("samples.tsv"), "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\ttotal_protein\nS1\tS1\tCase\t0\tbio\t1\t400\nS2\tS2\tCase\t0\tbio\t2\t500\nS3\tS3\tCtrl\t1\tbio\t3\tnot measured\nS4\tS4\tCtrl\t1\tbio\t4\t450\n").unwrap();
+    let run = |flag: &str, dir: &str| {
+        let out = tmp.path().join(dir);
+        let r = run_atman(&[
+            "de",
+            "--input-dir",
+            input.to_str().unwrap(),
+            "--output-dir",
+            out.to_str().unwrap(),
+            "--test",
+            "ols",
+            "--design",
+            "~ condition",
+            "--groups",
+            "Case-Ctrl",
+            "--include-controls",
+            flag,
+            "total_protein",
+            "--min-pairs",
+            "2",
+        ]);
+        assert!(
+            r.status.success(),
+            "stderr:\n{}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+        let rows = read_rows(&out.join("de_results.tsv"));
+        rows.iter().find(|x| x["gene_symbol"] == "H").unwrap()["n_b"].clone()
+    };
+    assert_eq!(run("--require-cols", "a"), "2");
+    assert_eq!(run("--require-numeric", "b"), "1");
+    let sidecar =
+        std::fs::read_to_string(tmp.path().join("b").join("de_results.tsv.run.json")).unwrap();
+    assert!(sidecar.contains("\"n_require_numeric_dropped\": 1"));
+}

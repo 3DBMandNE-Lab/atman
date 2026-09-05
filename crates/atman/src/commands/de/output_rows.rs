@@ -62,6 +62,7 @@ pub(super) fn require_columns(
     samples: &mut Vec<Sample>,
     samples_path: &Path,
     columns: &[String],
+    numeric: bool,
 ) -> Result<usize> {
     let raw = read_raw_samples(samples_path)?;
     for col in columns {
@@ -75,12 +76,19 @@ pub(super) fn require_columns(
         }
     }
     let before = samples.len();
+    let present = |v: &String| -> bool {
+        if numeric {
+            v.parse::<f64>().map(|x| x.is_finite()).unwrap_or(false)
+        } else {
+            !v.is_empty()
+        }
+    };
     samples.retain(|s| {
         raw.get(&s.sample_id)
             .map(|m| {
                 columns
                     .iter()
-                    .all(|c| m.get(c).map(|v| !v.is_empty()).unwrap_or(false))
+                    .all(|c| m.get(c).map(present).unwrap_or(false))
             })
             .unwrap_or(false)
     });

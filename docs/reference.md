@@ -187,9 +187,11 @@ both routings against R references)
   `ci_low`/`ci_high`, and `de_results.tsv` carries `n_a`/`n_b` (observed
   subjects per group; also filled for `welch-t`).
 - `--require-cols col[,col]` (repeatable) — keep only samples whose
-  samples.tsv row has a non-empty value in every listed column, so a
-  relative-scale run fits the same subjects as a `scale absolute` run
-  (`n_require_cols_dropped` in the sidecar).
+  samples.tsv row has a non-empty value in every listed column;
+  `--require-numeric col[,col]` additionally requires a finite number (so
+  placeholders such as `not measured` drop out), which makes a
+  relative-scale run fit the same subjects as a `scale absolute` run
+  (`n_require_cols_dropped` / `n_require_numeric_dropped` in the sidecar).
 - `--collapse-genes none|mean|max-observed` — how protein groups (assays)
   that share a gene symbol become one value per sample: `none` (default)
   keeps the lexically first assay id; `mean` averages the assays observed in
@@ -245,7 +247,13 @@ n_hits_both, sign_concordance, jaccard_top_n`; a pair present in several
 stages is evaluated on the features shared by every stage, and
 `--output-delta` reports `delta_rho` (later stage minus earlier) with a CI
 from the same feature resamples. Features are not independent units; the
-intervals are descriptive.
+intervals are descriptive. `--output-tree-linkage` (with optional
+`--output-tree-support`, `--output-tree-newick`, and `--tree-stage` when
+the manifest has several stages) builds the average-linkage tree of the
+stage's tables on `1 − Spearman` over pairwise-shared features, with
+support from feature-bootstrap replicates (resampling the union of features
+and re-evaluating each pair on the drawn features both tables carry); same
+file conventions as `axes tree`.
 
 ### atman score weighted
 
@@ -702,3 +710,18 @@ One-way random-effects ICC(1): `icc1 = (MSB − MSW) / (MSB + (k0 − 1) MSW)`
 with the unbalanced `k0 = (N − Σk_i²/N)/(n − 1)`; `between_sd =
 sqrt(max(0, (MSB − MSW)/k0))`, `within_sd = sqrt(MSW)`. Subjects with a
 single scored sample are excluded and counted.
+
+#### atman axes tree
+
+`--scores`, `--manifest` (each contrast a leaf), `--score-cols`, `--leaf
+displacement|centroid` (case − control with `1 − cosine`, or the case-group
+centroid with Euclidean distance; `--distance` overrides), `--standardize
+global|none`, `--n-bootstrap` (default 1000), `--seed`, `--quote-labels`,
+`--output-linkage` (`left, right, distance, n`, scipy convention: leaves
+`0..n`, merge `i` is node `n+i`, height = merge distance, `left < right`),
+`--output-support` (`node` = sorted leaf labels joined by ` | `, `n_leaves`,
+`support`, `node_id`, `height`, `n_boot`), `--output-newick` (branch length
+= parent height − child height, six decimals; internal labels =
+integer-percent support). Support is the fraction of subject-bootstrap
+trees (resampling within each contrast's case and control groups) that
+contain the reference clade.

@@ -268,6 +268,11 @@ pub struct Args {
     #[arg(long, action = clap::ArgAction::Append)]
     pub(super) require_cols: Vec<String>,
 
+    /// Like `--require-cols`, but the value must also parse as a finite
+    /// number (drops placeholders such as `not measured`).
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub(super) require_numeric: Vec<String>,
+
     /// Drop proteins whose fraction of missing samples within a comparison
     /// exceeds this value (1.0 = keep every protein).
     #[arg(long, default_value_t = 1.0)]
