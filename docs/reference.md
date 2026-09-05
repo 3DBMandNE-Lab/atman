@@ -473,3 +473,29 @@ Atman deliberately does not cover:
   upstream pipeline.
 - **Survival analysis, Cox regression, Kaplan-Meier.** Outside the
   DE-focused scope.
+
+### atman axes
+
+Subject-level score tables. Every `axes` subcommand reads a wide score TSV
+(`--scores`: `sample_id`, `cohort`, `condition`, `is_control`, numeric score
+columns), optionally joins `--cohort-dirs cohort=dir,...` (`samples.tsv`
+covariates) and `--covariates-tsv PATH` files on `sample_id`, and writes a
+TSV plus `<output>.run.json`.
+
+Covariate expressions (used by `--designs`, `--anchors`, `--median-cols`):
+identifiers, numbers, `+ - * /`, parentheses, `log10()`, `log2()`, `ln()`,
+and `z()` (standardize over the rows entering the fit; outermost only).
+Columns whose trimmed non-empty values all parse as numbers are numeric;
+other columns are categorical, one-hot with the alphabetically first level as
+reference (`sex` F/M ⇒ one `sexM` column).
+
+#### atman axes build
+
+`--activations` (one wide table, or `label=path,...` of `align project`
+outputs joined on `sample_id` with `label_` prefixes), `--cohort-dirs`,
+`--representatives axis=column,...`, `--orthogonalize axisA,axisB --against
+axisR --within cohort`, `--output`. Orthogonalization is the OLS residual
+(with intercept) of the representative on the reference, fitted separately
+per `--within` group. Output: input columns, then per axis `<axis>_raw`,
+`<axis>_z` (global z, ddof = 1) and, for orthogonalized axes,
+`<axis>_unorth_raw`, `<axis>_unorth_z`.
