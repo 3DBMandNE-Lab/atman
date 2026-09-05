@@ -6,6 +6,51 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`atman decompose nmf --max-missing-fraction`** — drop assays whose
+  missing-sample fraction exceeds a configurable threshold (default 0.0,
+  strict complete-case), mirroring the existing `decompose ica` assay
+  filter. The sidecar records the resolved threshold plus
+  `n_assays_retained` / `n_assays_dropped_missingness` so a run's effective
+  protein universe is auditable without re-deriving it from the input.
+
+- **`atman decompose nmf` / `atman align project` — `exp2-clip` and
+  `shift-min` input transforms.** NMF requires non-negative input; these
+  two pre-decomposition transforms let log2-ratio proteomics data feed NMF
+  without a separate upstream step. `exp2-clip`: `2^clamp(x, -c, +c)`
+  (`--transform-clamp`, default 6.0) restores a non-negative ratio scale
+  while winsorizing extreme tails. `shift-min`: `x - min(X)` over the whole
+  matrix, a sensitivity alternative. `align project --transform` gains the
+  same two values for projecting new cohorts onto an NMF-trained atlas;
+  `shift-min` always recomputes its shift on the cohort being projected
+  rather than reusing the atlas's training-time shift. Both commands'
+  sidecars record the resolved `transform_clamp` / `transform_shift` via a
+  shared `TransformRecord`.
+
+- **`atman align bootstrap --decomposition ica|nmf`** (default `ica`,
+  byte-identical to prior releases). `nmf` runs single-seed
+  multiplicative-updates NMF per resample — applied identically to the
+  point estimate, every bootstrap resample, and every jackknife
+  replicate — with dedicated `--beta-loss`, `--init`, `--nmf-max-iter`,
+  `--nmf-tol`, `--transform`, and `--transform-clamp` flags, and the same
+  SplitMix64 per-resample seed derivation the ICA path uses. Lets
+  cross-cohort archetype stability (CI width, sign stability) be assessed
+  under NMF exactly as it already is under ICA.
+
+### Fixed
+
+- **`atman align bootstrap` — non-finite loadings now rejected loudly.**
+  A degenerate resample (duplicate rows, zero-variance column) could in
+  principle drive either decomposition to diverge; `NaN`/±∞ loadings
+  previously flowed silently into cosine similarity, archetype grouping,
+  and the bootstrap/BCa accumulators. A shared finiteness gate now rejects
+  them immediately, naming the cohort and call site (point estimate /
+  bootstrap iteration / jackknife replicate) in the error. The sidecar also
+  now records the *resolved* `--transform-clamp` (6.0 when `--transform
+  exp2-clip` is used without an explicit clamp) instead of the raw,
+  possibly-null CLI value.
+
 ## [1.1.0] — 2026-05-30
 
 ### Added
