@@ -622,3 +622,11 @@ every subject in the table before centroids), `--n-bootstrap`, `--seed`,
 Displacement = case centroid − control centroid within the contrast's cohort,
 column-wise over subjects with a value; the bootstrap resamples case and
 control subjects of both contrasts independently (one stream per pair).
+
+#### atman axes loco
+
+`--score-cols axis1_raw,...` (raw columns; z recomputed), `--groups
+"Controls=healthy|NoLeak|control|CU|nonMS;AD=AD;..."`, `--output` (`score,
+group, dropped_cohort, n_remaining, full_z_mean, loo_z_mean, delta`). Cohorts
+are dropped in order of first appearance; a group absent from the remaining
+subjects yields no row.

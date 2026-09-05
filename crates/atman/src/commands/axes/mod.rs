@@ -11,6 +11,7 @@ mod build;
 mod contrast;
 mod displacement;
 mod groups;
+mod loco;
 
 use anyhow::{bail, Result};
 use atman_core::SplitMix64;
@@ -43,6 +44,8 @@ enum Command {
     /// Displacement vectors (case minus control centroid) and pairwise
     /// cosines with bootstrap CI.
     Displacement(displacement::DisplacementArgs),
+    /// Leave-one-cohort-out stability of group centroids on global z-scores.
+    Loco(loco::LocoArgs),
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -52,6 +55,7 @@ pub fn run(args: Args) -> Result<()> {
         Command::Groups(a) => groups::run(a),
         Command::Anchor(a) => anchor::run(a),
         Command::Displacement(a) => displacement::run(a),
+        Command::Loco(a) => loco::run(a),
     }
 }
 
