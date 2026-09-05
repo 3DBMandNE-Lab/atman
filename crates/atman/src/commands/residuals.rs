@@ -1,17 +1,29 @@
-use anyhow::{anyhow, bail, Context, Result};
+//! `atman residuals`: per-protein OLS residuals on nuisance covariates.
+//!
+//! Covariates come from `samples.tsv` plus any `--covariates-tsv` (for
+//! example axis scores), and `--design` accepts covariate expressions
+//! (`~ axis1_raw`, `~ log10(QAlb) + sex`). Each protein is fitted on the
+//! complete-case design rows where it is observed (no imputation); the
+//! optional variance tables report per-protein `R²` and the cohort-level
+//! `Σss_model / Σss_total`, and `--output-canonical-dir` writes the
+//! residual matrix as a canonical directory so `de` or `score weighted` can
+//! run on it directly.
+
+use anyhow::{bail, Context, Result};
+use atman_core::contrast::{median, percentile};
 use atman_core::de::{ols, OlsOutcome};
 use atman_core::stats::mean;
-use atman_core::{MeasurementRecord, Sample};
+use atman_core::{Abundance, MeasurementRecord, Sample};
 use clap::Args as ClapArgs;
-use csv::ReaderBuilder;
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+use crate::design::{build_design, parse_design, CovariateFrame, Term};
 use crate::io::{
-    atomic_write, hash_canonical_inputs, need_col, read_measurements_long, read_samples,
-    sidecar_path_for, write_run_sidecar,
+    atomic_write, format_f64, hash_canonical_inputs, hash_labeled_inputs, read_measurements_long,
+    read_samples, sidecar_path_for, write_measurements_long, write_run_sidecar,
 };
-use serde_json::json;
 use std::time::SystemTime;
 
 #[derive(ClapArgs, Debug)]
@@ -20,7 +32,8 @@ pub struct Args {
     #[arg(long)]
     input_dir: PathBuf,
 
-    /// Nuisance-covariate formula, e.g. "~ age + sex".
+    /// Nuisance-covariate formula, e.g. "~ age + sex" or "~ axis1_raw".
+    /// Accepts covariate expressions (`log10()`, `z()`, arithmetic).
     #[arg(long)]
     design: String,
 
@@ -35,6 +48,29 @@ pub struct Args {
     /// Minimum complete samples required per protein.
     #[arg(long, default_value_t = 3)]
     min_samples: usize,
+
+    /// Extra `sample_id`-keyed covariate TSVs joined to samples.tsv (repeatable).
+    #[arg(long, action = clap::ArgAction::Append)]
+    covariates_tsv: Vec<PathBuf>,
+
+    /// Drop proteins missing in more than this fraction of the design
+    /// samples (1.0 = keep all).
+    #[arg(long, default_value_t = 1.0)]
+    max_missing_fraction: f64,
+
+    /// Per-protein `n, ss_model, ss_total, r2` TSV.
+    #[arg(long)]
+    output_variance: Option<PathBuf>,
+
+    /// One-row cohort summary: `frac_variance = sum(ss_model)/sum(ss_total)`,
+    /// median/q75 R², fraction of proteins with R² > 0.25.
+    #[arg(long)]
+    output_variance_summary: Option<PathBuf>,
+
+    /// Canonical directory whose `measurements.tsv` carries the residual as
+    /// abundance (observed cells only) with `samples.tsv`/`proteins.tsv` copied.
+    #[arg(long)]
+    output_canonical_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,19 +90,54 @@ struct ResidualRow {
 }
 
 #[derive(Debug, Clone)]
-enum CovariateSpec {
-    Numeric { name: String },
-    Categorical { name: String, levels: Vec<String> },
+struct VarianceRow {
+    assay_id: String,
+    gene_symbol: String,
+    n: usize,
+    ss_model: f64,
+    ss_total: f64,
+    r2: Option<f64>,
 }
 
 pub fn run(args: Args) -> Result<()> {
     let started_at = SystemTime::now();
-    let terms = parse_design_terms(&args.design)?;
+    if !(0.0..=1.0).contains(&args.max_missing_fraction) {
+        bail!("--max-missing-fraction must be in [0, 1]");
+    }
     let samples_path = args.input_dir.join("samples.tsv");
     let samples = read_samples(&samples_path)?;
-    let metadata = read_sample_metadata(&samples_path, &terms)?;
-    let specs = infer_covariates(&terms, &metadata)?;
-    let sample_design = build_sample_design(samples, &metadata, &specs)?;
+    let mut frame = CovariateFrame::new();
+    frame.load_tsv(&samples_path)?;
+    for p in &args.covariates_tsv {
+        frame.load_tsv(p)?;
+    }
+    let spec = parse_design(&args.design, None)?;
+    if spec
+        .terms
+        .iter()
+        .any(|t| matches!(t, Term::Column(c) if c == "condition"))
+    {
+        bail!("residuals expects nuisance covariates only; omit `condition` from --design");
+    }
+    if spec.terms.is_empty() {
+        bail!("--design must contain at least one covariate besides the intercept");
+    }
+    let dm = build_design(
+        &spec,
+        samples.len(),
+        &|i, col| frame.get(&samples[i].sample_id, col).map(str::to_string),
+        &|_| None,
+    )
+    .with_context(|| format!("building the design for {}", args.design))?;
+    let sample_design: Vec<SampleDesign> = dm
+        .kept
+        .iter()
+        .enumerate()
+        .map(|(k, &i)| SampleDesign {
+            sample: samples[i].clone(),
+            row: dm.rows[k].clone(),
+        })
+        .collect();
     if sample_design.is_empty() {
         bail!(
             "no samples have complete design metadata for {}",
@@ -76,32 +147,61 @@ pub fn run(args: Args) -> Result<()> {
 
     let measurements_path = args.input_dir.join("measurements.tsv");
     let measurements = read_measurements_long(&measurements_path)?;
-    let rows = compute_residuals(&sample_design, &measurements, args.min_samples)?;
+    let (rows, variance, n_dropped_missingness) = compute_residuals(
+        &sample_design,
+        &measurements,
+        args.min_samples,
+        args.max_missing_fraction,
+    )?;
     write_long(&args.output, &rows)?;
+    let mut outputs = vec![args.output.clone()];
     if let Some(path) = &args.output_wide {
         write_wide(path, &rows)?;
+        outputs.push(path.clone());
+    }
+    if let Some(path) = &args.output_variance {
+        write_variance(path, &variance)?;
+        outputs.push(path.clone());
+    }
+    if let Some(path) = &args.output_variance_summary {
+        write_variance_summary(path, &args.design, sample_design.len(), &variance)?;
+        outputs.push(path.clone());
+    }
+    if let Some(dir) = &args.output_canonical_dir {
+        outputs.extend(write_canonical_dir(
+            dir,
+            &args.input_dir,
+            &measurements,
+            &rows,
+        )?);
     }
     eprintln!(
-        "residuals: design={} proteins={} rows={} output={}",
+        "residuals: design={} proteins={} rows={} dropped_missingness={} output={}",
         args.design,
-        rows.iter()
-            .map(|r| (r.assay_id.as_str(), r.gene_symbol.as_str()))
-            .collect::<BTreeSet<_>>()
-            .len(),
+        variance.len(),
         rows.len(),
+        n_dropped_missingness,
         args.output.display()
     );
 
     let finished_at = SystemTime::now();
-    let inputs_sha256 = hash_canonical_inputs(
+    let mut inputs_sha256 = hash_canonical_inputs(
         &args.input_dir,
         &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     )?;
-    let mut outputs = vec![args.output.clone()];
-    if let Some(p) = &args.output_wide {
-        outputs.push(p.clone());
+    for path in &args.covariates_tsv {
+        let label = format!(
+            "covariates_tsv/{}",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("covariates")
+        );
+        inputs_sha256.extend(hash_labeled_inputs(&[(label.as_str(), path.as_path())])?);
     }
     let sidecar = sidecar_path_for(&args.output);
+    let mut extras = serde_json::Map::new();
+    extras.insert("n_design_samples".into(), json!(sample_design.len()));
+    extras.insert("n_dropped_missingness".into(), json!(n_dropped_missingness));
     write_run_sidecar(
         &sidecar,
         "residuals",
@@ -111,168 +211,28 @@ pub fn run(args: Args) -> Result<()> {
             "output": args.output.display().to_string(),
             "output-wide": args.output_wide.as_ref().map(|p| p.display().to_string()),
             "min-samples": args.min_samples,
+            "covariates-tsv": args.covariates_tsv.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+            "max-missing-fraction": args.max_missing_fraction,
+            "output-variance": args.output_variance.as_ref().map(|p| p.display().to_string()),
+            "output-variance-summary": args.output_variance_summary.as_ref().map(|p| p.display().to_string()),
+            "output-canonical-dir": args.output_canonical_dir.as_ref().map(|p| p.display().to_string()),
         }),
         &inputs_sha256,
         &outputs,
         started_at,
         finished_at,
-        None,
+        Some(extras),
     )?;
     eprintln!("residuals: sidecar={}", sidecar.display());
     Ok(())
-}
-
-fn parse_design_terms(design: &str) -> Result<Vec<String>> {
-    let rhs = design
-        .trim()
-        .strip_prefix('~')
-        .ok_or_else(|| anyhow!("--design must start with `~`"))?
-        .trim();
-    if rhs.is_empty() {
-        bail!("--design must contain at least one covariate");
-    }
-    let mut terms = Vec::new();
-    let mut seen = BTreeSet::new();
-    for raw in rhs.split('+') {
-        let term = raw.trim();
-        if term.is_empty() {
-            bail!("empty term in --design");
-        }
-        if term == "1" {
-            continue;
-        }
-        if term == "0" || term == "-1" {
-            bail!("intercept removal is not supported; Atman includes an intercept");
-        }
-        if term == "condition" {
-            bail!("residuals expects nuisance covariates only; omit `condition` from --design");
-        }
-        if !seen.insert(term.to_string()) {
-            bail!("duplicate term {:?} in --design", term);
-        }
-        terms.push(term.to_string());
-    }
-    if terms.is_empty() {
-        bail!("--design must contain at least one covariate besides the intercept");
-    }
-    Ok(terms)
-}
-
-fn read_sample_metadata(
-    path: &Path,
-    terms: &[String],
-) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
-    let mut reader = ReaderBuilder::new()
-        .delimiter(b'\t')
-        .has_headers(true)
-        .from_path(path)
-        .with_context(|| format!("opening {:?}", path))?;
-    let headers = reader.headers()?.clone();
-    let sample_col = need_col(&headers, "sample_id", path)?;
-    let mut term_cols = Vec::new();
-    for term in terms {
-        term_cols.push((
-            term.clone(),
-            need_col(&headers, term, path)
-                .with_context(|| format!("required by residuals --design {}", term))?,
-        ));
-    }
-    let mut out = BTreeMap::new();
-    for row in reader.records() {
-        let row = row?;
-        let mut values = BTreeMap::new();
-        for (term, col) in &term_cols {
-            values.insert(term.clone(), row[*col].trim().to_string());
-        }
-        out.insert(row[sample_col].to_string(), values);
-    }
-    Ok(out)
-}
-
-fn infer_covariates(
-    terms: &[String],
-    metadata: &BTreeMap<String, BTreeMap<String, String>>,
-) -> Result<Vec<CovariateSpec>> {
-    let mut specs = Vec::new();
-    for term in terms {
-        let values: Vec<&str> = metadata
-            .values()
-            .filter_map(|row| row.get(term).map(String::as_str))
-            .filter(|value| !value.is_empty())
-            .collect();
-        if values.is_empty() {
-            bail!("covariate {:?} has no non-empty values", term);
-        }
-        if values.iter().all(|value| value.parse::<f64>().is_ok()) {
-            specs.push(CovariateSpec::Numeric { name: term.clone() });
-        } else {
-            let levels: Vec<String> = values
-                .into_iter()
-                .map(str::to_string)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            if levels.len() < 2 {
-                bail!("categorical covariate {:?} has fewer than two levels", term);
-            }
-            specs.push(CovariateSpec::Categorical {
-                name: term.clone(),
-                levels,
-            });
-        }
-    }
-    Ok(specs)
-}
-
-fn build_sample_design(
-    samples: Vec<Sample>,
-    metadata: &BTreeMap<String, BTreeMap<String, String>>,
-    specs: &[CovariateSpec],
-) -> Result<Vec<SampleDesign>> {
-    let mut out = Vec::new();
-    for sample in samples {
-        let Some(meta) = metadata.get(&sample.sample_id) else {
-            continue;
-        };
-        let mut row = vec![1.0];
-        let mut complete = true;
-        for spec in specs {
-            match spec {
-                CovariateSpec::Numeric { name } => {
-                    let value = meta.get(name).map(String::as_str).unwrap_or("").trim();
-                    if value.is_empty() {
-                        complete = false;
-                        break;
-                    }
-                    row.push(value.parse()?);
-                }
-                CovariateSpec::Categorical { name, levels } => {
-                    let value = meta.get(name).map(String::as_str).unwrap_or("").trim();
-                    if value.is_empty() {
-                        complete = false;
-                        break;
-                    }
-                    if !levels.iter().any(|level| level == value) {
-                        bail!("unknown level {:?} for covariate {:?}", value, name);
-                    }
-                    for level in levels.iter().skip(1) {
-                        row.push((value == level) as u8 as f64);
-                    }
-                }
-            }
-        }
-        if complete {
-            out.push(SampleDesign { sample, row });
-        }
-    }
-    Ok(out)
 }
 
 fn compute_residuals(
     sample_design: &[SampleDesign],
     measurements: &[MeasurementRecord],
     min_samples: usize,
-) -> Result<Vec<ResidualRow>> {
+    max_missing_fraction: f64,
+) -> Result<(Vec<ResidualRow>, Vec<VarianceRow>, usize)> {
     let design_by_sample: HashMap<&str, &SampleDesign> = sample_design
         .iter()
         .map(|row| (row.sample.sample_id.as_str(), row))
@@ -298,8 +258,16 @@ fn compute_residuals(
             .push((sample, value));
     }
 
+    let n_design = sample_design.len();
     let mut out = Vec::new();
+    let mut variance = Vec::new();
+    let mut n_dropped = 0usize;
     for ((assay_id, gene_symbol), values) in by_protein {
+        let missing = 1.0 - values.len() as f64 / n_design.max(1) as f64;
+        if missing > max_missing_fraction + 1e-12 {
+            n_dropped += 1;
+            continue;
+        }
         let design: Vec<Vec<f64>> = values
             .iter()
             .map(|(sample, _)| sample.row.clone())
@@ -309,12 +277,17 @@ fn compute_residuals(
             OlsOutcome::Computed(fit) => fit,
             OlsOutcome::Skipped { .. } => continue,
         };
+        let ybar = mean(&y);
+        let mut ss_total = 0.0;
+        let mut ss_model = 0.0;
         for ((sample, observed), row) in values.iter().zip(design.iter()) {
             let fitted: f64 = row
                 .iter()
                 .zip(fit.beta.iter())
                 .map(|(x, beta)| x * beta)
                 .sum();
+            ss_total += (observed - ybar).powi(2);
+            ss_model += (fitted - ybar).powi(2);
             out.push(ResidualRow {
                 sample_id: sample.sample.sample_id.clone(),
                 subject_id: sample.sample.subject_id.clone().unwrap_or_default(),
@@ -324,6 +297,18 @@ fn compute_residuals(
                 residual: observed - fitted,
             });
         }
+        variance.push(VarianceRow {
+            assay_id,
+            gene_symbol,
+            n: y.len(),
+            ss_model,
+            ss_total,
+            r2: if ss_total > 0.0 {
+                Some(ss_model / ss_total)
+            } else {
+                None
+            },
+        });
     }
     out.sort_by(|a, b| {
         a.gene_symbol
@@ -331,7 +316,12 @@ fn compute_residuals(
             .then_with(|| a.assay_id.cmp(&b.assay_id))
             .then_with(|| a.sample_id.cmp(&b.sample_id))
     });
-    Ok(out)
+    variance.sort_by(|a, b| {
+        a.gene_symbol
+            .cmp(&b.gene_symbol)
+            .then_with(|| a.assay_id.cmp(&b.assay_id))
+    });
+    Ok((out, variance, n_dropped))
 }
 
 fn write_long(path: &Path, rows: &[ResidualRow]) -> Result<()> {
@@ -388,6 +378,107 @@ fn write_wide(path: &Path, rows: &[ResidualRow]) -> Result<()> {
         out.push('\n');
     }
     atomic_write(path, out.as_bytes())
+}
+
+fn write_variance(path: &Path, rows: &[VarianceRow]) -> Result<()> {
+    let mut out = String::from("assay_id\tgene_symbol\tn\tss_model\tss_total\tr2\n");
+    for r in rows {
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
+            r.assay_id,
+            r.gene_symbol,
+            r.n,
+            format_f64(r.ss_model),
+            format_f64(r.ss_total),
+            r.r2.map(format_f64).unwrap_or_default()
+        ));
+    }
+    atomic_write(path, out.as_bytes())
+}
+
+fn write_variance_summary(
+    path: &Path,
+    design: &str,
+    n_samples: usize,
+    rows: &[VarianceRow],
+) -> Result<()> {
+    let with_r2: Vec<&VarianceRow> = rows.iter().filter(|r| r.r2.is_some()).collect();
+    let n_proteins = with_r2.len();
+    let ss_model: f64 = with_r2.iter().map(|r| r.ss_model).sum();
+    let ss_total: f64 = with_r2.iter().map(|r| r.ss_total).sum();
+    let frac_variance = if ss_total > 0.0 {
+        Some(ss_model / ss_total)
+    } else {
+        None
+    };
+    let mut r2s: Vec<f64> = with_r2.iter().filter_map(|r| r.r2).collect();
+    r2s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_r2 = median(&r2s);
+    let q75_r2 = percentile(&r2s, 0.75);
+    let frac_gt = if n_proteins > 0 {
+        Some(r2s.iter().filter(|v| **v > 0.25).count() as f64 / n_proteins as f64)
+    } else {
+        None
+    };
+    let f = |v: Option<f64>| v.map(format_f64).unwrap_or_default();
+    let out = format!(
+        "design\tn_samples\tn_proteins\tfrac_variance\tmedian_r2\tq75_r2\tfrac_r2_gt_0_25\n{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        design,
+        n_samples,
+        n_proteins,
+        f(frac_variance),
+        f(median_r2),
+        f(q75_r2),
+        f(frac_gt)
+    );
+    atomic_write(path, out.as_bytes())
+}
+
+fn with_value(abundance: &Abundance, value: f64) -> Abundance {
+    match abundance {
+        Abundance::Log2Npx(_) => Abundance::Log2Npx(value),
+        Abundance::Log2Intensity(_) => Abundance::Log2Intensity(value),
+        Abundance::Ibaq(_) => Abundance::Ibaq(value),
+        Abundance::Raw(_) => Abundance::Raw(value),
+    }
+}
+
+/// Write the residual matrix as a canonical directory: `measurements.tsv`
+/// carries the residual as abundance for every fitted (sample, assay)
+/// cell; `samples.tsv` and `proteins.tsv` are byte copies of the input.
+fn write_canonical_dir(
+    dir: &Path,
+    input_dir: &Path,
+    measurements: &[MeasurementRecord],
+    rows: &[ResidualRow],
+) -> Result<Vec<PathBuf>> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {:?}", dir))?;
+    let residual_of: HashMap<(&str, &str), f64> = rows
+        .iter()
+        .map(|r| ((r.sample_id.as_str(), r.assay_id.as_str()), r.residual))
+        .collect();
+    let mut records: Vec<MeasurementRecord> = Vec::with_capacity(rows.len());
+    for m in measurements {
+        let Some(&resid) = residual_of.get(&(m.sample_id.as_str(), m.assay_id.0.as_str())) else {
+            continue;
+        };
+        let mut r = m.clone();
+        r.abundance = with_value(&m.abundance, resid);
+        r.abundance_raw = with_value(&m.abundance_raw, resid);
+        r.npx_source_str = format_f64(resid);
+        r.dropped_by_qc = false;
+        records.push(r);
+    }
+    let measurements_path = dir.join("measurements.tsv");
+    write_measurements_long(&measurements_path, &records)?;
+    let mut written = vec![measurements_path];
+    for name in ["samples.tsv", "proteins.tsv"] {
+        let src = input_dir.join(name);
+        let dst = dir.join(name);
+        std::fs::copy(&src, &dst).with_context(|| format!("copying {:?} to {:?}", src, dst))?;
+        written.push(dst);
+    }
+    Ok(written)
 }
 
 fn fmt(value: f64) -> String {

@@ -197,6 +197,21 @@ both routings against R references)
   `mean_b`, `effect_size` are empty. The `--contrast` text must match the
   `--design` term exactly.
 
+### atman residuals — variance and canonical outputs
+
+`--covariates-tsv PATH` (repeatable) joins extra `sample_id`-keyed columns
+(e.g. axis scores) so `--design '~ axis1_raw'` or `'~ axis1_raw + axis2_raw'`
+can regress them out. `--design` accepts covariate expressions.
+`--max-missing-fraction F` drops proteins observed in fewer than `1−F` of the
+design samples. `--output-variance` writes per-protein `n, ss_model,
+ss_total, r2`; `--output-variance-summary` writes `design, n_samples,
+n_proteins, frac_variance (Σss_model/Σss_total), median_r2, q75_r2,
+frac_r2_gt_0_25`. `--output-canonical-dir DIR` writes a canonical directory
+whose `measurements.tsv` carries the residual as abundance (observed cells
+only, same unit label as the input) with `samples.tsv`/`proteins.tsv`
+copied, so `atman de` or `atman score weighted` run directly on the
+residual matrix.
+
 ### atman bench decompose --tools atman.<method>
 
 Native dispatch of decomposition methods under `atman bench decompose`. Allowed
