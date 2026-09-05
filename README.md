@@ -128,6 +128,8 @@ atman report qc          summarize QC, missingness, and condition support
 atman matrix             canonical long TSV → per-panel wide NPX CSVs
 atman fold-change        compute per-panel log2 fold-change tables
 atman de                 paired, Welch, OLS, mixed, limma, msqrob, or ensemble DE
+                         (--include-controls, --condition-col, --subset, --collapse-others,
+                          --max-missing-fraction, expression terms, continuous --contrast)
 atman detectability      model detected/not-detected proteins alongside abundance
 atman robust-paired      leave-one-subject-out sign-stability for paired DE
 atman absence-topology   cluster proteins that go missing together (co-absence)
@@ -142,11 +144,14 @@ atman module-de          aggregate proteins into modules and test at module leve
 atman modules discover   data-driven module discovery (WGCNA soft-threshold + UPGMA)
 atman score modules      score modules per sample from canonical measurements
 atman score signatures   per-sample gene-set signature scoring (singscore)
+atman score weighted     signed-weight signature transfer with an optional two-group summary
 atman programs filter    flag ICA programs by annotation, loading, and contamination signature
 atman enrich ora         over-representation analysis from DE hits
 atman enrich gsea        pre-ranked gene-set enrichment (fgseaSimple-equivalent)
 atman enrich gprofiler   live g:Profiler REST wrapper with cached responses
 atman meta               combine DE results across cohorts
+atman concordance        Spearman / sign / Jaccard agreement of effect tables, stage deltas
+atman residuals          nuisance-covariate residuals (+ R² tables, canonical residual dir)
 atman network influence  feature-covariance hub scoring
 atman network differential  cross-cohort differential coexpression (edge-pairwise / edge-summary / module)
 atman decompose ica      multi-seed FastICA with seed-stability reporting
@@ -157,6 +162,12 @@ atman decompose unmix    VCA + FCLS compartmental unmixing
 atman decompose counterfactual  per-archetype counterfactual ablation
 atman align programs     cross-cohort program alignment + sensitivity sweep
 atman align bootstrap    subject-level bootstrap of alignment
+atman axes build         representative archetypes → axes, within-cohort orthogonalization, global z
+atman axes contrast      score-level disease modulation: Cohen d, Welch, AUC, adjusted OLS, BH, bootstrap
+atman axes groups        per-group score summaries, Kruskal–Wallis, reference-vs-group effects
+atman axes anchor        Spearman anchoring of scores to clinical covariates (bootstrap CI, partial)
+atman axes displacement  case-minus-control displacement vectors and pairwise cosines
+atman axes loco          leave-one-cohort-out stability of group centroids
 atman run                execute a plan YAML/JSON and emit a hash manifest
 ```
 

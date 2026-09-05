@@ -8,6 +8,37 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`atman axes`** command group for subject-level score tables:
+  `build` (representative archetype columns → axes, within-cohort
+  orthogonalization, global z), `contrast` (Cohen d with CI, Welch, AUC,
+  covariate-adjusted OLS with nested designs, BH within family, subject
+  bootstrap, `--omnibus-factor` joint F-tests), `groups` (per-group means
+  with t CI, medians, Kruskal–Wallis, reference-vs-group effects), `anchor`
+  (Spearman with bootstrap CI and partial rows), `displacement`
+  (case-minus-control vectors, pairwise cosine with bootstrap CI), `loco`
+  (leave-one-cohort-out centroid stability). Covariate expressions (`z()`,
+  `log10()`, `log2()`, `ln()`, arithmetic) in every design.
+- **`atman concordance`**: Spearman/sign/Jaccard agreement of per-feature
+  effect tables over shared features, with feature-resampling CIs and
+  between-stage delta rows.
+- **`atman score weighted`**: signed-weight signature transfer with an
+  optional two-group summary (Cohen d, Welch p, AUC).
+- **`atman de`**: `--include-controls`, `--condition-col`, `--subset`,
+  `--collapse-others`, `--max-missing-fraction`, covariate expressions in
+  `--design`, continuous `--contrast` terms; the OLS path reports pooled-SD
+  Cohen d (`effect_size_method = cohen_d`) with CI; `de_results.tsv` gains
+  `n_a`/`n_b`.
+- **`atman residuals`**: `--covariates-tsv`, `--max-missing-fraction`,
+  expressions in `--design`, `--output-variance`,
+  `--output-variance-summary`, `--output-canonical-dir`.
+- `atman-core`: `contrast` (Cohen d, AUC, Kruskal–Wallis, Spearman p, t CI,
+  percentile, z-score) and `expr` (covariate expressions) modules.
+
+### Changed
+
+- `de_results.tsv` has two new trailing columns `n_a`, `n_b`; readers that
+  index by header are unaffected.
+
 - **`atman decompose nmf --max-missing-fraction`** — drop assays whose
   missing-sample fraction exceeds a configurable threshold (default 0.0,
   strict complete-case), mirroring the existing `decompose ica` assay
