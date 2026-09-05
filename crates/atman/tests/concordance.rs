@@ -149,3 +149,70 @@ fn concordance_pairs_flag_restricts_output_and_is_deterministic() {
     assert_eq!(a, b);
     assert_eq!(a.lines().count(), 2);
 }
+
+#[test]
+fn concordance_tree_over_effect_tables() {
+    let tmp = tempfile::tempdir().unwrap();
+    let manifest = write_tables(tmp.path());
+    let out = tmp.path().join("conc.tsv");
+    let linkage = tmp.path().join("linkage.tsv");
+    let support = tmp.path().join("support.tsv");
+    let newick = tmp.path().join("tree.newick");
+    let r = run_atman(&[
+        "concordance",
+        "--manifest",
+        manifest.to_str().unwrap(),
+        "--n-bootstrap",
+        "100",
+        "--seed",
+        "2",
+        "--output",
+        out.to_str().unwrap(),
+        "--tree-stage",
+        "primary",
+        "--output-tree-linkage",
+        linkage.to_str().unwrap(),
+        "--output-tree-support",
+        support.to_str().unwrap(),
+        "--output-tree-newick",
+        newick.to_str().unwrap(),
+    ]);
+    assert!(
+        r.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    // Leaves x (0), y (1), axis1 (2). x and axis1 are perfectly concordant (distance 0),
+    // y is 0.7 from both ⇒ merges: (0, 2) at 0, then (1, 3) at 0.7.
+    let l = read_rows(&linkage);
+    assert_eq!(l.len(), 2);
+    assert_eq!((l[0]["left"].as_str(), l[0]["right"].as_str()), ("0", "2"));
+    assert!(num(&l[0], "distance").abs() < 1e-12);
+    assert!((num(&l[1], "distance") - 0.7).abs() < 1e-12);
+    let sp = read_rows(&support);
+    assert_eq!(sp[0]["node"], "axis1 | x");
+    // Feature resamples can make y tie with axis1 against x, so support < 1 is legitimate.
+    let s0 = num(&sp[0], "support");
+    assert!(s0 > 0.5 && s0 <= 1.0, "support {s0}");
+    assert_eq!(sp[1]["support"], "1");
+    let nw = std::fs::read_to_string(&newick).unwrap();
+    let label = (s0 * 100.0).round() as i64;
+    assert_eq!(
+        nw.trim_end(),
+        format!("(y:0.7,(x:0,axis1:0){label}:0.7)100;")
+    );
+    // Several stages without --tree-stage is an error.
+    let r = run_atman(&[
+        "concordance",
+        "--manifest",
+        manifest.to_str().unwrap(),
+        "--n-bootstrap",
+        "0",
+        "--output",
+        out.to_str().unwrap(),
+        "--output-tree-linkage",
+        linkage.to_str().unwrap(),
+    ]);
+    assert!(!r.status.success());
+    assert!(String::from_utf8_lossy(&r.stderr).contains("--tree-stage"));
+}

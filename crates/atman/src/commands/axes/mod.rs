@@ -13,6 +13,7 @@ mod displacement;
 mod groups;
 mod icc;
 mod loco;
+mod tree;
 
 use anyhow::{bail, Result};
 use atman_core::SplitMix64;
@@ -49,6 +50,8 @@ enum Command {
     Loco(loco::LocoArgs),
     /// One-way random-effects ICC(1) of a score across repeated samples per subject.
     Icc(icc::IccArgs),
+    /// Average-linkage tree of contrasts in a score space with bootstrap clade support.
+    Tree(tree::TreeArgs),
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -60,6 +63,7 @@ pub fn run(args: Args) -> Result<()> {
         Command::Displacement(a) => displacement::run(a),
         Command::Loco(a) => loco::run(a),
         Command::Icc(a) => icc::run(a),
+        Command::Tree(a) => tree::run(a),
     }
 }
 

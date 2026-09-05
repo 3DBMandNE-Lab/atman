@@ -45,6 +45,18 @@ pub struct Args {
     /// Delta-rho rows between stages for pairs present in more than one stage.
     #[arg(long)]
     output_delta: Option<PathBuf>,
+    /// Build an average-linkage tree of the tables in `--tree-stage` on
+    /// `1 − Spearman` (pairwise-shared features) with feature-bootstrap
+    /// support: linkage table path.
+    #[arg(long)]
+    output_tree_linkage: Option<PathBuf>,
+    #[arg(long)]
+    output_tree_support: Option<PathBuf>,
+    #[arg(long)]
+    output_tree_newick: Option<PathBuf>,
+    /// Stage whose tables form the tree (default: the only stage).
+    #[arg(long)]
+    tree_stage: Option<String>,
 }
 
 struct TableSpec {
@@ -397,6 +409,94 @@ pub fn run(args: Args) -> Result<()> {
         atomic_write(p, delta_out.as_bytes())?;
         outputs.push(p.clone());
     }
+    if args.output_tree_linkage.is_some()
+        || args.output_tree_support.is_some()
+        || args.output_tree_newick.is_some()
+    {
+        let linkage_path = args.output_tree_linkage.as_ref().ok_or_else(|| {
+            anyhow!("--output-tree-support/--output-tree-newick require --output-tree-linkage")
+        })?;
+        let stage = match &args.tree_stage {
+            Some(s) => s.clone(),
+            None if stages.len() == 1 => stages[0].clone(),
+            None => bail!("--tree-stage is required when the manifest has several stages"),
+        };
+        let tree_labels: Vec<String> = labels
+            .iter()
+            .filter(|l| tables.contains_key(&(stage.clone(), (*l).clone())))
+            .cloned()
+            .collect();
+        if tree_labels.len() < 2 {
+            bail!("stage {:?} has fewer than two tables for a tree", stage);
+        }
+        // Union of features; per table an Option effect per feature.
+        let union: Vec<String> = tree_labels
+            .iter()
+            .flat_map(|l| tables[&(stage.clone(), l.clone())].keys().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let effects: Vec<Vec<Option<f64>>> = tree_labels
+            .iter()
+            .map(|l| {
+                let t = &tables[&(stage.clone(), l.clone())];
+                union.iter().map(|f| t.get(f).map(|(e, _)| *e)).collect()
+            })
+            .collect();
+        let dissim = |idx: &[usize]| -> Vec<Vec<f64>> {
+            let n = effects.len();
+            let mut d = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let mut x = Vec::new();
+                    let mut y = Vec::new();
+                    for &k in idx {
+                        if let (Some(a), Some(b)) = (effects[i][k], effects[j][k]) {
+                            x.push(a);
+                            y.push(b);
+                        }
+                    }
+                    let v = 1.0 - spearman(&x, &y).unwrap_or(0.0);
+                    d[i][j] = v;
+                    d[j][i] = v;
+                }
+            }
+            d
+        };
+        let all: Vec<usize> = (0..union.len()).collect();
+        let reference = crate::tree::Tree::from_dissimilarity(tree_labels.clone(), &dissim(&all));
+        let mut rng = SplitMix64::new(derive_sub_seed(args.seed, usize::MAX / 2));
+        let replicates: Vec<crate::tree::Tree> = (0..args.n_bootstrap)
+            .map(|_| {
+                let idx: Vec<usize> = (0..union.len()).map(|_| rng.bounded(union.len())).collect();
+                crate::tree::Tree::from_dissimilarity(tree_labels.clone(), &dissim(&idx))
+            })
+            .collect();
+        let support = crate::tree::clade_support(&reference, &replicates);
+        crate::tree::write_linkage(linkage_path, &reference)?;
+        outputs.push(linkage_path.clone());
+        if let Some(p) = &args.output_tree_support {
+            crate::tree::write_support(p, &reference, &support, args.n_bootstrap)?;
+            outputs.push(p.clone());
+        }
+        if let Some(p) = &args.output_tree_newick {
+            let labelled: Vec<Option<f64>> = support
+                .iter()
+                .map(|s| if s.is_finite() { Some(*s) } else { None })
+                .collect();
+            let mut text = reference.newick(&labelled, false);
+            text.push('\n');
+            atomic_write(p, text.as_bytes())?;
+            outputs.push(p.clone());
+        }
+        eprintln!(
+            "concordance: tree stage={} leaves={} features={} n_bootstrap={}",
+            stage,
+            tree_labels.len(),
+            union.len(),
+            args.n_bootstrap
+        );
+    }
     eprintln!(
         "concordance: tables={} pairs={} rows={} output={}",
         specs.len(),
@@ -429,6 +529,10 @@ pub fn run(args: Args) -> Result<()> {
             "ci": args.ci,
             "output": args.output.display().to_string(),
             "output-delta": args.output_delta.as_ref().map(|p| p.display().to_string()),
+            "output-tree-linkage": args.output_tree_linkage.as_ref().map(|p| p.display().to_string()),
+            "output-tree-support": args.output_tree_support.as_ref().map(|p| p.display().to_string()),
+            "output-tree-newick": args.output_tree_newick.as_ref().map(|p| p.display().to_string()),
+            "tree-stage": args.tree_stage,
         }),
         &inputs,
         &outputs,

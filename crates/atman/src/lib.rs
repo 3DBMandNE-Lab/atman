@@ -4,3 +4,4 @@ pub mod commands;
 pub mod design;
 pub mod io;
 pub mod run_sidecar;
+pub mod tree;
