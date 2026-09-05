@@ -359,6 +359,8 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
                             None
                         },
                         posthoc_adj_p: if adj.is_finite() { Some(adj) } else { None },
+                        n_a: None,
+                        n_b: None,
                     });
                 }
             }
@@ -408,6 +410,8 @@ pub(super) fn run_posthoc_sidak(args: Args, started_at: SystemTime) -> Result<()
                         posthoc_method: "sidak".into(),
                         posthoc_p: None,
                         posthoc_adj_p: None,
+                        n_a: None,
+                        n_b: None,
                     });
                 }
             }
@@ -793,6 +797,8 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
                         posthoc_method: "tukey".into(),
                         posthoc_p: if raw_p.is_finite() { Some(raw_p) } else { None },
                         posthoc_adj_p: if adj_p.is_finite() { Some(adj_p) } else { None },
+                        n_a: None,
+                        n_b: None,
                     });
                 }
             }
@@ -842,6 +848,8 @@ pub(super) fn run_posthoc_tukey(args: Args, started_at: SystemTime) -> Result<()
                         posthoc_method: "tukey".into(),
                         posthoc_p: None,
                         posthoc_adj_p: None,
+                        n_a: None,
+                        n_b: None,
                     });
                 }
             }
@@ -1278,6 +1286,8 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
                         posthoc_method: "dunnett".into(),
                         posthoc_p: if raw_p.is_finite() { Some(raw_p) } else { None },
                         posthoc_adj_p: if adj_p.is_finite() { Some(adj_p) } else { None },
+                        n_a: None,
+                        n_b: None,
                     });
                 }
             }
@@ -1327,6 +1337,8 @@ pub(super) fn run_posthoc_dunnett(args: Args, started_at: SystemTime) -> Result<
                         posthoc_method: "dunnett".into(),
                         posthoc_p: None,
                         posthoc_adj_p: None,
+                        n_a: None,
+                        n_b: None,
                     });
                 }
             }

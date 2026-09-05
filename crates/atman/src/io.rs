@@ -830,6 +830,12 @@ pub struct DeResultRow {
     /// Family-wise adjusted p-value within the contrast family (e.g.
     /// Sidak `1 - (1-p)^m`). Populated only for post-hoc rows.
     pub posthoc_adj_p: Option<f64>,
+    /// Observed subjects in group A (first side of the comparison) that
+    /// entered the test. Filled for `welch-t` and the OLS path; empty for
+    /// paired tests.
+    pub n_a: Option<usize>,
+    /// Observed subjects in group B.
+    pub n_b: Option<usize>,
 }
 
 /// Parse `de_results.tsv` back into `DeResultRow`s. Used by
@@ -921,6 +927,8 @@ pub fn read_de_results(path: &Path) -> Result<Vec<DeResultRow>> {
             posthoc_method: get(&row, "posthoc_method"),
             posthoc_p: parse_opt_f64(&row, "posthoc_p")?,
             posthoc_adj_p: parse_opt_f64(&row, "posthoc_adj_p")?,
+            n_a: parse_opt_usize(&row, "n_a")?,
+            n_b: parse_opt_usize(&row, "n_b")?,
         });
     }
     Ok(out)
@@ -935,7 +943,7 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
          s2_trend\ts2_prior\ts2_posterior\tdf_prior\tdf_total\t\
          f_statistic\tf_p_value\tf_bh_q\tlfc_threshold\t\
          n_peptides_observed\tpeptide_variance_ratio\tridge_lambda\tmethod\t\
-         posthoc_method\tposthoc_p\tposthoc_adj_p\n",
+         posthoc_method\tposthoc_p\tposthoc_adj_p\tn_a\tn_b\n",
     );
     for r in rows {
         buf.push_str(&r.panel);
@@ -1015,6 +1023,14 @@ pub fn write_de_results(path: &Path, rows: &[DeResultRow]) -> Result<()> {
         push_opt_f64(&mut buf, r.posthoc_p);
         buf.push('\t');
         push_opt_f64(&mut buf, r.posthoc_adj_p);
+        buf.push('\t');
+        if let Some(n) = r.n_a {
+            buf.push_str(&n.to_string());
+        }
+        buf.push('\t');
+        if let Some(n) = r.n_b {
+            buf.push_str(&n.to_string());
+        }
         buf.push('\n');
     }
     atomic_write(path, buf.as_bytes())
@@ -1239,6 +1255,8 @@ mod tests {
             posthoc_method: String::new(),
             posthoc_p: None,
             posthoc_adj_p: None,
+            n_a: None,
+            n_b: None,
         };
         write_de_results(&p, &[row]).unwrap();
         let text = std::fs::read_to_string(&p).unwrap();
@@ -1350,6 +1368,8 @@ mod tests {
             posthoc_method: String::new(),
             posthoc_p: None,
             posthoc_adj_p: None,
+            n_a: None,
+            n_b: None,
         };
         write_de_results(&p, &[row]).unwrap();
         let text = std::fs::read_to_string(&p).unwrap();

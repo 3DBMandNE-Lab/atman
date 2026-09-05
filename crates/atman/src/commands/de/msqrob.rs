@@ -276,6 +276,8 @@ pub(super) fn run_msqrob(
                                 posthoc_method: String::new(),
                                 posthoc_p: None,
                                 posthoc_adj_p: None,
+                                n_a: None,
+                                n_b: None,
                             },
                         },
                     ));
@@ -354,6 +356,8 @@ pub(super) fn run_msqrob(
                         posthoc_method: String::new(),
                         posthoc_p: None,
                         posthoc_adj_p: None,
+                        n_a: None,
+                        n_b: None,
                     },
                 },
             ));

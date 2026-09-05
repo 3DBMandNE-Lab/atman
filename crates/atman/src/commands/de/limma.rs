@@ -293,6 +293,8 @@ pub(super) fn run_limma(
                         posthoc_method: String::new(),
                         posthoc_p: None,
                         posthoc_adj_p: None,
+                        n_a: None,
+                        n_b: None,
                     });
                 }
                 for (panel, n) in per_panel {
@@ -537,6 +539,8 @@ pub(super) fn run_limma(
                 posthoc_method: String::new(),
                 posthoc_p: None,
                 posthoc_adj_p: None,
+                n_a: None,
+                n_b: None,
             });
         }
 

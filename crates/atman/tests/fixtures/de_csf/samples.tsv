@@ -1,0 +1,13 @@
+sample_id	subject_id	condition	is_control	sample_type	ingest_order	age	sex	site	grp
+S00	S00	Case	0	bio	1	45.0	F	X	A
+S01	S01	Case	0	bio	2	45.0	M	X	A
+S02	S02	Case	0	bio	3	71.0	F	Y	A
+S03	S03	Case	0	bio	4	59.0	M	Y	B
+S04	S04	Case	0	bio	5	63.0	F	X	B
+S05	S05	Case	0	bio	6	64.0	M	Y	B
+S06	S06	Ctrl	1	bio	7	68.0	F	X	C
+S07	S07	Ctrl	1	bio	8	41.0	M	X	C
+S08	S08	Ctrl	1	bio	9	59.0	F	Y	C
+S09	S09	Ctrl	1	bio	10	45.0	M	Y	D
+S10	S10	Ctrl	1	bio	11	56.0	F	X	D
+S11	S11	Ctrl	1	bio	12	77.0	M	Y	D

@@ -240,6 +240,31 @@ pub struct Args {
     /// Sidecar records each path and its SHA-256.
     #[arg(long, action = clap::ArgAction::Append)]
     pub(super) adjust_for: Vec<PathBuf>,
+
+    /// Let samples flagged `is_control=1` join a group when their condition
+    /// is named in `--groups`. Default: control samples are excluded from
+    /// every comparison (historical behaviour).
+    #[arg(long, default_value_t = false)]
+    pub(super) include_controls: bool,
+
+    /// samples.tsv column used as the condition label.
+    #[arg(long, default_value = "condition")]
+    pub(super) condition_col: String,
+
+    /// Keep only samples whose raw samples.tsv values satisfy every
+    /// predicate (`col==v`, `col=v`, `col!=v`; repeatable or `;`-separated).
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub(super) subset: Vec<String>,
+
+    /// Relabel every condition not named in `--groups` to this label
+    /// (which must itself appear in `--groups`).
+    #[arg(long)]
+    pub(super) collapse_others: Option<String>,
+
+    /// Drop proteins whose fraction of missing samples within a comparison
+    /// exceeds this value (1.0 = keep every protein).
+    #[arg(long, default_value_t = 1.0)]
+    pub(super) max_missing_fraction: f64,
 }
 
 pub(super) fn apply_per_subject_proxy(args: &mut Args) -> Result<()> {

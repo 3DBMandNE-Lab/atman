@@ -17,6 +17,9 @@ pub(super) struct RobustStats {
     pub wilcoxon_method: String,
     pub median_diff: Option<f64>,
     pub trimmed_mean_diff: Option<f64>,
+    /// Observed subjects per group for unpaired paths (`None` when paired).
+    pub n_a: Option<usize>,
+    pub n_b: Option<usize>,
 }
 
 pub(super) fn robust_paired(pairs: &[(f64, f64)], min_pairs: usize) -> RobustStats {
@@ -36,6 +39,8 @@ pub(super) fn robust_paired(pairs: &[(f64, f64)], min_pairs: usize) -> RobustSta
         wilcoxon_method: "signed_rank".to_string(),
         median_diff: median(diffs.clone()),
         trimmed_mean_diff: trimmed_mean(diffs, 0.2),
+        n_a: None,
+        n_b: None,
     }
 }
 
@@ -86,6 +91,8 @@ pub(super) fn robust_unpaired(a: &[f64], b: &[f64], min_pairs: usize) -> RobustS
         trimmed_mean_diff: trimmed_mean(a.to_vec(), 0.2)
             .zip(trimmed_mean(b.to_vec(), 0.2))
             .map(|(ma, mb)| ma - mb),
+        n_a: Some(a.len()),
+        n_b: Some(b.len()),
     }
 }
 

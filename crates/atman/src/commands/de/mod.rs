@@ -34,8 +34,8 @@ use ols_design::{
     validate_random_intercept_design, OlsDesign,
 };
 use output_rows::{
-    override_subject_id, write_covariate_rows, write_omnibus_rows, write_proxy_summary,
-    CovariateRow, OmnibusRow, ReportAccumulator,
+    apply_subset, override_condition, override_subject_id, write_covariate_rows,
+    write_omnibus_rows, write_proxy_summary, CovariateRow, OmnibusRow, ReportAccumulator,
 };
 use posthoc::{run_posthoc_dunnett, run_posthoc_sidak, run_posthoc_tukey, write_design_rows};
 use robust_stats::{median, robust_paired, robust_unpaired, RobustStats};
@@ -388,6 +388,51 @@ pub fn run(args: Args) -> Result<()> {
             &args.paired_by,
         )?;
     }
+    let samples_path = args.input_dir.join("samples.tsv");
+    if args.condition_col != "condition" {
+        override_condition(&mut samples, &samples_path, &args.condition_col)?;
+    }
+    let subset_preds = if args.subset.is_empty() {
+        Vec::new()
+    } else {
+        crate::design::parse_predicates(&args.subset.join(";"))?
+    };
+    let n_subset_dropped = if subset_preds.is_empty() {
+        0
+    } else {
+        apply_subset(&mut samples, &samples_path, &subset_preds)?
+    };
+    if args.include_controls {
+        for s in samples.iter_mut() {
+            s.is_control = false;
+        }
+    }
+    if let Some(label) = &args.collapse_others {
+        let groups = args
+            .groups
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--collapse-others requires --groups"))?;
+        let named: std::collections::BTreeSet<String> = parse_comparisons(groups)?
+            .into_iter()
+            .flat_map(|(a, b)| [a, b])
+            .collect();
+        if !named.contains(label) {
+            anyhow::bail!(
+                "--collapse-others {:?} must be one side of a --groups comparison",
+                label
+            );
+        }
+        for s in samples.iter_mut() {
+            if let Some(c) = &s.condition {
+                if !named.contains(c) {
+                    s.condition = Some(label.clone());
+                }
+            }
+        }
+    }
+    if !(0.0..=1.0).contains(&args.max_missing_fraction) {
+        anyhow::bail!("--max-missing-fraction must be in [0, 1]");
+    }
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
     let comparisons = resolve_comparisons(
         args.groups.as_deref(),
@@ -616,9 +661,19 @@ pub fn run(args: Args) -> Result<()> {
         report_rows.extend(msqrob_reports);
     }
 
+    let mut missingness_by_comparison = JsonMap::new();
     if args.test != "limma" && args.test != "msqrob" {
         for (comp_a, comp_b) in &comparisons {
             let comparison_label = format!("{}-{}", comp_a, comp_b);
+            let n_comparison_samples = samples
+                .iter()
+                .filter(|s| {
+                    !s.is_control
+                        && matches!(s.condition.as_deref(), Some(c) if c == comp_a || c == comp_b)
+                })
+                .count();
+            let mut n_missingness_dropped = 0usize;
+            let mut n_missingness_retained = 0usize;
             // Per-family p-value vector aligned with `family_rows` order.
             let mut family_p: Vec<Option<f64>> = Vec::new();
             let mut family_rows: Vec<DeResultRow> = Vec::new();
@@ -643,6 +698,16 @@ pub fn run(args: Args) -> Result<()> {
             };
 
             for ((panel, gene), by_condition) in &cells {
+                if args.max_missing_fraction < 1.0 {
+                    let present = by_condition.get(comp_a).map(Vec::len).unwrap_or(0)
+                        + by_condition.get(comp_b).map(Vec::len).unwrap_or(0);
+                    let missing = 1.0 - present as f64 / n_comparison_samples.max(1) as f64;
+                    if missing > args.max_missing_fraction + 1e-12 {
+                        n_missingness_dropped += 1;
+                        continue;
+                    }
+                }
+                n_missingness_retained += 1;
                 let (assay_id, uniprot) = match gene_meta.get(&(panel.clone(), gene.clone())) {
                     Some(meta) => meta.clone(),
                     None => (String::new(), vec![]),
@@ -711,6 +776,37 @@ pub fn run(args: Args) -> Result<()> {
                         }
                     }
                     let fit = ols(&rows, &y, args.min_pairs);
+                    // Pooled-SD Cohen d over the fitted subjects when the
+                    // group column is the 0/1 condition indicator.
+                    let robust = if design.group_is_indicator {
+                        let mut ga = Vec::new();
+                        let mut gb = Vec::new();
+                        for (row, value) in rows.iter().zip(y.iter()) {
+                            if row[design.group_col] == 1.0 {
+                                ga.push(*value);
+                            } else {
+                                gb.push(*value);
+                            }
+                        }
+                        let d = atman_core::contrast::cohen_d_pooled(&ga, &gb);
+                        let ci =
+                            d.and_then(|d| atman_core::contrast::cohen_d_ci(d, ga.len(), gb.len()));
+                        RobustStats {
+                            effect_size: d,
+                            effect_size_method: if d.is_some() {
+                                "cohen_d".to_string()
+                            } else {
+                                String::new()
+                            },
+                            ci_low: ci.map(|c| c.0),
+                            ci_high: ci.map(|c| c.1),
+                            n_a: Some(ga.len()),
+                            n_b: Some(gb.len()),
+                            ..RobustStats::default()
+                        }
+                    } else {
+                        RobustStats::default()
+                    };
                     // Omnibus F-test on the --omnibus-factor's columns,
                     // captured before the fit is consumed downstream. The
                     // factor is identified by matching design_labels
@@ -765,7 +861,7 @@ pub fn run(args: Args) -> Result<()> {
                             &comparison_label,
                             &mut covariate_rows,
                         ),
-                        RobustStats::default(),
+                        robust,
                     )
                 } else if args.test == "paired-t" && !args.adjust_for.is_empty() {
                     // paired-t + --adjust-for: paired-difference ANCOVA.
@@ -856,6 +952,8 @@ pub fn run(args: Args) -> Result<()> {
                         posthoc_method: String::new(),
                         posthoc_p: None,
                         posthoc_adj_p: None,
+                        n_a: robust.n_a,
+                        n_b: robust.n_b,
                     },
                     PairedTResult::Skipped { reason, n_pairs } => DeResultRow {
                         panel: panel.clone(),
@@ -900,6 +998,8 @@ pub fn run(args: Args) -> Result<()> {
                         posthoc_method: String::new(),
                         posthoc_p: None,
                         posthoc_adj_p: None,
+                        n_a: robust.n_a,
+                        n_b: robust.n_b,
                     },
                 };
                 family_p.push(row.p_value);
@@ -957,6 +1057,14 @@ pub fn run(args: Args) -> Result<()> {
             }
 
             all_rows.extend(family_rows);
+            missingness_by_comparison.insert(
+                comparison_label.clone(),
+                json!({
+                    "n_samples": n_comparison_samples,
+                    "n_retained": n_missingness_retained,
+                    "n_dropped": n_missingness_dropped,
+                }),
+            );
         }
     } // end of gating the paired/ols/welch/mixed dispatch
 
@@ -1101,6 +1209,11 @@ pub fn run(args: Args) -> Result<()> {
         }),
     );
     extras.insert(
+        "missingness_filter".into(),
+        serde_json::Value::Object(missingness_by_comparison),
+    );
+    extras.insert("n_subset_dropped".into(), json!(n_subset_dropped));
+    extras.insert(
         "report_thresholds".into(),
         json!({
             "q_strict": args.report_q_strict,
@@ -1139,6 +1252,11 @@ pub fn run(args: Args) -> Result<()> {
             "report-q-relaxed": args.report_q_relaxed,
             "proxy-p-threshold": args.proxy_p_threshold,
             "adjust-for": args.adjust_for.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+            "include-controls": args.include_controls,
+            "condition-col": args.condition_col,
+            "subset": args.subset,
+            "collapse-others": args.collapse_others,
+            "max-missing-fraction": args.max_missing_fraction,
         }),
         &inputs_sha256,
         &outputs,

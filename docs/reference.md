@@ -165,6 +165,28 @@ both routings against R references)
 **Sidecar:** `de_results.tsv.run.json` records `inputs_sha256` entry for the
 `--adjust-for` path and its input hash, enabling full reproducibility.
 
+### atman de — sample selection and effect-size flags
+
+- `--include-controls` — samples flagged `is_control=1` join a group when
+  their condition is named in `--groups`. Off by default; the sidecar
+  records the flag.
+- `--condition-col COL` — use another samples.tsv column as the condition
+  label (e.g. `diagnosis_group`).
+- `--subset 'col!=value'` (repeatable, `;`-separated) — keep only samples
+  whose raw samples.tsv values satisfy every predicate; a missing value fails
+  `==` and passes `!=`.
+- `--collapse-others LABEL` — every condition not named in `--groups` becomes
+  `LABEL` (which must be one side of a comparison), so
+  `--condition-col diagnosis_group --groups Headache-otherRef --collapse-others otherRef`
+  contrasts one level against all others.
+- `--max-missing-fraction F` — drop a protein from a comparison when more
+  than `F` of that comparison's samples lack a value (default 1.0 = keep
+  all); counts land in the sidecar's `missingness_filter`.
+- `--test ols` now reports `effect_size` = pooled-SD Cohen d over the fitted
+  subjects (`effect_size_method = cohen_d`) with its large-sample CI in
+  `ci_low`/`ci_high`, and `de_results.tsv` carries `n_a`/`n_b` (observed
+  subjects per group; also filled for `welch-t`).
+
 ### atman bench decompose --tools atman.<method>
 
 Native dispatch of decomposition methods under `atman bench decompose`. Allowed

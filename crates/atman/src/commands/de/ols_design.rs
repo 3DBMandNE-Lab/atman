@@ -241,6 +241,9 @@ pub(super) struct OlsDesign {
     pub(super) group_col: usize,
     pub(super) design_labels: Vec<String>,
     pub(super) report_rows: Vec<DesignReportRow>,
+    /// True when `group_col` is the 0/1 condition indicator (so raw group
+    /// means and Cohen d are meaningful); false for a continuous contrast.
+    pub(super) group_is_indicator: bool,
 }
 
 /// Raw-read `samples.tsv` and return `sample_id → [cov_value]` for the
@@ -456,6 +459,7 @@ pub(super) fn build_ols_design(
         group_col,
         design_labels,
         report_rows,
+        group_is_indicator: true,
     })
 }
 

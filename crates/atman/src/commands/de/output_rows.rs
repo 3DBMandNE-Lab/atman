@@ -3,13 +3,86 @@
 //! accumulator, float formatting helpers, and the `--paired-by`
 //! subject-id override.
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use atman_core::Sample;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use super::median;
 use crate::io::atomic_write;
+
+/// Replace each sample's `condition` with the value of `column` in samples.tsv.
+pub(super) fn override_condition(
+    samples: &mut [Sample],
+    samples_path: &Path,
+    column: &str,
+) -> Result<()> {
+    let raw = read_raw_samples(samples_path)?;
+    for s in samples.iter_mut() {
+        let row = raw.get(&s.sample_id);
+        if row.map(|m| !m.contains_key(column)).unwrap_or(true) {
+            anyhow::bail!(
+                "--condition-col {:?} not found in {:?}",
+                column,
+                samples_path
+            );
+        }
+        s.condition = row
+            .and_then(|m| m.get(column))
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+    }
+    Ok(())
+}
+
+/// Retain samples whose raw samples.tsv row satisfies every predicate.
+/// Returns the number of samples dropped.
+pub(super) fn apply_subset(
+    samples: &mut Vec<Sample>,
+    samples_path: &Path,
+    preds: &[crate::design::Predicate],
+) -> Result<usize> {
+    let raw = read_raw_samples(samples_path)?;
+    let before = samples.len();
+    samples.retain(|s| {
+        let row = raw.get(&s.sample_id);
+        crate::design::predicates_match(preds, &|col| {
+            row.and_then(|m| m.get(col))
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        })
+    });
+    Ok(before - samples.len())
+}
+
+/// sample_id → {column → raw trimmed value} for every column of samples.tsv.
+fn read_raw_samples(path: &Path) -> Result<HashMap<String, BTreeMap<String, String>>> {
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .flexible(true)
+        .from_path(path)
+        .with_context(|| format!("opening {:?}", path))?;
+    let headers: Vec<String> = reader
+        .headers()?
+        .iter()
+        .map(|h| h.trim().to_string())
+        .collect();
+    let sid_col = headers
+        .iter()
+        .position(|h| h == "sample_id")
+        .ok_or_else(|| anyhow!("missing sample_id in {:?}", path))?;
+    let mut out = HashMap::new();
+    for row in reader.records() {
+        let row = row?;
+        let mut m = BTreeMap::new();
+        for (i, h) in headers.iter().enumerate() {
+            m.insert(h.clone(), row.get(i).unwrap_or("").trim().to_string());
+        }
+        out.insert(row.get(sid_col).unwrap_or("").trim().to_string(), m);
+    }
+    Ok(out)
+}
 
 pub(super) fn override_subject_id(
     samples: &mut [Sample],
