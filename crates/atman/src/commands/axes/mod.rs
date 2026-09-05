@@ -11,6 +11,7 @@ mod build;
 mod contrast;
 mod displacement;
 mod groups;
+mod icc;
 mod loco;
 
 use anyhow::{bail, Result};
@@ -46,6 +47,8 @@ enum Command {
     Displacement(displacement::DisplacementArgs),
     /// Leave-one-cohort-out stability of group centroids on global z-scores.
     Loco(loco::LocoArgs),
+    /// One-way random-effects ICC(1) of a score across repeated samples per subject.
+    Icc(icc::IccArgs),
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -56,6 +59,7 @@ pub fn run(args: Args) -> Result<()> {
         Command::Anchor(a) => anchor::run(a),
         Command::Displacement(a) => displacement::run(a),
         Command::Loco(a) => loco::run(a),
+        Command::Icc(a) => icc::run(a),
     }
 }
 

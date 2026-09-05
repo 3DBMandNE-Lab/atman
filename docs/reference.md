@@ -676,3 +676,13 @@ control subjects of both contrasts independently (one stream per pair).
 group, dropped_cohort, n_remaining, full_z_mean, loo_z_mean, delta`). Cohorts
 are dropped in order of first appearance; a group absent from the remaining
 subjects yields no row.
+
+#### atman axes icc
+
+`--scores`, `--cohort-dirs` (supplies `subject_id`) or `--subject-col COL`,
+`--cohorts`, `--score-cols`, `--output` (`cohort, score, n_subjects,
+n_samples, k_mean, k0, n_singletons_excluded, icc1, between_sd, within_sd`).
+One-way random-effects ICC(1): `icc1 = (MSB − MSW) / (MSB + (k0 − 1) MSW)`
+with the unbalanced `k0 = (N − Σk_i²/N)/(n − 1)`; `between_sd =
+sqrt(max(0, (MSB − MSW)/k0))`, `within_sd = sqrt(MSW)`. Subjects with a
+single scored sample are excluded and counted.
