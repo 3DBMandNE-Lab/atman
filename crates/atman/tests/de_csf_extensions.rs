@@ -381,14 +381,16 @@ fn de_require_cols_drops_samples_missing_a_value() {
         "--output-dir",
         out.to_str().unwrap(),
         "--test",
-        "welch-t",
+        "ols",
+        "--design",
+        "~ condition",
         "--groups",
         "Case-Ctrl",
         "--include-controls",
         "--require-cols",
         "total_protein",
         "--min-pairs",
-        "1",
+        "2",
     ]);
     assert!(
         r.status.success(),
