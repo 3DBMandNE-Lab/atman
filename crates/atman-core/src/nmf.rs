@@ -49,6 +49,103 @@ pub struct NmfConfig {
     pub seed: u64,
 }
 
+/// Default clamp radius `c` for [`Transform::Exp2Clip`] (`--transform-clamp`
+/// on `decompose nmf` / `align project`). Shared so both CLI surfaces default
+/// to the identical value.
+pub const DEFAULT_EXP2_CLIP_CLAMP: f64 = 6.0;
+
+/// Pre-decomposition input transform for `decompose nmf` / `align project`.
+///
+/// NMF requires non-negative input; Atman's canonical abundance is often a
+/// signed log2 ratio (e.g. CPTAC's log2-ratio-to-reference scale), so these
+/// transforms restore non-negativity ahead of the decomposition. Pure,
+/// deterministic, RNG-free elementwise operations — see [`apply_transform`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Transform {
+    /// No-op. Caller is responsible for verifying non-negativity.
+    None,
+    /// `y = 2^clamp(x, -clamp, +clamp)`. Restores a non-negative ratio scale
+    /// from log2-ratio input while winsorizing rare extreme tails.
+    Exp2Clip { clamp: f64 },
+    /// `y = x - min(X)` over the whole matrix. Sensitivity alternative to
+    /// `Exp2Clip`. The shift is always recomputed on whatever matrix is
+    /// passed in — callers projecting a new cohort must NOT reuse a
+    /// training-time shift; the resulting [`TransformRecord::shift`] is the
+    /// value actually applied to *this* call's matrix.
+    ShiftMin,
+}
+
+/// Resolved parameters of an [`apply_transform`] call, for sidecar
+/// provenance. Exactly one of `clamp` / `shift` is `Some`, matching the
+/// `Transform` variant applied (`None` for both when `Transform::None`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransformRecord {
+    /// `"none"`, `"exp2-clip"`, or `"shift-min"`.
+    pub name: String,
+    /// The clamp radius used, when `Transform::Exp2Clip`.
+    pub clamp: Option<f64>,
+    /// The global matrix minimum subtracted, when `Transform::ShiftMin`.
+    pub shift: Option<f64>,
+}
+
+/// Applies `t` to `x` in place, elementwise, and returns a record of the
+/// resolved parameters for sidecar provenance. Deterministic, no RNG.
+///
+/// - `Transform::None`: no-op; `x` is left untouched.
+/// - `Transform::Exp2Clip { clamp }`: assumes `clamp > 0` (validated by
+///   callers); each entry is clamped to `[-clamp, +clamp]` then exponentiated
+///   with base 2.
+/// - `Transform::ShiftMin`: computes `m = min(x)` over every entry of the
+///   whole matrix, then subtracts `m` from every entry (so the transformed
+///   matrix's minimum is exactly `0.0`).
+///
+/// # Panics
+/// `Transform::ShiftMin` panics if `x` is empty (no elements to take a
+/// minimum over) — the same precondition `nmf` itself already enforces on
+/// its input.
+pub fn apply_transform(x: &mut [Vec<f64>], t: &Transform) -> TransformRecord {
+    match t {
+        Transform::None => TransformRecord {
+            name: "none".to_string(),
+            clamp: None,
+            shift: None,
+        },
+        Transform::Exp2Clip { clamp } => {
+            for row in x.iter_mut() {
+                for v in row.iter_mut() {
+                    let clamped = v.max(-*clamp).min(*clamp);
+                    *v = clamped.exp2();
+                }
+            }
+            TransformRecord {
+                name: "exp2-clip".to_string(),
+                clamp: Some(*clamp),
+                shift: None,
+            }
+        }
+        Transform::ShiftMin => {
+            let m = x
+                .iter()
+                .flat_map(|row| row.iter().copied())
+                .fold(f64::INFINITY, f64::min);
+            assert!(
+                m.is_finite(),
+                "apply_transform(ShiftMin): matrix has no finite entries"
+            );
+            for row in x.iter_mut() {
+                for v in row.iter_mut() {
+                    *v -= m;
+                }
+            }
+            TransformRecord {
+                name: "shift-min".to_string(),
+                clamp: None,
+                shift: Some(m),
+            }
+        }
+    }
+}
+
 /// Output of one NMF run.
 #[derive(Debug)]
 pub struct NmfResult {
@@ -1773,5 +1870,52 @@ mod tests {
             "Fixed should return exactly 1 per_k row"
         );
         assert_eq!(result.per_k[0].k, nmf_cfg.k);
+    }
+
+    // ── input transform tests (`--transform exp2-clip` / `shift-min`) ───────
+
+    #[test]
+    fn exp2_clip_transform_clamps_then_exponentiates() {
+        let mut x = mat(&[&[-8.0, 0.0], &[1.0, 30.0]]);
+        let record = apply_transform(&mut x, &Transform::Exp2Clip { clamp: 6.0 });
+
+        assert_eq!(record.name, "exp2-clip");
+        assert_eq!(record.clamp, Some(6.0));
+        assert_eq!(record.shift, None);
+
+        let expected = mat(&[&[2f64.powf(-6.0), 1.0], &[2.0, 2f64.powf(6.0)]]);
+        for i in 0..2 {
+            for j in 0..2 {
+                assert!(
+                    (x[i][j] - expected[i][j]).abs() < 1e-12,
+                    "x[{i}][{j}] = {}, expected {}",
+                    x[i][j],
+                    expected[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shift_min_transform_subtracts_global_min_and_records_it() {
+        let mut x = mat(&[&[-2.0, 1.0]]);
+        let record = apply_transform(&mut x, &Transform::ShiftMin);
+
+        assert_eq!(record.name, "shift-min");
+        assert_eq!(record.clamp, None);
+        assert_eq!(record.shift, Some(-2.0));
+        assert_eq!(x, mat(&[&[0.0, 3.0]]));
+    }
+
+    #[test]
+    fn none_transform_is_a_no_op() {
+        let mut x = mat(&[&[-1.0, 2.0], &[3.0, -4.0]]);
+        let original = x.clone();
+        let record = apply_transform(&mut x, &Transform::None);
+
+        assert_eq!(record.name, "none");
+        assert_eq!(record.clamp, None);
+        assert_eq!(record.shift, None);
+        assert_eq!(x, original, "Transform::None must not mutate its input");
     }
 }

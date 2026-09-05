@@ -3,6 +3,10 @@ use atman_core::align::{build_archetypes, summarize_archetypes, AlignMetric, Ali
 use atman_core::align_bootstrap::{align_bootstrap, BootstrapParams, BootstrapRow, CohortMatrix};
 use atman_core::align_project::{project, Atlas, ProjectionMethod};
 use atman_core::compositional::{apply_transform, Transform};
+use atman_core::nmf::{
+    apply_transform as apply_nmf_transform, Transform as NmfTransform,
+    TransformRecord as NmfTransformRecord, DEFAULT_EXP2_CLIP_CLAMP,
+};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use csv::ReaderBuilder;
 use serde_json::json;
@@ -1081,16 +1085,26 @@ pub struct ProjectArgs {
     #[arg(long)]
     cohort_dir: PathBuf,
 
-    /// Compositional transform applied to the cohort matrix before
-    /// projection. Must match the transform used at atlas training
-    /// time (caller's responsibility to verify — the atlas's own
-    /// `transform_applied.json` records the training-time choice).
+    /// Transform applied to the cohort matrix before projection. Must match
+    /// the transform used at atlas training time (caller's responsibility to
+    /// verify — the atlas's own `transform_applied.json` records the
+    /// training-time choice). `none`/`clr`/`alr`/`ratio-anchor` are
+    /// compositional transforms; `exp2-clip`/`shift-min` are the NMF input
+    /// transforms (`2^clamp(x, -c, +c)` and `x - min(X)` respectively) shared
+    /// with `decompose nmf`. `shift-min` always recomputes its shift on THIS
+    /// cohort's matrix — it does not reuse the training-time shift.
     #[arg(long, default_value = "none")]
     transform: String,
 
     /// Reference gene symbol for `alr` / `ratio-anchor` transforms.
     #[arg(long)]
     alr_reference: Option<String>,
+
+    /// Clamp radius `c` for `--transform exp2-clip` (`2^clamp(x, -c, +c)`).
+    /// Only valid together with `--transform exp2-clip`; passing it with any
+    /// other `--transform` is a hard error. Default 6.0 when omitted.
+    #[arg(long)]
+    transform_clamp: Option<f64>,
 
     /// Projection method: `ls` (plain least-squares — fails when the
     /// atlas is rank-deficient) or `ridge` (default, with
@@ -1212,7 +1226,10 @@ fn parse_transform(
             })
         }
         "ilr" => Ok(Transform::Ilr),
-        other => bail!("unknown --transform {other:?}; expected none|clr|alr|ilr|ratio-anchor"),
+        other => bail!(
+            "unknown --transform {other:?}; expected \
+             none|clr|alr|ilr|ratio-anchor|exp2-clip|shift-min"
+        ),
     }
 }
 
@@ -1429,14 +1446,62 @@ fn run_project(args: ProjectArgs) -> Result<()> {
             *row = filtered;
         }
     }
+    // `--transform-clamp` only applies to `exp2-clip`; reject it otherwise
+    // (mirrors `decompose nmf --transform-clamp`).
+    if args.transform_clamp.is_some() && args.transform != "exp2-clip" {
+        bail!(
+            "--transform-clamp is only valid together with --transform exp2-clip \
+             (got --transform {:?})",
+            args.transform
+        );
+    }
+    if let Some(c) = args.transform_clamp {
+        if !(c.is_finite() && c > 0.0) {
+            bail!("--transform-clamp must be finite and > 0, got {}", c);
+        }
+    }
+
     // Apply the transform in the cohort's own protein ordering.
-    let transform = parse_transform(
-        &args.transform,
-        args.alr_reference.as_deref(),
-        &cohort_matrix.protein_labels,
-    )?;
-    let transformed = apply_transform(&cohort_matrix.data, transform)
-        .map_err(|e| anyhow::anyhow!("transform failed: {e}"))?;
+    //
+    // `exp2-clip` / `shift-min` are the NMF input transforms (shared with
+    // `decompose nmf` via `atman_core::nmf::apply_transform`); every other
+    // name is a compositional transform (`atman_core::compositional`). The
+    // two families use different core functions (in-place mutation +
+    // `TransformRecord` vs. an out-of-place `Result`), so they are branched
+    // here rather than unified into one call.
+    let (transformed, transform_record): (Vec<Vec<f64>>, NmfTransformRecord) =
+        match args.transform.as_str() {
+            "exp2-clip" => {
+                let clamp = args.transform_clamp.unwrap_or(DEFAULT_EXP2_CLIP_CLAMP);
+                let mut data = cohort_matrix.data.clone();
+                let record = apply_nmf_transform(&mut data, &NmfTransform::Exp2Clip { clamp });
+                (data, record)
+            }
+            "shift-min" => {
+                // Recomputes the shift on THIS cohort's matrix; the plan's
+                // intended semantics — no reuse of a training-time shift.
+                let mut data = cohort_matrix.data.clone();
+                let record = apply_nmf_transform(&mut data, &NmfTransform::ShiftMin);
+                (data, record)
+            }
+            other => {
+                let transform = parse_transform(
+                    other,
+                    args.alr_reference.as_deref(),
+                    &cohort_matrix.protein_labels,
+                )?;
+                let transformed = apply_transform(&cohort_matrix.data, transform)
+                    .map_err(|e| anyhow::anyhow!("transform failed: {e}"))?;
+                (
+                    transformed,
+                    NmfTransformRecord {
+                        name: other.to_string(),
+                        clamp: None,
+                        shift: None,
+                    },
+                )
+            }
+        };
     // For ILR the ordering changes; we emit a clear error because
     // post-transform labels won't match the atlas universe.
     if args.transform == "ilr" {
@@ -1551,6 +1616,8 @@ fn run_project(args: ProjectArgs) -> Result<()> {
             "label-col": args.label_col,
             "cohort-dir": args.cohort_dir.display().to_string(),
             "transform": args.transform,
+            "transform_clamp": transform_record.clamp,
+            "transform_shift": transform_record.shift,
             "alr-reference": args.alr_reference,
             "projection": args.projection,
             "ridge-lambda": args.ridge_lambda,
