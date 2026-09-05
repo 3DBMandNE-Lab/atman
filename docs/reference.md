@@ -599,3 +599,14 @@ pairwise-complete subjects; p by the t approximation; CI by subject
 bootstrap (one stream per output row, `derive_sub_seed(seed, row_index)`).
 `--partial` adds `<scope>_partial` rows: Pearson correlation of the rank
 residuals of score and anchor on the ranks of the given expression, no CI.
+
+#### atman axes displacement
+
+`--manifest` (contrast manifest), `--score-sets "4axes=axis1_z,...;13arch=primary_A0001,..."`,
+`--standardize global|none` (default `global`: each column z-scored over
+every subject in the table before centroids), `--n-bootstrap`, `--seed`,
+`--ci`, `--output` (`a, b, space, cosine, ci_lo, ci_hi, norm_a, norm_b`),
+`--output-vectors` (`label, space, score, displacement, n_case, n_control`).
+Displacement = case centroid − control centroid within the contrast's cohort,
+column-wise over subjects with a value; the bootstrap resamples case and
+control subjects of both contrasts independently (one stream per pair).

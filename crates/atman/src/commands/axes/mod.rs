@@ -9,6 +9,7 @@ pub mod table;
 mod anchor;
 mod build;
 mod contrast;
+mod displacement;
 mod groups;
 
 use anyhow::{bail, Result};
@@ -39,6 +40,9 @@ enum Command {
     Groups(groups::GroupsArgs),
     /// Spearman anchoring of scores to clinical covariates with bootstrap CI.
     Anchor(anchor::AnchorArgs),
+    /// Displacement vectors (case minus control centroid) and pairwise
+    /// cosines with bootstrap CI.
+    Displacement(displacement::DisplacementArgs),
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -47,6 +51,7 @@ pub fn run(args: Args) -> Result<()> {
         Command::Contrast(a) => contrast::run(a),
         Command::Groups(a) => groups::run(a),
         Command::Anchor(a) => anchor::run(a),
+        Command::Displacement(a) => displacement::run(a),
     }
 }
 
