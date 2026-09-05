@@ -32,6 +32,8 @@ enum Command {
     Matrix(commands::matrix::Args),
     /// Cross-cohort program alignment with optional sensitivity sweep.
     Align(commands::align::Args),
+    /// Subject-level score tables: axis construction and score-level statistics.
+    Axes(commands::axes::Args),
     /// Multi-seed ICA decomposition with stability reporting.
     Decompose(commands::decompose::Args),
     /// Joint abundance-detection analysis for censored proteomics measurements.
@@ -95,6 +97,7 @@ fn main() -> Result<()> {
         Command::Qc(args) => commands::qc::run(args),
         Command::Matrix(args) => commands::matrix::run(args),
         Command::Align(args) => commands::align::run(args),
+        Command::Axes(args) => commands::axes::run(args),
         Command::Decompose(args) => commands::decompose::run(args),
         Command::Detectability(args) => commands::detectability::run(args),
         Command::Meta(args) => commands::meta::run(args),

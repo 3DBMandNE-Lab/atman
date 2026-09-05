@@ -3,6 +3,7 @@ use anyhow::{bail, Result};
 pub mod absence_topology;
 pub mod align;
 pub mod asymmetry;
+pub mod axes;
 pub mod bench;
 pub mod bootstrap;
 pub mod coupling;
