@@ -6,6 +6,7 @@
 pub mod manifest;
 pub mod table;
 
+mod anchor;
 mod build;
 mod contrast;
 mod groups;
@@ -36,6 +37,8 @@ enum Command {
     Contrast(contrast::ContrastArgs),
     /// Per-group score summaries, Kruskal–Wallis, reference-vs-group effects.
     Groups(groups::GroupsArgs),
+    /// Spearman anchoring of scores to clinical covariates with bootstrap CI.
+    Anchor(anchor::AnchorArgs),
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -43,6 +46,7 @@ pub fn run(args: Args) -> Result<()> {
         Command::Build(a) => build::run(a),
         Command::Contrast(a) => contrast::run(a),
         Command::Groups(a) => groups::run(a),
+        Command::Anchor(a) => anchor::run(a),
     }
 }
 

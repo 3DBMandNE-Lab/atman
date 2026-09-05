@@ -147,7 +147,7 @@ pub fn spearman_with_p(xs: &[f64], ys: &[f64]) -> Option<(f64, f64)> {
         return Some((rho, f64::NAN));
     }
     if rho.abs() >= 1.0 - 1e-12 {
-        return Some((rho.clamp(-1.0, 1.0), 0.0));
+        return Some((rho.signum(), 0.0));
     }
     let df = (n - 2) as f64;
     let t = rho * (df / (1.0 - rho * rho)).sqrt();

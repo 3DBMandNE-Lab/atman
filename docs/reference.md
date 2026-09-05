@@ -527,3 +527,14 @@ observed values), `--score-cols`, `--median-cols "age,QIgG/QAlb"`,
 `--output-tests` (`kind, score, reference, group, n_ref, n_group, statistic,
 p`: `kruskal` rows carry H and its chi-square p; `reference_vs_group` rows
 carry pooled-SD Cohen d of reference minus group and the Welch p).
+
+#### atman axes anchor
+
+`--cohorts`, `--score-cols`, `--anchors "log10(QAlb),log10(QIgG/QAlb),age"`,
+`--scope all|controls|cases|condition=X` (repeatable), `--partial EXPR`,
+`--n-bootstrap`, `--seed`, `--ci`, `--min-n` (default 10), `--output`
+(`cohort, scope, given, score, anchor, n, rho, ci_lo, ci_hi, p`). Spearman on
+pairwise-complete subjects; p by the t approximation; CI by subject
+bootstrap (one stream per output row, `derive_sub_seed(seed, row_index)`).
+`--partial` adds `<scope>_partial` rows: Pearson correlation of the rank
+residuals of score and anchor on the ranks of the given expression, no CI.
