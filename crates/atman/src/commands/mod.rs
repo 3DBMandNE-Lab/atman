@@ -32,6 +32,7 @@ pub mod residuals;
 pub mod robust_paired;
 pub mod robustness;
 pub mod run;
+pub mod scale;
 pub mod score;
 pub mod score_weighted;
 pub mod validate;

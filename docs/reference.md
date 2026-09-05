@@ -257,6 +257,19 @@ the scored cohort; `score = Σ w·z / Σ|w|` over the proteins the subject has.
 `--collapse-genes none|mean|max-observed` reduces assays sharing a gene
 symbol as in `de` (default `none` = lexically first assay).
 
+### atman scale absolute
+
+`--input-dir <canonical> --total-col total_protein --output-canonical-dir <dir>`.
+For every sample with a positive total-protein value, each log2 abundance
+becomes `a − log2(Σ_assays 2^a) + log2(total_protein)`, the sum running over
+that sample's measured assays, so the sample's linear sum equals its total
+protein. Samples without a total-protein value are dropped from the output
+measurements (counted in the sidecar); `samples.tsv` and `proteins.tsv` are
+copied verbatim and the unit label is unchanged. Used for Reiber-style
+per-protein exponents: `atman de --design "~ log2(QAlb) + z(age) + sex"
+--contrast "log2(QAlb)"` on the rescaled directory gives the absolute-scale
+slope; the same call on the input directory gives the relative-scale slope.
+
 ### atman bench decompose --tools atman.<method>
 
 Native dispatch of decomposition methods under `atman bench decompose`. Allowed
@@ -530,6 +543,17 @@ code, and per-stage wall-clock. If the plan content changes, atman
 refuses to overwrite the manifest unless the plan's `plan_commit` tag
 is bumped (or `--allow-drift` is passed). Full schema and example in
 [recipes.md](recipes.md).
+
+Plans may declare `vars:` (name → string), substituted as `${name}` in
+every stage's `command`, `inputs`, and `outputs`; an undefined name is an
+error and a bare `$` is left to the shell. `--dry-run` validates the plan
+and lists the resolved stages without executing: every input must exist
+under `--input-dir` or be declared as an output of an earlier stage.
+After each stage, any `<output>.run.json` sidecar found next to a declared
+output is hashed into the manifest's trailing `sidecar_hash` column, and
+`--strict-outputs` (default `true`) records `exit_code 2` and aborts when a
+declared output is missing afterwards (`--strict-outputs false` restores the
+permissive `MISSING` behaviour).
 
 ### Network-dependent commands
 
