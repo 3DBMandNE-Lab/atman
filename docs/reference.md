@@ -226,6 +226,18 @@ stages is evaluated on the features shared by every stage, and
 from the same feature resamples. Features are not independent units; the
 intervals are descriptive.
 
+### atman score weighted
+
+`--input-dir` (canonical cohort, or a `residuals --output-canonical-dir`),
+`--weights PATH --feature-col gene_symbol --weight-col cohen_d`,
+`--signature LABEL`, `--max-missing-fraction`, `--min-shared` (default 10),
+`--output` (`sample_id, subject_id, condition, is_control, signature,
+n_shared, n_used, score`), and optionally `--groups A-B --output-summary
+PATH` (`signature, comparison, n_shared_proteins, n_case, n_control,
+cohen_d, d_ci_lo, d_ci_hi, welch_p, auc`; groups are matched on the
+condition label regardless of `is_control`). Proteins are z-scored within
+the scored cohort; `score = Σ w·z / Σ|w|` over the proteins the subject has.
+
 ### atman bench decompose --tools atman.<method>
 
 Native dispatch of decomposition methods under `atman bench decompose`. Allowed

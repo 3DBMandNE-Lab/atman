@@ -26,6 +26,8 @@ enum Command {
     Modules(ModulesArgs),
     /// Score gene-set signatures per sample (singscore; Foroutan 2018).
     Signatures(SignaturesArgs),
+    /// Score subjects with a signed per-protein weight vector (signature transfer).
+    Weighted(super::score_weighted::WeightedArgs),
 }
 
 #[derive(ClapArgs, Debug)]
@@ -113,6 +115,7 @@ pub fn run(args: Args) -> Result<()> {
     match args.command {
         Command::Modules(args) => run_modules(args),
         Command::Signatures(args) => run_signatures(args),
+        Command::Weighted(args) => super::score_weighted::run(args),
     }
 }
 

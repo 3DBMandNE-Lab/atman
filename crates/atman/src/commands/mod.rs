@@ -33,6 +33,7 @@ pub mod robust_paired;
 pub mod robustness;
 pub mod run;
 pub mod score;
+pub mod score_weighted;
 pub mod validate;
 pub mod within_cohort_rank;
 
