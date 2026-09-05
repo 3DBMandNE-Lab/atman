@@ -15,6 +15,7 @@ pub mod de;
 pub mod decompose_unmix;
 pub mod deqms;
 pub mod ensemble;
+pub mod expr;
 pub mod fold_change;
 pub mod gsea;
 pub mod ica;
@@ -50,6 +51,7 @@ pub use ensemble::{
     aggregate_per_protein, assign_grade, combine_stouffer, EnsembleGrade, EnsembleInput,
     EnsembleRow, GradeThresholds,
 };
+pub use expr::{evaluate_column, split_top_level, Expr};
 pub use fold_change::{
     compute_log2_fc, Comparison, FoldChangeInput, FoldChangeOutput, FoldChangePanel,
 };
