@@ -229,6 +229,16 @@ fn residuals_collapse_genes_mean_and_none() {
         )
     };
     let (v, canon) = run("none");
+    let sidecar = std::fs::read_to_string(tmp.path().join("resid_none.tsv.run.json")).unwrap();
+    assert!(sidecar.contains("\"n_assays\": 2"), "{sidecar}");
+    assert!(
+        sidecar.contains("\"n_genes_after_collapse\": 1"),
+        "{sidecar}"
+    );
+    assert!(
+        sidecar.contains("\"n_rows_after_collapse\": 2"),
+        "{sidecar}"
+    );
     assert_eq!(v.len(), 2);
     assert_eq!(
         v.iter().map(|r| r["assay_id"].as_str()).collect::<Vec<_>>(),
@@ -236,6 +246,11 @@ fn residuals_collapse_genes_mean_and_none() {
     );
     assert_eq!(canon.lines().count(), 8);
     let (v, canon) = run("mean");
+    let sidecar = std::fs::read_to_string(tmp.path().join("resid_mean.tsv.run.json")).unwrap();
+    assert!(
+        sidecar.contains("\"n_rows_after_collapse\": 1"),
+        "{sidecar}"
+    );
     assert_eq!(v.len(), 1);
     assert_eq!(v[0]["assay_id"], "A1");
     assert_eq!(v[0]["n"], "4");

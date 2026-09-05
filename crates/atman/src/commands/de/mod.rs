@@ -568,6 +568,7 @@ pub fn run(args: Args) -> Result<()> {
     let collapse = args.collapse_genes;
     let mut n_genes_multi_assay = 0usize;
     let mut n_extra_assays = 0usize;
+    let mut n_assays_total = 0usize;
     for ((panel, gene), by_sample) in raw_cells {
         let mut assay_counts: BTreeMap<String, usize> = BTreeMap::new();
         for values in by_sample.values() {
@@ -575,6 +576,7 @@ pub fn run(args: Args) -> Result<()> {
                 *assay_counts.entry(assay.clone()).or_default() += 1;
             }
         }
+        n_assays_total += assay_counts.len();
         if assay_counts.len() > 1 {
             n_genes_multi_assay += 1;
             n_extra_assays += assay_counts.len() - 1;
@@ -604,6 +606,7 @@ pub fn run(args: Args) -> Result<()> {
                 .push((subject, value));
         }
     }
+    let n_genes_after_collapse = cells.len();
     if n_genes_multi_assay > 0 {
         eprintln!(
             "de: {} gene symbols are carried by more than one assay ({} extra assays); --collapse-genes {}",
@@ -1298,8 +1301,10 @@ pub fn run(args: Args) -> Result<()> {
         "gene_symbol_collapse".into(),
         json!({
             "rule": collapse.as_str(),
+            "n_assays": n_assays_total,
             "n_genes_with_multiple_assays": n_genes_multi_assay,
             "n_extra_assays": n_extra_assays,
+            "n_genes_after_collapse": n_genes_after_collapse,
         }),
     );
     extras.insert(

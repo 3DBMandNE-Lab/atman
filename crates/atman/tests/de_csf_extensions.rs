@@ -352,6 +352,8 @@ fn de_collapse_genes_rules() {
     assert_eq!(g["assay_id"], "A1");
     assert!(sidecar.contains("\"n_genes_with_multiple_assays\": 1"));
     assert!(sidecar.contains("\"n_extra_assays\": 1"));
+    assert!(sidecar.contains("\"n_assays\": 3"));
+    assert!(sidecar.contains("\"n_genes_after_collapse\": 2"));
     assert!(sidecar.contains("\"collapse-genes\": \"none\""));
     // max-observed: A1 (4 obs) beats A2 (2 obs) ⇒ same as none
     let (g, _) = run("max-observed");

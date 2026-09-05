@@ -211,6 +211,12 @@ fn score_weighted_collapse_genes() {
     };
     let none = run("none");
     assert!((num(&none[0], "score") + 1.161895003862225).abs() < 1e-9);
+    let sidecar = std::fs::read_to_string(tmp.path().join("scores_none.tsv.run.json")).unwrap();
+    assert!(sidecar.contains("\"n_assays\": 2"), "{sidecar}");
+    assert!(
+        sidecar.contains("\"n_genes_after_collapse\": 1"),
+        "{sidecar}"
+    );
     let maxo = run("max-observed");
     assert_eq!(maxo[0]["score"], none[0]["score"]);
     let mean = run("mean");

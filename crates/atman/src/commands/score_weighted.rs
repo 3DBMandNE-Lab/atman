@@ -147,20 +147,23 @@ pub fn run(args: WeightedArgs) -> Result<()> {
     let n_measured = measured.len().max(1);
     let collapse = args.collapse_genes;
     let mut n_genes_multi_assay = 0usize;
+    let mut n_assays_total = 0usize;
+    let n_genes_after_collapse = acc.len();
     let mut shared: Vec<(String, f64, Vec<Option<f64>>)> = Vec::new();
     for (gene, by_sample) in &acc {
-        let Some(&w) = weights.get(gene) else {
-            continue;
-        };
         let mut assay_counts: BTreeMap<String, usize> = BTreeMap::new();
         for assays in by_sample.values() {
             for assay in assays.keys() {
                 *assay_counts.entry(assay.clone()).or_default() += 1;
             }
         }
+        n_assays_total += assay_counts.len();
         if assay_counts.len() > 1 {
             n_genes_multi_assay += 1;
         }
+        let Some(&w) = weights.get(gene) else {
+            continue;
+        };
         let representative = collapse
             .representative(&assay_counts)
             .cloned()
@@ -321,7 +324,10 @@ pub fn run(args: WeightedArgs) -> Result<()> {
                 "gene_symbol_collapse".into(),
                 json!({
                     "rule": collapse.as_str(),
+                    "n_assays": n_assays_total,
                     "n_genes_with_multiple_assays": n_genes_multi_assay,
+                    "n_genes_after_collapse": n_genes_after_collapse,
+                    "n_genes_shared_after_filter": shared.len(),
                 }),
             );
             extras

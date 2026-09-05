@@ -154,17 +154,17 @@ pub fn run(args: Args) -> Result<()> {
 
     let measurements_path = args.input_dir.join("measurements.tsv");
     let measurements = read_measurements_long(&measurements_path)?;
-    let (rows, variance, n_dropped_missingness, n_genes_multi_assay) = compute_residuals(
+    let (rows, variance, n_dropped_missingness, collapse_stats) = compute_residuals(
         &sample_design,
         &measurements,
         args.min_samples,
         args.max_missing_fraction,
         args.collapse_genes,
     )?;
-    if n_genes_multi_assay > 0 {
+    if collapse_stats.n_genes_multi_assay > 0 {
         eprintln!(
             "residuals: {} gene symbols are carried by more than one assay; --collapse-genes {}",
-            n_genes_multi_assay,
+            collapse_stats.n_genes_multi_assay,
             args.collapse_genes.as_str()
         );
     }
@@ -221,7 +221,10 @@ pub fn run(args: Args) -> Result<()> {
         "gene_symbol_collapse".into(),
         json!({
             "rule": args.collapse_genes.as_str(),
-            "n_genes_with_multiple_assays": n_genes_multi_assay,
+            "n_assays": collapse_stats.n_assays,
+            "n_genes_with_multiple_assays": collapse_stats.n_genes_multi_assay,
+            "n_genes_after_collapse": collapse_stats.n_genes_after_collapse,
+            "n_rows_after_collapse": collapse_stats.n_rows_after_collapse,
         }),
     );
     write_run_sidecar(
@@ -252,13 +255,27 @@ pub fn run(args: Args) -> Result<()> {
 
 type ProteinValues<'a> = BTreeMap<(String, String), Vec<(&'a SampleDesign, f64)>>;
 
+/// Gene-symbol collapse bookkeeping for the sidecar.
+#[derive(Debug, Clone, Copy, Default)]
+struct CollapseStats {
+    /// Distinct assays measured on the design samples.
+    n_assays: usize,
+    /// Gene symbols carried by more than one assay.
+    n_genes_multi_assay: usize,
+    /// Distinct gene symbols after the collapse.
+    n_genes_after_collapse: usize,
+    /// Protein rows entering the fit (equals genes unless `none` keeps
+    /// several assays per symbol), before the missingness filter.
+    n_rows_after_collapse: usize,
+}
+
 fn compute_residuals(
     sample_design: &[SampleDesign],
     measurements: &[MeasurementRecord],
     min_samples: usize,
     max_missing_fraction: f64,
     collapse: CollapseGenes,
-) -> Result<(Vec<ResidualRow>, Vec<VarianceRow>, usize, usize)> {
+) -> Result<(Vec<ResidualRow>, Vec<VarianceRow>, usize, CollapseStats)> {
     let design_by_sample: HashMap<&str, usize> = sample_design
         .iter()
         .enumerate()
@@ -284,7 +301,10 @@ fn compute_residuals(
             .push((measurement.assay_id.0.clone(), value));
     }
     let mut by_protein: ProteinValues = BTreeMap::new();
-    let mut n_genes_multi_assay = 0usize;
+    let mut stats = CollapseStats {
+        n_genes_after_collapse: raw.len(),
+        ..CollapseStats::default()
+    };
     for (gene, by_sample) in raw {
         let mut assay_counts: BTreeMap<String, usize> = BTreeMap::new();
         for values in by_sample.values() {
@@ -292,8 +312,9 @@ fn compute_residuals(
                 *assay_counts.entry(assay.clone()).or_default() += 1;
             }
         }
+        stats.n_assays += assay_counts.len();
         if assay_counts.len() > 1 {
-            n_genes_multi_assay += 1;
+            stats.n_genes_multi_assay += 1;
         }
         if collapse == CollapseGenes::None {
             for (idx, values) in &by_sample {
@@ -320,6 +341,7 @@ fn compute_residuals(
         }
     }
 
+    stats.n_rows_after_collapse = by_protein.len();
     let n_design = sample_design.len();
     let mut out = Vec::new();
     let mut variance = Vec::new();
@@ -383,7 +405,7 @@ fn compute_residuals(
             .cmp(&b.gene_symbol)
             .then_with(|| a.assay_id.cmp(&b.assay_id))
     });
-    Ok((out, variance, n_dropped, n_genes_multi_assay))
+    Ok((out, variance, n_dropped, stats))
 }
 
 fn write_long(path: &Path, rows: &[ResidualRow]) -> Result<()> {

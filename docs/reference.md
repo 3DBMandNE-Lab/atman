@@ -190,9 +190,14 @@ both routings against R references)
   that share a gene symbol become one value per sample: `none` (default)
   keeps the lexically first assay id; `mean` averages the assays observed in
   that sample; `max-observed` keeps the assay observed in the most samples.
-  The missingness filter runs on the collapsed gene. Counts of affected
-  genes go to stderr and the sidecar's `gene_symbol_collapse`. Applies to
-  paired-t, welch-t, ols, and mixed. (`align programs` is last-wins for a
+  The missingness filter runs on the collapsed gene. The sidecar's
+  `gene_symbol_collapse` block records `rule`, `n_assays`,
+  `n_genes_with_multiple_assays`, `n_extra_assays`, and
+  `n_genes_after_collapse` (before the per-comparison missingness filter,
+  whose retained counts are in `missingness_filter`); `residuals` adds
+  `n_rows_after_collapse` and `score weighted` adds
+  `n_genes_shared_after_filter`. Applies to paired-t, welch-t, ols, and
+  mixed. (`align programs` is last-wins for a
   duplicated label within a program: the final loadings row for that label
   overwrites earlier ones.)
 - `--design` accepts covariate expressions: `~ condition + z(age) + sex +
