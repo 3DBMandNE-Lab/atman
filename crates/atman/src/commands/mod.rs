@@ -6,6 +6,7 @@ pub mod asymmetry;
 pub mod axes;
 pub mod bench;
 pub mod bootstrap;
+pub mod concordance;
 pub mod coupling;
 pub mod de;
 pub mod decompose;

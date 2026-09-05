@@ -212,6 +212,20 @@ only, same unit label as the input) with `samples.tsv`/`proteins.tsv`
 copied, so `atman de` or `atman score weighted` run directly on the
 residual matrix.
 
+### atman concordance
+
+`--manifest` (`label, path, effect_col[, feature_col, q_col, stage]`;
+`feature_col` defaults to `gene_symbol` and is resolved per table, so a
+loading vector keyed by `protein` joins a DE table keyed by `gene_symbol`),
+`--pairs a:b,...` (default all label pairs within each stage), `--top-n`,
+`--q-threshold`, `--n-bootstrap`, `--seed`, `--ci`, `--output`,
+`--output-delta`. Rows: `a, b, stage, n_features, rho, p, ci_lo, ci_hi,
+n_hits_both, sign_concordance, jaccard_top_n`; a pair present in several
+stages is evaluated on the features shared by every stage, and
+`--output-delta` reports `delta_rho` (later stage minus earlier) with a CI
+from the same feature resamples. Features are not independent units; the
+intervals are descriptive.
+
 ### atman bench decompose --tools atman.<method>
 
 Native dispatch of decomposition methods under `atman bench decompose`. Allowed

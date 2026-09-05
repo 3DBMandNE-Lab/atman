@@ -50,6 +50,8 @@ enum Command {
     Asymmetry(commands::asymmetry::Args),
     /// Bootstrap uncertainty for protein effects.
     Bootstrap(commands::bootstrap::Args),
+    /// Concordance of per-feature effect tables over shared features.
+    Concordance(commands::concordance::Args),
     /// Subject-level program coupling with sign-consistency reporting.
     Coupling(commands::coupling::Args),
     /// Program-level utilities for ICA-derived program tables.
@@ -106,6 +108,7 @@ fn main() -> Result<()> {
         Command::Enrich(args) => commands::enrich::run(args),
         Command::Asymmetry(args) => commands::asymmetry::run(args),
         Command::Bootstrap(args) => commands::bootstrap::run(args),
+        Command::Concordance(args) => commands::concordance::run(args),
         Command::Coupling(args) => commands::coupling::run(args),
         Command::Programs(args) => commands::programs::run(args),
         Command::Robustness(args) => commands::robustness::run(args),
