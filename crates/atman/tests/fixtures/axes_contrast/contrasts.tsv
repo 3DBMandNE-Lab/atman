@@ -1,0 +1,3 @@
+label	cohort	case	control	family
+c1_case	c1	Case	Ctrl	fam
+c2_case	c2	Dis	*	fam

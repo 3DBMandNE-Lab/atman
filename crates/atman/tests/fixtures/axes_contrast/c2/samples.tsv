@@ -1,0 +1,13 @@
+sample_id	subject_id	condition	is_control	sample_type	ingest_order	age	sex	site
+c2_00	c2_00	Dis	0	bio	1	76.0	M	Berlin
+c2_01	c2_01	Dis	0	bio	2	53.0	F	Kiel
+c2_02	c2_02	Dis	0	bio	3	60.0	M	Sweden
+c2_03	c2_03	Dis	0	bio	4	35.0	F	Berlin
+c2_04	c2_04	Dis	0	bio	5	41.0	F	Kiel
+c2_05	c2_05	Dis	0	bio	6	58.0	M	Sweden
+c2_06	c2_06	Ref	1	bio	7	52.0	M	Berlin
+c2_07	c2_07	Ref	1	bio	8	58.0	F	Kiel
+c2_08	c2_08	Ref	1	bio	9	71.0	F	Sweden
+c2_09	c2_09	Ref	1	bio	10	30.0	M	Berlin
+c2_10	c2_10	Ref	1	bio	11	34.0	M	Kiel
+c2_11	c2_11	Ref	1	bio	12	54.0	M	Sweden

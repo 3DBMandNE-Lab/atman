@@ -499,3 +499,21 @@ axisR --within cohort`, `--output`. Orthogonalization is the OLS residual
 per `--within` group. Output: input columns, then per axis `<axis>_raw`,
 `<axis>_z` (global z, ddof = 1) and, for orthogonalized axes,
 `<axis>_unorth_raw`, `<axis>_unorth_z`.
+
+#### atman axes contrast
+
+`--scores`, `--cohort-dirs`, `--covariates-tsv` (repeatable), `--manifest`
+(`label, cohort, case, control, family[, condition_col, subset]`;
+`case`/`control` accept `a|b` lists, `control=*` = all other levels within the
+subset), `--score-cols`, `--designs "~ case; ~ case + z(age) + sex"`,
+`--n-bootstrap`, `--seed`, `--ci` (default 0.95), `--output`,
+`--output-covariates`, `--output-bootstrap`. One row per contrast × score ×
+design. Unadjusted columns (`n_case … auc`) use every subject with a score;
+`n_fit` onward use the complete-case rows of the design. `q` is BH over rows
+sharing (family, design); `welch_q` likewise over `welch_p`. Bootstrap:
+subjects resampled within case and control separately, design rebuilt per
+resample (so `z()` is re-standardized), percentile interval at `--ci`; one
+SplitMix64 stream per contrast seeded by `derive_sub_seed(seed, contrast_index)`.
+Multi-level categorical covariates are one-hot encoded; `--omnibus-factor
+COL` (repeatable) adds `omnibus_f` rows to `--output-covariates` with the
+joint F-test of that factor's columns (`f, df_num, df_den, p`).

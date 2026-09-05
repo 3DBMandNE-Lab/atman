@@ -3,9 +3,11 @@
 //! CrossDisease manuscript reports on them. "Axes" means any set of
 //! per-subject numeric score columns.
 
+pub mod manifest;
 pub mod table;
 
 mod build;
+mod contrast;
 
 use anyhow::{bail, Result};
 use atman_core::SplitMix64;
@@ -28,22 +30,24 @@ enum Command {
     /// Select representative archetype columns as axes, orthogonalize
     /// within cohort, and z-score globally.
     Build(build::BuildArgs),
+    /// Disease modulation of subject scores: Cohen d, Welch, AUC, adjusted
+    /// OLS with nested designs, BH within family, subject bootstrap.
+    Contrast(contrast::ContrastArgs),
 }
 
 pub fn run(args: Args) -> Result<()> {
     match args.command {
         Command::Build(a) => build::run(a),
+        Command::Contrast(a) => contrast::run(a),
     }
 }
 
 /// Row-wise metadata view over a score table plus joined covariates.
-#[allow(dead_code)]
 pub struct Context<'a> {
     pub table: &'a ScoreTable,
     pub frame: &'a CovariateFrame,
 }
 
-#[allow(dead_code)]
 impl Context<'_> {
     pub fn text(&self, i: usize, col: &str) -> Option<String> {
         self.table.text_value(i, col).or_else(|| {
@@ -111,7 +115,6 @@ pub fn load_frame(cohort_dirs: Option<&str>, covariates_tsv: &[PathBuf]) -> Resu
 }
 
 /// Comma-split outside parentheses (so `log10(a/b), age` stays two items).
-#[allow(dead_code)]
 pub fn parse_cols(text: &str) -> Vec<String> {
     atman_core::expr::split_top_level(text, ',')
 }
@@ -125,7 +128,6 @@ pub fn fmt_opt(v: Option<f64>) -> String {
 
 /// Resample with replacement inside each group, preserving group sizes;
 /// returns the concatenated resampled indices (group order preserved).
-#[allow(dead_code)]
 pub fn resample_within_groups(rng: &mut SplitMix64, groups: &[&[usize]]) -> Vec<usize> {
     let mut out = Vec::with_capacity(groups.iter().map(|g| g.len()).sum());
     for g in groups {
