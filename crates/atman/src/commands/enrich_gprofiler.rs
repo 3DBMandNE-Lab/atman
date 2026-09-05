@@ -479,8 +479,7 @@ fn parse_response(query_name: &str, root: &Value) -> Result<Vec<GprofilerRow>> {
         let intersection_size = require_i64(entry, "intersection_size", query_name, idx)?;
         let query_size = require_i64(entry, "query_size", query_name, idx)?;
         let term_size = require_i64(entry, "term_size", query_name, idx)?;
-        let effective_domain_size =
-            require_i64(entry, "effective_domain_size", query_name, idx)?;
+        let effective_domain_size = require_i64(entry, "effective_domain_size", query_name, idx)?;
         // With `no_evidences: false` in the request, any term with a non-zero
         // intersection must carry an `intersections` array; a missing or
         // wrong-typed value there is silent data loss, so it is a hard error.
