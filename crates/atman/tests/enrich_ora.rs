@@ -56,7 +56,7 @@ outside\tNOPE\n",
     let text = std::fs::read_to_string(out).unwrap();
     assert!(text.starts_with("set_name\tuniverse_size\thit_count"));
     assert!(text.contains("signal\t4\t2\t3\t2\t"));
-    assert!(text.contains("\tG1,G2\n"));
+    assert!(text.contains("\tG1,G2\t"));
     assert!(text.contains("outside\t4\t2\t1\t1\t"));
     assert!(!text.contains("G5"));
 }

@@ -224,3 +224,66 @@ fn score_weighted_collapse_genes() {
         .iter()
         .all(|r| r["score"].is_empty() && r["n_used"] == "0"));
 }
+
+#[test]
+fn score_weighted_summary_only_skips_per_sample_table() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    std::fs::create_dir_all(&input).unwrap();
+    std::fs::write(input.join("samples.tsv"), "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\nS1\tS1\tA\t0\tbio\t1\nS2\tS2\tA\t0\tbio\t2\nS3\tS3\tB\t1\tbio\t3\nS4\tS4\tB\t1\tbio\t4\n").unwrap();
+    std::fs::write(input.join("proteins.tsv"), proteins(&["GA"])).unwrap();
+    let mut m = String::from(MEAS_HEADER);
+    for (i, sid) in ["S1", "S2", "S3", "S4"].iter().enumerate() {
+        m.push_str(&measurement(sid, "GA", i as f64, i + 1));
+    }
+    std::fs::write(input.join("measurements.tsv"), m).unwrap();
+    let weights = tmp.path().join("w.tsv");
+    std::fs::write(&weights, "gene_symbol\tcohen_d\nGA\t1\n").unwrap();
+    let summary = tmp.path().join("summary.tsv");
+    let r = run_atman(&[
+        "score",
+        "weighted",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--weights",
+        weights.to_str().unwrap(),
+        "--weight-col",
+        "cohen_d",
+        "--min-shared",
+        "1",
+        "--groups",
+        "A-B",
+        "--output-summary",
+        summary.to_str().unwrap(),
+        "--summary-only",
+    ]);
+    assert!(
+        r.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let rows = read_rows(&summary);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["n_case"], "2");
+    assert!(tmp.path().join("summary.tsv.run.json").exists());
+    assert_eq!(
+        std::fs::read_dir(tmp.path()).unwrap().count(),
+        4,
+        "canonical, w.tsv, summary, sidecar"
+    );
+    // --summary-only without --groups is rejected.
+    let r = run_atman(&[
+        "score",
+        "weighted",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--weights",
+        weights.to_str().unwrap(),
+        "--weight-col",
+        "cohen_d",
+        "--output-summary",
+        summary.to_str().unwrap(),
+        "--summary-only",
+    ]);
+    assert!(!r.status.success());
+}

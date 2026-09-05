@@ -261,6 +261,13 @@ pub struct Args {
     #[arg(long)]
     pub(super) collapse_others: Option<String>,
 
+    /// Keep only samples whose samples.tsv row has a non-empty value in
+    /// every listed column (comma-separated or repeatable), e.g.
+    /// `--require-cols total_protein` to fit the same subjects as an
+    /// absolute-scale run.
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub(super) require_cols: Vec<String>,
+
     /// Drop proteins whose fraction of missing samples within a comparison
     /// exceeds this value (1.0 = keep every protein).
     #[arg(long, default_value_t = 1.0)]

@@ -186,6 +186,10 @@ both routings against R references)
   subjects (`effect_size_method = cohen_d`) with its large-sample CI in
   `ci_low`/`ci_high`, and `de_results.tsv` carries `n_a`/`n_b` (observed
   subjects per group; also filled for `welch-t`).
+- `--require-cols col[,col]` (repeatable) — keep only samples whose
+  samples.tsv row has a non-empty value in every listed column, so a
+  relative-scale run fits the same subjects as a `scale absolute` run
+  (`n_require_cols_dropped` in the sidecar).
 - `--collapse-genes none|mean|max-observed` — how protein groups (assays)
   that share a gene symbol become one value per sample: `none` (default)
   keeps the lexically first assay id; `mean` averages the assays observed in
@@ -256,6 +260,8 @@ condition label regardless of `is_control`). Proteins are z-scored within
 the scored cohort; `score = Σ w·z / Σ|w|` over the proteins the subject has.
 `--collapse-genes none|mean|max-observed` reduces assays sharing a gene
 symbol as in `de` (default `none` = lexically first assay).
+`--summary-only` (with `--groups` and `--output-summary`) skips the
+per-sample table; the sidecar then attaches to the summary file.
 
 ### atman scale absolute
 
@@ -269,6 +275,16 @@ copied verbatim and the unit label is unchanged. Used for Reiber-style
 per-protein exponents: `atman de --design "~ log2(QAlb) + z(age) + sex"
 --contrast "log2(QAlb)"` on the rescaled directory gives the absolute-scale
 slope; the same call on the input directory gives the relative-scale slope.
+
+### atman enrich ora --query-tsv
+
+`enrich ora` tests either the BH hits of a `--de-results` table or, with
+`--query-tsv PATH` (a `gene_symbol` column plus an optional `query` column,
+each distinct value its own family), a hand-made gene list. `--query-tsv`
+requires `--universe` (the measured background: a `gene_symbol` column or
+one gene per line). The output gains a trailing `query` column (`all`, the
+`--comparison`, or the query label); the sidecar hashes the query, set, and
+universe files, so an exported HPA/GO set is pinned by content.
 
 ### atman bench decompose --tools atman.<method>
 

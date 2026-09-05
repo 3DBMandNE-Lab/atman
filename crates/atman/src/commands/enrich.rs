@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use atman_core::de::bh_fdr;
 use atman_core::gsea::{gsea, GseaConfig};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
@@ -52,9 +52,19 @@ impl RankBy {
 
 #[derive(ClapArgs, Debug)]
 pub struct OraArgs {
-    /// Path to de_results.tsv produced by `atman de`.
+    /// Path to de_results.tsv produced by `atman de` (hits = `bh_q <= --q`).
+    #[arg(
+        long,
+        required_unless_present = "query_tsv",
+        conflicts_with = "query_tsv"
+    )]
+    de_results: Option<PathBuf>,
+
+    /// Hand-made query TSV with a `gene_symbol` column and an optional
+    /// `query` column; each distinct query value is tested as its own
+    /// family (BH within query). Requires `--universe`.
     #[arg(long)]
-    de_results: PathBuf,
+    query_tsv: Option<PathBuf>,
 
     /// Gene-set TSV with columns `set_name` and `gene_symbol`.
     #[arg(long)]
@@ -79,6 +89,7 @@ pub struct OraArgs {
 
 #[derive(Debug)]
 struct OraRow {
+    query: String,
     set_name: String,
     universe_size: usize,
     hit_count: usize,
@@ -379,75 +390,103 @@ fn run_ora(args: OraArgs) -> Result<()> {
     if !(args.q.is_finite() && (0.0..=1.0).contains(&args.q)) {
         bail!("--q must satisfy 0 <= q <= 1");
     }
-    let de = read_de_genes(&args.de_results, args.comparison.as_deref(), args.q)?;
-    if de.universe.is_empty() {
-        bail!("no measured genes found in {:?}", args.de_results);
+    // Queries: (label, hit genes) plus the universe they are tested against.
+    let (queries, universe): (Vec<(String, BTreeSet<String>)>, BTreeSet<String>) =
+        if let Some(path) = &args.query_tsv {
+            let universe_path = args
+                .universe
+                .as_ref()
+                .ok_or_else(|| anyhow!("--query-tsv requires --universe"))?;
+            (read_queries(path)?, read_universe(universe_path)?)
+        } else {
+            let de_path = args
+                .de_results
+                .as_ref()
+                .ok_or_else(|| anyhow!("--de-results or --query-tsv is required"))?;
+            let de = read_de_genes(de_path, args.comparison.as_deref(), args.q)?;
+            if de.universe.is_empty() {
+                bail!("no measured genes found in {:?}", de_path);
+            }
+            let universe = if let Some(path) = &args.universe {
+                read_universe(path)?
+            } else {
+                de.universe
+            };
+            let label = args.comparison.clone().unwrap_or_else(|| "all".to_string());
+            (vec![(label, de.hits)], universe)
+        };
+    if universe.is_empty() {
+        bail!("the universe is empty");
     }
-    let universe = if let Some(path) = &args.universe {
-        read_universe(path)?
-    } else {
-        de.universe
-    };
-    let hits: BTreeSet<String> = de.hits.intersection(&universe).cloned().collect();
     let gene_sets = read_gene_sets(&args.gene_sets)?;
     if gene_sets.is_empty() {
         bail!("no gene sets found in {:?}", args.gene_sets);
     }
 
     let mut rows = Vec::new();
-    let mut p_values = Vec::new();
-    for (set_name, genes) in gene_sets {
-        let set_genes: BTreeSet<String> = genes.intersection(&universe).cloned().collect();
-        if set_genes.is_empty() {
-            continue;
+    for (query, raw_hits) in &queries {
+        let hits: BTreeSet<String> = raw_hits.intersection(&universe).cloned().collect();
+        let mut query_rows = Vec::new();
+        let mut p_values = Vec::new();
+        for (set_name, genes) in &gene_sets {
+            let set_genes: BTreeSet<String> = genes.intersection(&universe).cloned().collect();
+            if set_genes.is_empty() {
+                continue;
+            }
+            let overlap: BTreeSet<String> = set_genes.intersection(&hits).cloned().collect();
+            let a = overlap.len();
+            let b = hits.len().saturating_sub(a);
+            let c = set_genes.len().saturating_sub(a);
+            let d = universe.len().saturating_sub(a + b + c);
+            let p = fisher_upper_tail(a, hits.len(), set_genes.len(), universe.len());
+            p_values.push(Some(p));
+            query_rows.push(OraRow {
+                query: query.clone(),
+                set_name: set_name.clone(),
+                universe_size: universe.len(),
+                hit_count: hits.len(),
+                set_size: set_genes.len(),
+                overlap_size: a,
+                odds_ratio: odds_ratio(a, b, c, d),
+                p_value: p,
+                bh_q: None,
+                overlap_genes: overlap.into_iter().collect::<Vec<_>>().join(","),
+            });
         }
-        let overlap: BTreeSet<String> = set_genes.intersection(&hits).cloned().collect();
-        let a = overlap.len();
-        let b = hits.len().saturating_sub(a);
-        let c = set_genes.len().saturating_sub(a);
-        let d = universe.len().saturating_sub(a + b + c);
-        let p = fisher_upper_tail(a, hits.len(), set_genes.len(), universe.len());
-        p_values.push(Some(p));
-        rows.push(OraRow {
-            set_name,
-            universe_size: universe.len(),
-            hit_count: hits.len(),
-            set_size: set_genes.len(),
-            overlap_size: a,
-            odds_ratio: odds_ratio(a, b, c, d),
-            p_value: p,
-            bh_q: None,
-            overlap_genes: overlap.into_iter().collect::<Vec<_>>().join(","),
+        let qs = bh_fdr(&p_values);
+        for (row, q) in query_rows.iter_mut().zip(qs) {
+            row.bh_q = q;
+        }
+        query_rows.sort_by(|a, b| {
+            match (a.bh_q, b.bh_q) {
+                (Some(qa), Some(qb)) => qa.partial_cmp(&qb).unwrap_or(std::cmp::Ordering::Equal),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+            .then_with(|| b.overlap_size.cmp(&a.overlap_size))
+            .then_with(|| a.set_name.cmp(&b.set_name))
         });
+        eprintln!(
+            "enrich ora: query={} sets={} hits={} universe={} q={}",
+            query,
+            query_rows.len(),
+            hits.len(),
+            universe.len(),
+            args.q
+        );
+        rows.extend(query_rows);
     }
-    let qs = bh_fdr(&p_values);
-    for (row, q) in rows.iter_mut().zip(qs) {
-        row.bh_q = q;
-    }
-    rows.sort_by(|a, b| {
-        match (a.bh_q, b.bh_q) {
-            (Some(qa), Some(qb)) => qa.partial_cmp(&qb).unwrap_or(std::cmp::Ordering::Equal),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        }
-        .then_with(|| b.overlap_size.cmp(&a.overlap_size))
-        .then_with(|| a.set_name.cmp(&b.set_name))
-    });
     write_rows(&args.output, &rows)?;
-    eprintln!(
-        "enrich ora: sets={} hits={} universe={} q={}",
-        rows.len(),
-        hits.len(),
-        universe.len(),
-        args.q
-    );
 
     let finished_at = SystemTime::now();
-    let mut labeled: Vec<(&str, &StdPath)> = vec![
-        ("de_results", args.de_results.as_path()),
-        ("gene_sets", args.gene_sets.as_path()),
-    ];
+    let mut labeled: Vec<(&str, &StdPath)> = vec![("gene_sets", args.gene_sets.as_path())];
+    if let Some(p) = &args.de_results {
+        labeled.push(("de_results", p.as_path()));
+    }
+    if let Some(p) = &args.query_tsv {
+        labeled.push(("query_tsv", p.as_path()));
+    }
     if let Some(p) = &args.universe {
         labeled.push(("universe", p.as_path()));
     }
@@ -457,7 +496,8 @@ fn run_ora(args: OraArgs) -> Result<()> {
         &sidecar,
         "enrich ora",
         json!({
-            "de-results": args.de_results.display().to_string(),
+            "de-results": args.de_results.as_ref().map(|p| p.display().to_string()),
+            "query-tsv": args.query_tsv.as_ref().map(|p| p.display().to_string()),
             "gene-sets": args.gene_sets.display().to_string(),
             "output": args.output.display().to_string(),
             "comparison": args.comparison,
@@ -472,6 +512,54 @@ fn run_ora(args: OraArgs) -> Result<()> {
     )?;
     eprintln!("enrich ora: sidecar={}", sidecar.display());
     Ok(())
+}
+
+/// Read `--query-tsv`: a `gene_symbol` column plus an optional `query`
+/// column. Queries keep first-appearance order; without a `query` column
+/// the single query is named after the file stem.
+fn read_queries(path: &Path) -> Result<Vec<(String, BTreeSet<String>)>> {
+    let mut reader = ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .flexible(true)
+        .from_path(path)
+        .with_context(|| format!("opening {:?}", path))?;
+    let headers = reader.headers()?.clone();
+    let gene_col = need_col(&headers, "gene_symbol", path)?;
+    let query_col = headers.iter().position(|h| h == "query");
+    let default_label = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("query")
+        .to_string();
+    let mut out: Vec<(String, BTreeSet<String>)> = Vec::new();
+    for row in reader.records() {
+        let row = row?;
+        let gene = row.get(gene_col).unwrap_or("").trim();
+        if gene.is_empty() {
+            continue;
+        }
+        let label = query_col
+            .and_then(|i| row.get(i))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(default_label.as_str())
+            .to_string();
+        match out.iter_mut().find(|(l, _)| *l == label) {
+            Some((_, genes)) => {
+                genes.insert(gene.to_string());
+            }
+            None => {
+                let mut genes = BTreeSet::new();
+                genes.insert(gene.to_string());
+                out.push((label, genes));
+            }
+        }
+    }
+    if out.is_empty() {
+        bail!("no genes in {:?}", path);
+    }
+    Ok(out)
 }
 
 struct DeGenes {
@@ -607,11 +695,11 @@ fn odds_ratio(a: usize, b: usize, c: usize, d: usize) -> f64 {
 
 fn write_rows(path: &Path, rows: &[OraRow]) -> Result<()> {
     let mut out = String::from(
-        "set_name\tuniverse_size\thit_count\tset_size\toverlap_size\todds_ratio\tp_value\tbh_q\toverlap_genes\n",
+        "set_name\tuniverse_size\thit_count\tset_size\toverlap_size\todds_ratio\tp_value\tbh_q\toverlap_genes\tquery\n",
     );
     for row in rows {
         out.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             row.set_name,
             row.universe_size,
             row.hit_count,
@@ -621,6 +709,7 @@ fn write_rows(path: &Path, rows: &[OraRow]) -> Result<()> {
             format_f64(row.p_value),
             row.bh_q.map(format_f64).unwrap_or_default(),
             row.overlap_genes,
+            row.query,
         ));
     }
     atomic_write(path, out.as_bytes())

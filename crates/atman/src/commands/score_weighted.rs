@@ -47,11 +47,21 @@ pub struct WeightedArgs {
     /// Optional `A-B` comparison of the score between two condition labels.
     #[arg(long)]
     groups: Option<String>,
-    #[arg(long)]
-    output: PathBuf,
+    /// Per-sample score TSV (required unless `--summary-only`).
+    #[arg(long, required_unless_present = "summary_only")]
+    output: Option<PathBuf>,
     /// Summary TSV for `--groups`.
     #[arg(long)]
     output_summary: Option<PathBuf>,
+    /// Write only `--output-summary` (requires `--groups`); the per-sample
+    /// table is skipped and the sidecar attaches to the summary file.
+    #[arg(
+        long,
+        default_value_t = false,
+        requires = "output_summary",
+        requires = "groups"
+    )]
+    summary_only: bool,
     /// How protein groups sharing a gene symbol are reduced to one value per
     /// sample: `none` (lexically first assay), `mean`, `max-observed`.
     #[arg(long, value_enum, default_value_t = CollapseGenes::None)]
@@ -221,24 +231,27 @@ pub fn run(args: WeightedArgs) -> Result<()> {
         });
     }
 
-    let mut buf = String::from(
-        "sample_id\tsubject_id\tcondition\tis_control\tsignature\tn_shared\tn_used\tscore\n",
-    );
-    for (i, s) in samples.iter().enumerate() {
-        buf.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-            s.sample_id,
-            s.subject_id.clone().unwrap_or_default(),
-            s.condition.clone().unwrap_or_default(),
-            s.is_control as u8,
-            signature,
-            shared.len(),
-            n_used[i],
-            scores[i].map(format_f64).unwrap_or_default()
-        ));
+    let mut outputs: Vec<PathBuf> = Vec::new();
+    if let (false, Some(output)) = (args.summary_only, &args.output) {
+        let mut buf = String::from(
+            "sample_id\tsubject_id\tcondition\tis_control\tsignature\tn_shared\tn_used\tscore\n",
+        );
+        for (i, s) in samples.iter().enumerate() {
+            buf.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                s.sample_id,
+                s.subject_id.clone().unwrap_or_default(),
+                s.condition.clone().unwrap_or_default(),
+                s.is_control as u8,
+                signature,
+                shared.len(),
+                n_used[i],
+                scores[i].map(format_f64).unwrap_or_default()
+            ));
+        }
+        atomic_write(output, buf.as_bytes())?;
+        outputs.push(output.clone());
     }
-    atomic_write(&args.output, buf.as_bytes())?;
-    let mut outputs = vec![args.output.clone()];
 
     if let Some(groups) = &args.groups {
         let path = args
@@ -283,12 +296,15 @@ pub fn run(args: WeightedArgs) -> Result<()> {
         atomic_write(path, text.as_bytes())?;
         outputs.push(path.clone());
     }
+    let primary = outputs.first().cloned().ok_or_else(|| {
+        anyhow!("nothing to write: pass --output or --summary-only with --output-summary")
+    })?;
     eprintln!(
         "score weighted: signature={} samples={} shared_proteins={} output={}",
         signature,
         samples.len(),
         shared.len(),
-        args.output.display()
+        primary.display()
     );
 
     let finished_at = SystemTime::now();
@@ -297,7 +313,7 @@ pub fn run(args: WeightedArgs) -> Result<()> {
         &["measurements.tsv", "samples.tsv", "proteins.tsv"],
     )?;
     inputs.extend(hash_labeled_inputs(&[("weights", args.weights.as_path())])?);
-    let sidecar = sidecar_path_for(&args.output);
+    let sidecar = sidecar_path_for(&primary);
     write_run_sidecar(
         &sidecar,
         "score weighted",
@@ -310,8 +326,9 @@ pub fn run(args: WeightedArgs) -> Result<()> {
             "max-missing-fraction": args.max_missing_fraction,
             "min-shared": args.min_shared,
             "groups": args.groups,
-            "output": args.output.display().to_string(),
+            "output": args.output.as_ref().map(|p| p.display().to_string()),
             "output-summary": args.output_summary.as_ref().map(|p| p.display().to_string()),
+            "summary-only": args.summary_only,
             "collapse-genes": collapse.as_str(),
         }),
         &inputs,

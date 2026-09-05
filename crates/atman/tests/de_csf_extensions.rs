@@ -364,3 +364,58 @@ fn de_collapse_genes_rules() {
     assert_eq!(g["n_a"], "2");
     assert!(sidecar.contains("\"rule\": \"mean\""));
 }
+
+#[test]
+fn de_require_cols_drops_samples_missing_a_value() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    std::fs::create_dir_all(&input).unwrap();
+    dup_fixture(&input);
+    // Overwrite samples.tsv with a total_protein column missing for S3.
+    std::fs::write(input.join("samples.tsv"), "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\ttotal_protein\nS1\tS1\tCase\t0\tbio\t1\t400\nS2\tS2\tCase\t0\tbio\t2\t500\nS3\tS3\tCtrl\t1\tbio\t3\t\nS4\tS4\tCtrl\t1\tbio\t4\t450\n").unwrap();
+    let out = tmp.path().join("out");
+    let r = run_atman(&[
+        "de",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        out.to_str().unwrap(),
+        "--test",
+        "welch-t",
+        "--groups",
+        "Case-Ctrl",
+        "--include-controls",
+        "--require-cols",
+        "total_protein",
+        "--min-pairs",
+        "1",
+    ]);
+    assert!(
+        r.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let rows = read_rows(&out.join("de_results.tsv"));
+    let h = rows.iter().find(|x| x["gene_symbol"] == "H").unwrap();
+    assert_eq!(h["n_a"], "2");
+    assert_eq!(h["n_b"], "1");
+    let sidecar = std::fs::read_to_string(out.join("de_results.tsv.run.json")).unwrap();
+    assert!(sidecar.contains("\"n_require_cols_dropped\": 1"));
+    assert!(sidecar.contains("\"require-cols\""));
+    let r = run_atman(&[
+        "de",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        out.to_str().unwrap(),
+        "--test",
+        "welch-t",
+        "--groups",
+        "Case-Ctrl",
+        "--include-controls",
+        "--require-cols",
+        "nope",
+    ]);
+    assert!(!r.status.success());
+    assert!(String::from_utf8_lossy(&r.stderr).contains("nope"));
+}

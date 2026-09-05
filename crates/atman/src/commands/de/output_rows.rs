@@ -55,6 +55,38 @@ pub(super) fn apply_subset(
     Ok(before - samples.len())
 }
 
+/// Retain samples whose raw samples.tsv row has a non-empty value in every
+/// listed column. Returns the number of samples dropped; a column absent
+/// from the header is an error.
+pub(super) fn require_columns(
+    samples: &mut Vec<Sample>,
+    samples_path: &Path,
+    columns: &[String],
+) -> Result<usize> {
+    let raw = read_raw_samples(samples_path)?;
+    for col in columns {
+        if raw
+            .values()
+            .next()
+            .map(|m| !m.contains_key(col))
+            .unwrap_or(false)
+        {
+            anyhow::bail!("--require-cols {:?} not found in {:?}", col, samples_path);
+        }
+    }
+    let before = samples.len();
+    samples.retain(|s| {
+        raw.get(&s.sample_id)
+            .map(|m| {
+                columns
+                    .iter()
+                    .all(|c| m.get(c).map(|v| !v.is_empty()).unwrap_or(false))
+            })
+            .unwrap_or(false)
+    });
+    Ok(before - samples.len())
+}
+
 /// sample_id → {column → raw trimmed value} for every column of samples.tsv.
 fn read_raw_samples(path: &Path) -> Result<HashMap<String, BTreeMap<String, String>>> {
     let mut reader = csv::ReaderBuilder::new()

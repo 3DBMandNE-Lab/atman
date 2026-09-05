@@ -34,7 +34,7 @@ use ols_design::{
     resolve_comparisons, validate_random_intercept_design, OlsDesign,
 };
 use output_rows::{
-    apply_subset, override_condition, override_subject_id, write_covariate_rows,
+    apply_subset, override_condition, override_subject_id, require_columns, write_covariate_rows,
     write_omnibus_rows, write_proxy_summary, CovariateRow, OmnibusRow, ReportAccumulator,
 };
 use posthoc::{run_posthoc_dunnett, run_posthoc_sidak, run_posthoc_tukey, write_design_rows};
@@ -401,6 +401,18 @@ pub fn run(args: Args) -> Result<()> {
         0
     } else {
         apply_subset(&mut samples, &samples_path, &subset_preds)?
+    };
+    let require_cols: Vec<String> = args
+        .require_cols
+        .iter()
+        .flat_map(|c| c.split(','))
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect();
+    let n_require_cols_dropped = if require_cols.is_empty() {
+        0
+    } else {
+        require_columns(&mut samples, &samples_path, &require_cols)?
     };
     if args.include_controls {
         for s in samples.iter_mut() {
@@ -1298,6 +1310,10 @@ pub fn run(args: Args) -> Result<()> {
     );
     extras.insert("n_subset_dropped".into(), json!(n_subset_dropped));
     extras.insert(
+        "n_require_cols_dropped".into(),
+        json!(n_require_cols_dropped),
+    );
+    extras.insert(
         "gene_symbol_collapse".into(),
         json!({
             "rule": collapse.as_str(),
@@ -1350,6 +1366,7 @@ pub fn run(args: Args) -> Result<()> {
             "condition-col": args.condition_col,
             "subset": args.subset,
             "collapse-others": args.collapse_others,
+            "require-cols": require_cols,
             "max-missing-fraction": args.max_missing_fraction,
             "collapse-genes": collapse.as_str(),
         }),
