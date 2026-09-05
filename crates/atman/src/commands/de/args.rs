@@ -265,6 +265,14 @@ pub struct Args {
     /// exceeds this value (1.0 = keep every protein).
     #[arg(long, default_value_t = 1.0)]
     pub(super) max_missing_fraction: f64,
+
+    /// How protein groups sharing a gene symbol are reduced to one value per
+    /// sample: `none` (lexically first assay), `mean` (mean of the observed
+    /// assays), `max-observed` (assay observed in the most samples). Applies
+    /// to paired-t, welch-t, ols, and mixed; the missingness filter runs on
+    /// the collapsed gene.
+    #[arg(long, value_enum, default_value_t = crate::design::CollapseGenes::None)]
+    pub(super) collapse_genes: crate::design::CollapseGenes,
 }
 
 pub(super) fn apply_per_subject_proxy(args: &mut Args) -> Result<()> {

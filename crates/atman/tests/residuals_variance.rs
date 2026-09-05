@@ -176,3 +176,76 @@ fn residuals_accepts_expression_terms() {
     let text = std::fs::read_to_string(&long).unwrap();
     assert!(text.lines().skip(1).all(|l| l.ends_with("\t0")), "{text}");
 }
+
+#[test]
+fn residuals_collapse_genes_mean_and_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    std::fs::create_dir_all(&input).unwrap();
+    std::fs::write(input.join("samples.tsv"), "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\tage\nS1\tS1\tC\t1\tbio\t1\t1\nS2\tS2\tC\t1\tbio\t2\t2\nS3\tS3\tC\t1\tbio\t3\t3\nS4\tS4\tC\t1\tbio\t4\t4\n").unwrap();
+    std::fs::write(input.join("proteins.tsv"), "platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\nmaxquant_lfq\tA1\tA1\tG\tP\t\nmaxquant_lfq\tA2\tA2\tG\tP\t\n").unwrap();
+    let mut m = String::from(MEAS_HEADER);
+    let mut order = 1;
+    // G / A1 = 2*age on all samples; G / A2 = 2*age + 10 on S1..S3 only.
+    for (i, sid) in ["S1", "S2", "S3", "S4"].iter().enumerate() {
+        let age = (i + 1) as f64;
+        m.push_str(&format!("maxquant_lfq\t{sid}\tA1\tG\tP\t{}\t{}\t{}\tlog2_intensity\tPASS\tPASS\t\t0\t0\t\t\t{order}\n", 2.0 * age, 2.0 * age, 2.0 * age));
+        order += 1;
+        if i < 3 {
+            m.push_str(&format!("maxquant_lfq\t{sid}\tA2\tG\tP\t{}\t{}\t{}\tlog2_intensity\tPASS\tPASS\t\t0\t0\t\t\t{order}\n", 2.0 * age + 10.0, 2.0 * age + 10.0, 2.0 * age + 10.0));
+            order += 1;
+        }
+    }
+    std::fs::write(input.join("measurements.tsv"), m).unwrap();
+    let run = |rule: &str| {
+        let out = tmp.path().join(format!("resid_{rule}.tsv"));
+        let var = tmp.path().join(format!("var_{rule}.tsv"));
+        let canon = tmp.path().join(format!("canon_{rule}"));
+        let r = run_atman(&[
+            "residuals",
+            "--input-dir",
+            input.to_str().unwrap(),
+            "--design",
+            "~ age",
+            "--min-samples",
+            "2",
+            "--collapse-genes",
+            rule,
+            "--output",
+            out.to_str().unwrap(),
+            "--output-variance",
+            var.to_str().unwrap(),
+            "--output-canonical-dir",
+            canon.to_str().unwrap(),
+        ]);
+        assert!(
+            r.status.success(),
+            "stderr:\n{}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+        (
+            read_rows(&var),
+            std::fs::read_to_string(canon.join("measurements.tsv")).unwrap(),
+        )
+    };
+    let (v, canon) = run("none");
+    assert_eq!(v.len(), 2);
+    assert_eq!(
+        v.iter().map(|r| r["assay_id"].as_str()).collect::<Vec<_>>(),
+        vec!["A1", "A2"]
+    );
+    assert_eq!(canon.lines().count(), 8);
+    let (v, canon) = run("mean");
+    assert_eq!(v.len(), 1);
+    assert_eq!(v[0]["assay_id"], "A1");
+    assert_eq!(v[0]["n"], "4");
+    // Collapsed y = [7, 9, 11, 8] on age [1..4]: not a perfect fit.
+    let r2: f64 = v[0]["r2"].parse().unwrap();
+    assert!(r2 > 0.0 && r2 < 1.0, "r2 = {r2}");
+    // One residual record per sample for G, all carrying the representative assay.
+    assert_eq!(canon.lines().count(), 5);
+    assert!(canon
+        .lines()
+        .skip(1)
+        .all(|l| l.split('\t').nth(2) == Some("A1")));
+}

@@ -24,7 +24,7 @@ use std::time::SystemTime;
 use super::manifest::{read_contrast_manifest, select_rows};
 use super::table::ScoreTable;
 use super::{fmt_opt, load_frame, parse_cols, resample_within_groups, Context};
-use crate::design::{build_design, parse_design, DesignMatrix, DesignSpec, Term};
+use crate::design::{build_design, parse_design, DegenerateFactor, DesignMatrix, DesignSpec, Term};
 use crate::io::{atomic_write, hash_labeled_inputs, sidecar_path_for, write_run_sidecar};
 
 #[derive(ClapArgs, Debug)]
@@ -108,6 +108,7 @@ struct Row {
     boot_ci_lo: Option<f64>,
     boot_ci_hi: Option<f64>,
     boot_frac_gt0: Option<f64>,
+    boot_n_skipped: Option<usize>,
 }
 
 struct CovRow {
@@ -368,10 +369,20 @@ pub fn run(args: ContrastArgs) -> Result<()> {
                     }
                 }
 
-                // Bootstrap.
+                // Bootstrap. A replicate whose resample leaves a categorical
+                // term with a single level (or a singular fit) is skipped and
+                // counted in boot_n_skipped rather than aborting the run.
                 let mut betas: Vec<f64> = Vec::with_capacity(draws.len());
+                let mut n_skipped = 0usize;
                 for (b_idx, draw) in draws.iter().enumerate() {
-                    let bdm = design_for_rows(spec, &ctx, draw, &case)?;
+                    let bdm = match design_for_rows(spec, &ctx, draw, &case) {
+                        Ok(d) => d,
+                        Err(e) if e.downcast_ref::<DegenerateFactor>().is_some() => {
+                            n_skipped += 1;
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    };
                     let bcol = bdm.indicator_col.expect("design has case");
                     let mut bx = Vec::new();
                     let mut by = Vec::new();
@@ -381,15 +392,18 @@ pub fn run(args: ContrastArgs) -> Result<()> {
                             by.push(v);
                         }
                     }
-                    if let Some(bf) = fit_ols(&bx, &by, bcol) {
-                        betas.push(bf.beta);
-                        boot_rows.push(BootRow {
-                            label: c.label.clone(),
-                            score: score.clone(),
-                            design: spec.formula.clone(),
-                            resample: b_idx,
-                            beta: bf.beta,
-                        });
+                    match fit_ols(&bx, &by, bcol) {
+                        Some(bf) => {
+                            betas.push(bf.beta);
+                            boot_rows.push(BootRow {
+                                label: c.label.clone(),
+                                score: score.clone(),
+                                design: spec.formula.clone(),
+                                resample: b_idx,
+                                beta: bf.beta,
+                            });
+                        }
+                        None => n_skipped += 1,
                     }
                 }
                 let (boot_n, boot_mean, boot_sd, boot_ci_lo, boot_ci_hi, boot_frac_gt0) =
@@ -447,6 +461,11 @@ pub fn run(args: ContrastArgs) -> Result<()> {
                     boot_ci_lo,
                     boot_ci_hi,
                     boot_frac_gt0,
+                    boot_n_skipped: if args.n_bootstrap > 0 {
+                        Some(n_skipped)
+                    } else {
+                        None
+                    },
                 });
             }
         }
@@ -531,7 +550,7 @@ pub fn run(args: ContrastArgs) -> Result<()> {
     Ok(())
 }
 
-const HEADER: &str = "label\tcohort\tscore\tdesign\tn_case\tn_control\tmean_case\tmean_control\tmean_diff\tcohen_d\td_ci_lo\td_ci_hi\twelch_t\twelch_df\twelch_p\twelch_q\tauc\tn_fit\tbeta\tse\tci_lo\tci_hi\tt\tp\tq\tbeta_over_resid_sd\tboot_n\tboot_mean\tboot_sd\tboot_ci_lo\tboot_ci_hi\tboot_frac_gt0\n";
+const HEADER: &str = "label\tcohort\tscore\tdesign\tn_case\tn_control\tmean_case\tmean_control\tmean_diff\tcohen_d\td_ci_lo\td_ci_hi\twelch_t\twelch_df\twelch_p\twelch_q\tauc\tn_fit\tbeta\tse\tci_lo\tci_hi\tt\tp\tq\tbeta_over_resid_sd\tboot_n\tboot_mean\tboot_sd\tboot_ci_lo\tboot_ci_hi\tboot_frac_gt0\tboot_n_skipped\n";
 
 fn write_rows(path: &Path, rows: &[Row]) -> Result<()> {
     let mut buf = String::from(HEADER);
@@ -569,6 +588,7 @@ fn write_rows(path: &Path, rows: &[Row]) -> Result<()> {
             fmt_opt(r.boot_ci_lo),
             fmt_opt(r.boot_ci_hi),
             fmt_opt(r.boot_frac_gt0),
+            r.boot_n_skipped.map(|n| n.to_string()).unwrap_or_default(),
         ];
         buf.push_str(&cells.join("\t"));
         buf.push('\n');

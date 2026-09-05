@@ -293,3 +293,73 @@ fn axes_contrast_rejects_empty_group_and_missing_case_term() {
     assert!(!r.status.success());
     assert!(String::from_utf8_lossy(&r.stderr).contains("`case`"));
 }
+
+#[test]
+fn axes_contrast_bootstrap_skips_replicates_with_a_degenerate_factor() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scores = tmp.path().join("scores.tsv");
+    let dir = tmp.path().join("c");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = String::from("sample_id\tcohort\tcondition\tis_control\ts1\n");
+    let mut m = String::from(
+        "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\tsex\n",
+    );
+    // Three cases and three controls; exactly one case is male.
+    for (i, (cond, ctrl, sex, v)) in [
+        ("Case", 0, "M", 2.0),
+        ("Case", 0, "F", 1.5),
+        ("Case", 0, "F", 2.5),
+        ("Ctrl", 1, "F", 0.0),
+        ("Ctrl", 1, "F", 0.5),
+        ("Ctrl", 1, "F", -0.5),
+    ]
+    .iter()
+    .enumerate()
+    {
+        s.push_str(&format!("P{i}\tc\t{cond}\t{ctrl}\t{v}\n"));
+        m.push_str(&format!(
+            "P{i}\tP{i}\t{cond}\t{ctrl}\tbio\t{}\t{sex}\n",
+            i + 1
+        ));
+    }
+    std::fs::write(&scores, s).unwrap();
+    std::fs::write(dir.join("samples.tsv"), m).unwrap();
+    let manifest = tmp.path().join("m.tsv");
+    std::fs::write(
+        &manifest,
+        "label\tcohort\tcase\tcontrol\tfamily\nX\tc\tCase\tCtrl\tf\n",
+    )
+    .unwrap();
+    let out = tmp.path().join("o.tsv");
+    let r = run_atman(&[
+        "axes",
+        "contrast",
+        "--scores",
+        scores.to_str().unwrap(),
+        "--cohort-dirs",
+        &format!("c={}", dir.display()),
+        "--manifest",
+        manifest.to_str().unwrap(),
+        "--score-cols",
+        "s1",
+        "--designs",
+        "~ case + sex",
+        "--n-bootstrap",
+        "50",
+        "--seed",
+        "1",
+        "--output",
+        out.to_str().unwrap(),
+    ]);
+    assert!(
+        r.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let row = &read_rows(&out)[0];
+    let kept: usize = row["boot_n"].parse().unwrap();
+    let skipped: usize = row["boot_n_skipped"].parse().unwrap();
+    assert_eq!(kept + skipped, 50);
+    assert!(skipped >= 1, "expected at least one degenerate replicate");
+    assert!(kept >= 1);
+}

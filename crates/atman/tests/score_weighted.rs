@@ -164,3 +164,57 @@ fn score_weighted_min_shared_blanks_score() {
         .iter()
         .all(|r| r["score"].is_empty() && r["n_used"] == "1"));
 }
+
+#[test]
+fn score_weighted_collapse_genes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    std::fs::create_dir_all(&input).unwrap();
+    std::fs::write(input.join("samples.tsv"), "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\nS1\tS1\tA\t0\tbio\t1\nS2\tS2\tA\t0\tbio\t2\nS3\tS3\tB\t1\tbio\t3\nS4\tS4\tB\t1\tbio\t4\n").unwrap();
+    std::fs::write(input.join("proteins.tsv"), "platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\nmaxquant_lfq\tA1\tA1\tG\tP\t\nmaxquant_lfq\tA2\tA2\tG\tP\t\n").unwrap();
+    let mut m = String::from(MEAS_HEADER);
+    let mut order = 1;
+    // G / A1 = [1,2,3,4]; G / A2 = [4,3,2,1] ⇒ per-sample mean is constant 2.5.
+    for (i, sid) in ["S1", "S2", "S3", "S4"].iter().enumerate() {
+        m.push_str(&format!("maxquant_lfq\t{sid}\tA1\tG\tP\t{v}\t{v}\t{v}\tlog2_intensity\tPASS\tPASS\t\t0\t0\t\t\t{order}\n", v = (i + 1) as f64));
+        order += 1;
+        m.push_str(&format!("maxquant_lfq\t{sid}\tA2\tG\tP\t{v}\t{v}\t{v}\tlog2_intensity\tPASS\tPASS\t\t0\t0\t\t\t{order}\n", v = (4 - i) as f64));
+        order += 1;
+    }
+    std::fs::write(input.join("measurements.tsv"), m).unwrap();
+    let weights = tmp.path().join("w.tsv");
+    std::fs::write(&weights, "gene_symbol\tcohen_d\nG\t1\n").unwrap();
+    let run = |rule: &str| {
+        let out = tmp.path().join(format!("scores_{rule}.tsv"));
+        let r = run_atman(&[
+            "score",
+            "weighted",
+            "--input-dir",
+            input.to_str().unwrap(),
+            "--weights",
+            weights.to_str().unwrap(),
+            "--weight-col",
+            "cohen_d",
+            "--min-shared",
+            "1",
+            "--collapse-genes",
+            rule,
+            "--output",
+            out.to_str().unwrap(),
+        ]);
+        assert!(
+            r.status.success(),
+            "stderr:\n{}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+        read_rows(&out)
+    };
+    let none = run("none");
+    assert!((num(&none[0], "score") + 1.161895003862225).abs() < 1e-9);
+    let maxo = run("max-observed");
+    assert_eq!(maxo[0]["score"], none[0]["score"]);
+    let mean = run("mean");
+    assert!(mean
+        .iter()
+        .all(|r| r["score"].is_empty() && r["n_used"] == "0"));
+}

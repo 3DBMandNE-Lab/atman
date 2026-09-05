@@ -128,6 +128,76 @@ pub fn parse_labeled_paths(spec: &str) -> Result<Vec<(String, PathBuf)>> {
     Ok(out)
 }
 
+/// A categorical term whose fitted rows carry fewer than two levels.
+/// Raised as a typed error so bootstrap loops can skip the replicate.
+#[derive(Debug, Clone)]
+pub struct DegenerateFactor {
+    pub column: String,
+}
+
+impl std::fmt::Display for DegenerateFactor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "categorical covariate {:?} has fewer than two levels among the fitted rows",
+            self.column
+        )
+    }
+}
+
+impl std::error::Error for DegenerateFactor {}
+
+/// How protein groups (assays) that share a gene symbol are reduced to one
+/// value per sample. Shared by `de`, `residuals`, and `score weighted`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum CollapseGenes {
+    /// Keep one assay per gene: the lexically first assay id.
+    None,
+    /// Per sample, the mean of the non-missing assays sharing the symbol.
+    Mean,
+    /// Keep the single assay observed in the most samples (ties: lexically first).
+    MaxObserved,
+}
+
+impl CollapseGenes {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CollapseGenes::None => "none",
+            CollapseGenes::Mean => "mean",
+            CollapseGenes::MaxObserved => "max-observed",
+        }
+    }
+
+    /// Choose the representative assay id for a gene from
+    /// `(assay_id, n_observed)` pairs.
+    pub fn representative<'a>(&self, counts: &'a BTreeMap<String, usize>) -> Option<&'a String> {
+        match self {
+            CollapseGenes::MaxObserved => counts
+                .iter()
+                .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+                .map(|(a, _)| a),
+            _ => counts.keys().next(),
+        }
+    }
+
+    /// Reduce one sample's `(assay_id, value)` list to a single value.
+    pub fn collapse(&self, values: &[(String, f64)], representative: &str) -> Option<f64> {
+        match self {
+            CollapseGenes::Mean => {
+                if values.is_empty() {
+                    None
+                } else {
+                    Some(values.iter().map(|(_, v)| *v).sum::<f64>() / values.len() as f64)
+                }
+            }
+            _ => values
+                .iter()
+                .find(|(a, _)| a == representative)
+                .map(|(_, v)| *v),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Term {
     /// The contrast indicator (e.g. `case`), supplied by the caller per row.
@@ -268,10 +338,7 @@ pub fn build_design(
                         .into_iter()
                         .collect();
                     if levels.len() < 2 {
-                        bail!(
-                            "categorical covariate {:?} has fewer than two levels among the fitted rows",
-                            c
-                        );
+                        return Err(anyhow::Error::new(DegenerateFactor { column: c.clone() }));
                     }
                     kinds.push(Some(ColumnKind::Categorical(levels)));
                 }
@@ -530,6 +597,27 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("fewer than two levels"));
+    }
+
+    #[test]
+    fn collapse_genes_rules() {
+        let mut counts = BTreeMap::new();
+        counts.insert("B2".to_string(), 4usize);
+        counts.insert("A1".to_string(), 2usize);
+        counts.insert("C3".to_string(), 4usize);
+        assert_eq!(CollapseGenes::None.representative(&counts).unwrap(), "A1");
+        assert_eq!(
+            CollapseGenes::MaxObserved.representative(&counts).unwrap(),
+            "B2"
+        );
+        let values = vec![("A1".to_string(), 1.0), ("B2".to_string(), 3.0)];
+        assert_eq!(CollapseGenes::Mean.collapse(&values, "A1"), Some(2.0));
+        assert_eq!(CollapseGenes::None.collapse(&values, "A1"), Some(1.0));
+        assert_eq!(
+            CollapseGenes::MaxObserved.collapse(&values, "B2"),
+            Some(3.0)
+        );
+        assert_eq!(CollapseGenes::None.collapse(&values, "Z9"), None);
     }
 
     #[test]

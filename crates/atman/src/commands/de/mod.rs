@@ -433,6 +433,11 @@ pub fn run(args: Args) -> Result<()> {
     if !(0.0..=1.0).contains(&args.max_missing_fraction) {
         anyhow::bail!("--max-missing-fraction must be in [0, 1]");
     }
+    if args.collapse_genes != crate::design::CollapseGenes::None
+        && (args.test == "limma" || args.test == "msqrob")
+    {
+        anyhow::bail!("--collapse-genes is not supported with --test limma or msqrob");
+    }
     let proteins = read_proteins(&args.input_dir.join("proteins.tsv"))?;
     let comparisons = resolve_comparisons(
         args.groups.as_deref(),
@@ -477,6 +482,11 @@ pub fn run(args: Args) -> Result<()> {
     // per-protein fits can look up abundance per sample and drop QC-masked
     // cells without needing to pair by subject.
     let mut cells_by_sample: HashMap<(String, String, String), f64> = HashMap::new();
+    // (panel, gene) → sample_id → [(assay_id, abundance)], collapsed below
+    // according to --collapse-genes.
+    type RawCells = BTreeMap<(String, String), BTreeMap<String, Vec<(String, f64)>>>;
+    let mut raw_cells: RawCells = BTreeMap::new();
+    let mut sample_info: HashMap<String, (String, String)> = HashMap::new();
 
     let n_total_measurements = measurements.len();
     let mut n_skip_qc_masked = 0usize;
@@ -536,24 +546,71 @@ pub fn run(args: Args) -> Result<()> {
             }
         };
         n_kept_measurements += 1;
-        // cells_by_sample is used by OLS, mixed, and any path routing to OLS
-        // (welch-t + adjust-for). paired-t + adjust-for also needs per-sample
-        // lookup to compute paired differences.
-        if args.test == "ols"
-            || args.test == "mixed"
-            || (!args.adjust_for.is_empty() && (args.test == "welch-t" || args.test == "paired-t"))
-        {
-            cells_by_sample.insert(
-                (panel.clone(), gene.clone(), m.sample_id.clone()),
-                abundance,
-            );
-        }
-        cells
+        sample_info
+            .entry(m.sample_id.clone())
+            .or_insert((subject, condition));
+        raw_cells
             .entry((panel, gene))
             .or_default()
-            .entry(condition)
+            .entry(m.sample_id.clone())
             .or_default()
-            .push((subject, abundance));
+            .push((m.assay_id.0.clone(), abundance));
+    }
+
+    // Collapse protein groups that share a gene symbol to one value per
+    // sample (--collapse-genes), then fill the per-condition cells.
+    // cells_by_sample is used by OLS, mixed, and any path routing to OLS
+    // (welch-t + adjust-for). paired-t + adjust-for also needs per-sample
+    // lookup to compute paired differences.
+    let needs_by_sample = args.test == "ols"
+        || args.test == "mixed"
+        || (!args.adjust_for.is_empty() && (args.test == "welch-t" || args.test == "paired-t"));
+    let collapse = args.collapse_genes;
+    let mut n_genes_multi_assay = 0usize;
+    let mut n_extra_assays = 0usize;
+    for ((panel, gene), by_sample) in raw_cells {
+        let mut assay_counts: BTreeMap<String, usize> = BTreeMap::new();
+        for values in by_sample.values() {
+            for (assay, _) in values {
+                *assay_counts.entry(assay.clone()).or_default() += 1;
+            }
+        }
+        if assay_counts.len() > 1 {
+            n_genes_multi_assay += 1;
+            n_extra_assays += assay_counts.len() - 1;
+        }
+        let representative = collapse
+            .representative(&assay_counts)
+            .cloned()
+            .unwrap_or_default();
+        if assay_counts.len() > 1 {
+            if let Some(meta) = gene_meta.get_mut(&(panel.clone(), gene.clone())) {
+                meta.0 = representative.clone();
+            }
+        }
+        for (sample_id, values) in by_sample {
+            let Some(value) = collapse.collapse(&values, &representative) else {
+                continue;
+            };
+            let (subject, condition) = sample_info[&sample_id].clone();
+            if needs_by_sample {
+                cells_by_sample.insert((panel.clone(), gene.clone(), sample_id.clone()), value);
+            }
+            cells
+                .entry((panel.clone(), gene.clone()))
+                .or_default()
+                .entry(condition)
+                .or_default()
+                .push((subject, value));
+        }
+    }
+    if n_genes_multi_assay > 0 {
+        eprintln!(
+            "de: {} gene symbols are carried by more than one assay ({} extra assays); --collapse-genes {}",
+            n_genes_multi_assay,
+            n_extra_assays,
+            collapse.as_str()
+        );
     }
 
     let mixed_fixed_formula = args.fixed.as_ref().map(|fixed| format!("~ {fixed}"));
@@ -1238,6 +1295,14 @@ pub fn run(args: Args) -> Result<()> {
     );
     extras.insert("n_subset_dropped".into(), json!(n_subset_dropped));
     extras.insert(
+        "gene_symbol_collapse".into(),
+        json!({
+            "rule": collapse.as_str(),
+            "n_genes_with_multiple_assays": n_genes_multi_assay,
+            "n_extra_assays": n_extra_assays,
+        }),
+    );
+    extras.insert(
         "report_thresholds".into(),
         json!({
             "q_strict": args.report_q_strict,
@@ -1281,6 +1346,7 @@ pub fn run(args: Args) -> Result<()> {
             "subset": args.subset,
             "collapse-others": args.collapse_others,
             "max-missing-fraction": args.max_missing_fraction,
+            "collapse-genes": collapse.as_str(),
         }),
         &inputs_sha256,
         &outputs,

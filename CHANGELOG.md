@@ -33,6 +33,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `--output-variance-summary`, `--output-canonical-dir`.
 - `atman-core`: `contrast` (Cohen d, AUC, Kruskal–Wallis, Spearman p, t CI,
   percentile, z-score) and `expr` (covariate expressions) modules.
+- **`--collapse-genes none|mean|max-observed`** on `de`, `residuals`, and
+  `score weighted`: protein groups sharing a gene symbol are reduced to one
+  value per sample by a stated rule (lexically first assay, per-sample mean,
+  or most-observed assay); affected-gene counts land in the sidecar.
+- **`axes contrast`** skips bootstrap replicates whose resample leaves a
+  categorical term with a single level (new `boot_n_skipped` column)
+  instead of aborting.
 
 ### Changed
 

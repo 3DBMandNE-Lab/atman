@@ -19,7 +19,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::design::{build_design, parse_design, CovariateFrame, Term};
+use crate::design::{build_design, parse_design, CollapseGenes, CovariateFrame, Term};
 use crate::io::{
     atomic_write, format_f64, hash_canonical_inputs, hash_labeled_inputs, read_measurements_long,
     read_samples, sidecar_path_for, write_measurements_long, write_run_sidecar,
@@ -71,6 +71,13 @@ pub struct Args {
     /// abundance (observed cells only) with `samples.tsv`/`proteins.tsv` copied.
     #[arg(long)]
     output_canonical_dir: Option<PathBuf>,
+
+    /// How protein groups sharing a gene symbol are reduced: `none` keeps
+    /// every assay as its own row; `mean` and `max-observed` collapse to one
+    /// row per gene (assay_id = the representative assay). The missingness
+    /// filter runs on the collapsed gene.
+    #[arg(long, value_enum, default_value_t = CollapseGenes::None)]
+    collapse_genes: CollapseGenes,
 }
 
 #[derive(Debug, Clone)]
@@ -147,12 +154,20 @@ pub fn run(args: Args) -> Result<()> {
 
     let measurements_path = args.input_dir.join("measurements.tsv");
     let measurements = read_measurements_long(&measurements_path)?;
-    let (rows, variance, n_dropped_missingness) = compute_residuals(
+    let (rows, variance, n_dropped_missingness, n_genes_multi_assay) = compute_residuals(
         &sample_design,
         &measurements,
         args.min_samples,
         args.max_missing_fraction,
+        args.collapse_genes,
     )?;
+    if n_genes_multi_assay > 0 {
+        eprintln!(
+            "residuals: {} gene symbols are carried by more than one assay; --collapse-genes {}",
+            n_genes_multi_assay,
+            args.collapse_genes.as_str()
+        );
+    }
     write_long(&args.output, &rows)?;
     let mut outputs = vec![args.output.clone()];
     if let Some(path) = &args.output_wide {
@@ -202,6 +217,13 @@ pub fn run(args: Args) -> Result<()> {
     let mut extras = serde_json::Map::new();
     extras.insert("n_design_samples".into(), json!(sample_design.len()));
     extras.insert("n_dropped_missingness".into(), json!(n_dropped_missingness));
+    extras.insert(
+        "gene_symbol_collapse".into(),
+        json!({
+            "rule": args.collapse_genes.as_str(),
+            "n_genes_with_multiple_assays": n_genes_multi_assay,
+        }),
+    );
     write_run_sidecar(
         &sidecar,
         "residuals",
@@ -216,6 +238,7 @@ pub fn run(args: Args) -> Result<()> {
             "output-variance": args.output_variance.as_ref().map(|p| p.display().to_string()),
             "output-variance-summary": args.output_variance_summary.as_ref().map(|p| p.display().to_string()),
             "output-canonical-dir": args.output_canonical_dir.as_ref().map(|p| p.display().to_string()),
+            "collapse-genes": args.collapse_genes.as_str(),
         }),
         &inputs_sha256,
         &outputs,
@@ -227,35 +250,74 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
+type ProteinValues<'a> = BTreeMap<(String, String), Vec<(&'a SampleDesign, f64)>>;
+
 fn compute_residuals(
     sample_design: &[SampleDesign],
     measurements: &[MeasurementRecord],
     min_samples: usize,
     max_missing_fraction: f64,
-) -> Result<(Vec<ResidualRow>, Vec<VarianceRow>, usize)> {
-    let design_by_sample: HashMap<&str, &SampleDesign> = sample_design
+    collapse: CollapseGenes,
+) -> Result<(Vec<ResidualRow>, Vec<VarianceRow>, usize, usize)> {
+    let design_by_sample: HashMap<&str, usize> = sample_design
         .iter()
-        .map(|row| (row.sample.sample_id.as_str(), row))
+        .enumerate()
+        .map(|(i, row)| (row.sample.sample_id.as_str(), i))
         .collect();
-    let mut by_protein: BTreeMap<(String, String), Vec<(&SampleDesign, f64)>> = BTreeMap::new();
+    // gene → design index → [(assay_id, value)]
+    let mut raw: BTreeMap<String, BTreeMap<usize, Vec<(String, f64)>>> = BTreeMap::new();
     for measurement in measurements {
         let Some(value) = measurement.effective_abundance() else {
             continue;
         };
-        let Some(sample) = design_by_sample
-            .get(measurement.sample_id.as_str())
-            .copied()
-        else {
+        let Some(&idx) = design_by_sample.get(measurement.sample_id.as_str()) else {
             continue;
         };
         let gene = measurement
             .gene_symbol
             .clone()
             .unwrap_or_else(|| measurement.assay_id.0.clone());
-        by_protein
-            .entry((measurement.assay_id.0.clone(), gene))
+        raw.entry(gene)
             .or_default()
-            .push((sample, value));
+            .entry(idx)
+            .or_default()
+            .push((measurement.assay_id.0.clone(), value));
+    }
+    let mut by_protein: ProteinValues = BTreeMap::new();
+    let mut n_genes_multi_assay = 0usize;
+    for (gene, by_sample) in raw {
+        let mut assay_counts: BTreeMap<String, usize> = BTreeMap::new();
+        for values in by_sample.values() {
+            for (assay, _) in values {
+                *assay_counts.entry(assay.clone()).or_default() += 1;
+            }
+        }
+        if assay_counts.len() > 1 {
+            n_genes_multi_assay += 1;
+        }
+        if collapse == CollapseGenes::None {
+            for (idx, values) in &by_sample {
+                for (assay, value) in values {
+                    by_protein
+                        .entry((assay.clone(), gene.clone()))
+                        .or_default()
+                        .push((&sample_design[*idx], *value));
+                }
+            }
+            continue;
+        }
+        let representative = collapse
+            .representative(&assay_counts)
+            .cloned()
+            .unwrap_or_default();
+        for (idx, values) in &by_sample {
+            if let Some(value) = collapse.collapse(values, &representative) {
+                by_protein
+                    .entry((representative.clone(), gene.clone()))
+                    .or_default()
+                    .push((&sample_design[*idx], value));
+            }
+        }
     }
 
     let n_design = sample_design.len();
@@ -321,7 +383,7 @@ fn compute_residuals(
             .cmp(&b.gene_symbol)
             .then_with(|| a.assay_id.cmp(&b.assay_id))
     });
-    Ok((out, variance, n_dropped))
+    Ok((out, variance, n_dropped, n_genes_multi_assay))
 }
 
 fn write_long(path: &Path, rows: &[ResidualRow]) -> Result<()> {
@@ -453,22 +515,42 @@ fn write_canonical_dir(
     rows: &[ResidualRow],
 ) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {:?}", dir))?;
-    let residual_of: HashMap<(&str, &str), f64> = rows
-        .iter()
-        .map(|r| ((r.sample_id.as_str(), r.assay_id.as_str()), r.residual))
-        .collect();
-    let mut records: Vec<MeasurementRecord> = Vec::with_capacity(rows.len());
+    // Template records: exact (sample, assay) match first; otherwise any
+    // record of that (sample, gene) when the residual is a collapsed gene
+    // whose representative assay was not measured in that sample.
+    let mut by_sample_assay: HashMap<(&str, &str), &MeasurementRecord> = HashMap::new();
+    let mut by_sample_gene: HashMap<(&str, &str), &MeasurementRecord> = HashMap::new();
     for m in measurements {
-        let Some(&resid) = residual_of.get(&(m.sample_id.as_str(), m.assay_id.0.as_str())) else {
+        by_sample_assay
+            .entry((m.sample_id.as_str(), m.assay_id.0.as_str()))
+            .or_insert(m);
+        let gene = m.gene_symbol.as_deref().unwrap_or(m.assay_id.0.as_str());
+        by_sample_gene
+            .entry((m.sample_id.as_str(), gene))
+            .or_insert(m);
+    }
+    let mut records: Vec<MeasurementRecord> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let template = by_sample_assay
+            .get(&(row.sample_id.as_str(), row.assay_id.as_str()))
+            .or_else(|| by_sample_gene.get(&(row.sample_id.as_str(), row.gene_symbol.as_str())));
+        let Some(&m) = template else {
             continue;
         };
         let mut r = m.clone();
-        r.abundance = with_value(&m.abundance, resid);
-        r.abundance_raw = with_value(&m.abundance_raw, resid);
-        r.npx_source_str = format_f64(resid);
+        r.assay_id = atman_core::AssayId(row.assay_id.clone());
+        r.gene_symbol = Some(row.gene_symbol.clone());
+        r.abundance = with_value(&m.abundance, row.residual);
+        r.abundance_raw = with_value(&m.abundance_raw, row.residual);
+        r.npx_source_str = format_f64(row.residual);
         r.dropped_by_qc = false;
         records.push(r);
     }
+    records.sort_by(|a, b| {
+        a.ingest_order
+            .cmp(&b.ingest_order)
+            .then_with(|| a.assay_id.0.cmp(&b.assay_id.0))
+    });
     let measurements_path = dir.join("measurements.tsv");
     write_measurements_long(&measurements_path, &records)?;
     let mut written = vec![measurements_path];

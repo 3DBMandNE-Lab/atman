@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::design::CollapseGenes;
 use crate::io::{
     atomic_write, format_f64, hash_canonical_inputs, hash_labeled_inputs, read_measurements_long,
     read_samples, sidecar_path_for, write_run_sidecar,
@@ -51,6 +52,10 @@ pub struct WeightedArgs {
     /// Summary TSV for `--groups`.
     #[arg(long)]
     output_summary: Option<PathBuf>,
+    /// How protein groups sharing a gene symbol are reduced to one value per
+    /// sample: `none` (lexically first assay), `mean`, `max-observed`.
+    #[arg(long, value_enum, default_value_t = CollapseGenes::None)]
+    collapse_genes: CollapseGenes,
 }
 
 fn read_weights(path: &Path, feature_col: &str, weight_col: &str) -> Result<BTreeMap<String, f64>> {
@@ -112,8 +117,10 @@ pub fn run(args: WeightedArgs) -> Result<()> {
     let measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
     let weights = read_weights(&args.weights, &args.feature_col, &args.weight_col)?;
 
-    // gene → sample index → (sum, count) so duplicate cells average.
-    let mut acc: BTreeMap<String, HashMap<usize, (f64, usize)>> = BTreeMap::new();
+    // gene → sample index → assay → (sum, count); duplicate (sample, assay)
+    // cells are averaged, assays sharing a symbol collapse per --collapse-genes.
+    type GeneCells = BTreeMap<String, BTreeMap<usize, BTreeMap<String, (f64, usize)>>>;
+    let mut acc: GeneCells = BTreeMap::new();
     let mut measured: BTreeSet<usize> = BTreeSet::new();
     for m in &measurements {
         let Some(v) = m.effective_abundance() else {
@@ -126,25 +133,62 @@ pub fn run(args: WeightedArgs) -> Result<()> {
             .gene_symbol
             .clone()
             .unwrap_or_else(|| m.assay_id.0.clone());
-        let e = acc.entry(gene).or_default().entry(si).or_insert((0.0, 0));
+        let e = acc
+            .entry(gene)
+            .or_default()
+            .entry(si)
+            .or_default()
+            .entry(m.assay_id.0.clone())
+            .or_insert((0.0, 0));
         e.0 += v;
         e.1 += 1;
         measured.insert(si);
     }
     let n_measured = measured.len().max(1);
+    let collapse = args.collapse_genes;
+    let mut n_genes_multi_assay = 0usize;
     let mut shared: Vec<(String, f64, Vec<Option<f64>>)> = Vec::new();
     for (gene, by_sample) in &acc {
         let Some(&w) = weights.get(gene) else {
             continue;
         };
-        let missing = 1.0 - by_sample.len() as f64 / n_measured as f64;
+        let mut assay_counts: BTreeMap<String, usize> = BTreeMap::new();
+        for assays in by_sample.values() {
+            for assay in assays.keys() {
+                *assay_counts.entry(assay.clone()).or_default() += 1;
+            }
+        }
+        if assay_counts.len() > 1 {
+            n_genes_multi_assay += 1;
+        }
+        let representative = collapse
+            .representative(&assay_counts)
+            .cloned()
+            .unwrap_or_default();
+        let raw: Vec<Option<f64>> = (0..samples.len())
+            .map(|i| {
+                by_sample.get(&i).and_then(|assays| {
+                    let values: Vec<(String, f64)> = assays
+                        .iter()
+                        .map(|(a, (s, n))| (a.clone(), s / *n as f64))
+                        .collect();
+                    collapse.collapse(&values, &representative)
+                })
+            })
+            .collect();
+        let n_present = raw.iter().filter(|v| v.is_some()).count();
+        let missing = 1.0 - n_present as f64 / n_measured as f64;
         if missing > args.max_missing_fraction + 1e-12 {
             continue;
         }
-        let raw: Vec<Option<f64>> = (0..samples.len())
-            .map(|i| by_sample.get(&i).map(|(s, n)| s / *n as f64))
-            .collect();
         shared.push((gene.clone(), w, zscore(&raw)));
+    }
+    if n_genes_multi_assay > 0 {
+        eprintln!(
+            "score weighted: {} gene symbols are carried by more than one assay; --collapse-genes {}",
+            n_genes_multi_assay,
+            collapse.as_str()
+        );
     }
     if shared.is_empty() {
         bail!(
@@ -265,12 +309,23 @@ pub fn run(args: WeightedArgs) -> Result<()> {
             "groups": args.groups,
             "output": args.output.display().to_string(),
             "output-summary": args.output_summary.as_ref().map(|p| p.display().to_string()),
+            "collapse-genes": collapse.as_str(),
         }),
         &inputs,
         &outputs,
         started_at,
         finished_at,
-        None,
+        Some({
+            let mut extras = serde_json::Map::new();
+            extras.insert(
+                "gene_symbol_collapse".into(),
+                json!({
+                    "rule": collapse.as_str(),
+                    "n_genes_with_multiple_assays": n_genes_multi_assay,
+                }),
+            );
+            extras
+        }),
     )?;
     eprintln!("score weighted: sidecar={}", sidecar.display());
     Ok(())

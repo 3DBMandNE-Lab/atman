@@ -186,6 +186,15 @@ both routings against R references)
   subjects (`effect_size_method = cohen_d`) with its large-sample CI in
   `ci_low`/`ci_high`, and `de_results.tsv` carries `n_a`/`n_b` (observed
   subjects per group; also filled for `welch-t`).
+- `--collapse-genes none|mean|max-observed` — how protein groups (assays)
+  that share a gene symbol become one value per sample: `none` (default)
+  keeps the lexically first assay id; `mean` averages the assays observed in
+  that sample; `max-observed` keeps the assay observed in the most samples.
+  The missingness filter runs on the collapsed gene. Counts of affected
+  genes go to stderr and the sidecar's `gene_symbol_collapse`. Applies to
+  paired-t, welch-t, ols, and mixed. (`align programs` is last-wins for a
+  duplicated label within a program: the final loadings row for that label
+  overwrites earlier ones.)
 - `--design` accepts covariate expressions: `~ condition + z(age) + sex +
   log10(QAlb) + log10(leukocyte_count + 1)`; `z()` standardizes over the
   fitted samples (the condition coefficient and p are invariant to it; the
@@ -210,7 +219,10 @@ frac_r2_gt_0_25`. `--output-canonical-dir DIR` writes a canonical directory
 whose `measurements.tsv` carries the residual as abundance (observed cells
 only, same unit label as the input) with `samples.tsv`/`proteins.tsv`
 copied, so `atman de` or `atman score weighted` run directly on the
-residual matrix.
+residual matrix. `--collapse-genes none|mean|max-observed` reduces assays
+that share a gene symbol as in `de`; `none` keeps every assay as its own
+row, the other rules emit one row per gene whose `assay_id` is the
+representative assay (also in the canonical output).
 
 ### atman concordance
 
@@ -237,6 +249,8 @@ PATH` (`signature, comparison, n_shared_proteins, n_case, n_control,
 cohen_d, d_ci_lo, d_ci_hi, welch_p, auc`; groups are matched on the
 condition label regardless of `is_control`). Proteins are z-scored within
 the scored cohort; `score = Σ w·z / Σ|w|` over the proteins the subject has.
+`--collapse-genes none|mean|max-observed` reduces assays sharing a gene
+symbol as in `de` (default `none` = lexically first assay).
 
 ### atman bench decompose --tools atman.<method>
 
@@ -589,7 +603,10 @@ resample (so `z()` is re-standardized), percentile interval at `--ci`; one
 SplitMix64 stream per contrast seeded by `derive_sub_seed(seed, contrast_index)`.
 Multi-level categorical covariates are one-hot encoded; `--omnibus-factor
 COL` (repeatable) adds `omnibus_f` rows to `--output-covariates` with the
-joint F-test of that factor's columns (`f, df_num, df_den, p`).
+joint F-test of that factor's columns (`f, df_num, df_den, p`). A bootstrap
+replicate whose resample leaves a categorical term with one level (or whose
+fit is singular) is skipped and counted in `boot_n_skipped`; `boot_n` is
+the number of replicates that contributed.
 
 #### atman axes groups
 
