@@ -6,6 +6,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use atman_core::de::{OlsOutcome, PairedTResult};
+use atman_core::expr::{evaluate_column, split_top_level, Expr};
 use atman_core::Sample;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -21,6 +22,12 @@ use super::{CovariateRow, DesignReportRow};
 pub(super) enum DesignTerm {
     Condition,
     Covariate(String),
+    /// A numeric covariate expression such as `log10(QAlb)` or `z(age)`;
+    /// `text` is the design label, `expr` the parsed form.
+    Expression {
+        text: String,
+        expr: Expr,
+    },
 }
 
 pub(super) struct OlsSetup {
@@ -39,8 +46,11 @@ pub(super) fn build_ols_setup(
 ) -> Result<OlsSetup> {
     if let Some(formula) = design {
         let terms = parse_design_terms(formula)?;
-        if !terms.iter().any(|t| matches!(t, DesignTerm::Condition)) {
-            anyhow::bail!("--design must include `condition` for DE contrasts");
+        let contrast_is_condition = contrast.map(|c| c.starts_with("condition")).unwrap_or(true);
+        if contrast_is_condition && !terms.iter().any(|t| matches!(t, DesignTerm::Condition)) {
+            anyhow::bail!(
+                "--design must include `condition` for DE contrasts (or name a covariate term with --contrast)"
+            );
         }
         let cov_names = covariate_names_from_terms(&terms);
         let cov_raw = if cov_names.is_empty() {
@@ -94,7 +104,7 @@ pub(super) fn parse_design_terms(formula: &str) -> Result<Vec<DesignTerm>> {
     }
     let mut terms = Vec::new();
     let mut seen = BTreeSet::new();
-    for raw in rhs.split('+') {
+    for raw in split_top_level(rhs, '+') {
         let term = raw.trim();
         if term.is_empty() {
             anyhow::bail!("empty term in --design");
@@ -110,8 +120,16 @@ pub(super) fn parse_design_terms(formula: &str) -> Result<Vec<DesignTerm>> {
         }
         if term == "condition" {
             terms.push(DesignTerm::Condition);
+            continue;
+        }
+        let expr = Expr::parse(term).map_err(|e| anyhow!("--design term {:?}: {}", term, e))?;
+        if let Some(name) = expr.bare_identifier() {
+            terms.push(DesignTerm::Covariate(name.to_string()));
         } else {
-            terms.push(DesignTerm::Covariate(term.to_string()));
+            terms.push(DesignTerm::Expression {
+                text: term.to_string(),
+                expr,
+            });
         }
     }
     if terms.is_empty() {
@@ -121,13 +139,20 @@ pub(super) fn parse_design_terms(formula: &str) -> Result<Vec<DesignTerm>> {
 }
 
 pub(super) fn covariate_names_from_terms(terms: &[DesignTerm]) -> Vec<String> {
-    terms
-        .iter()
-        .filter_map(|t| match t {
-            DesignTerm::Condition => None,
-            DesignTerm::Covariate(name) => Some(name.clone()),
-        })
-        .collect()
+    let mut out: Vec<String> = Vec::new();
+    for t in terms {
+        let names: Vec<String> = match t {
+            DesignTerm::Condition => Vec::new(),
+            DesignTerm::Covariate(name) => vec![name.clone()],
+            DesignTerm::Expression { expr, .. } => expr.variables(),
+        };
+        for n in names {
+            if !out.contains(&n) {
+                out.push(n);
+            }
+        }
+    }
+    out
 }
 
 pub(super) fn resolve_comparisons(
@@ -145,6 +170,14 @@ pub(super) fn resolve_comparisons(
     }
     let contrast =
         contrast.ok_or_else(|| anyhow!("--contrast is required when --groups is omitted"))?;
+    if !contrast.starts_with("condition") {
+        // Continuous contrast: the named covariate term is tested on every
+        // sample; the comparison is represented as (term, "").
+        if test != "ols" {
+            anyhow::bail!("--contrast on a covariate term requires --test ols");
+        }
+        return Ok(vec![(contrast.to_string(), String::new())]);
+    }
     let comp_a = contrast
         .strip_prefix("condition")
         .filter(|s| !s.is_empty())
@@ -334,8 +367,6 @@ pub(super) fn build_ols_design(
     setup: &OlsSetup,
 ) -> Result<OlsDesign> {
     let comparison = format!("{comp_a}-{comp_b}");
-    let condition_label = format!("condition{comp_a}");
-
     // Pick samples in either group.
     let in_group: Vec<&Sample> = samples
         .iter()
@@ -347,12 +378,68 @@ pub(super) fn build_ols_design(
                 }
         })
         .collect();
+    encode_design(&in_group, setup, &comparison, Some(comp_a))
+}
+
+/// Design for a continuous `--contrast <term>` without `--groups`: every
+/// non-control sample with a condition enters; the design must not contain
+/// `condition`; `group_col` points at the contrast term.
+pub(super) fn build_ols_design_continuous(
+    samples: &[Sample],
+    setup: &OlsSetup,
+) -> Result<OlsDesign> {
+    if setup
+        .terms
+        .iter()
+        .any(|t| matches!(t, DesignTerm::Condition))
+    {
+        anyhow::bail!(
+            "--design must not contain `condition` when --contrast names a covariate; drop `condition` or pass --groups"
+        );
+    }
+    let contrast = setup
+        .contrast
+        .as_deref()
+        .ok_or_else(|| anyhow!("--contrast is required for a continuous design"))?;
+    let in_group: Vec<&Sample> = samples
+        .iter()
+        .filter(|s| !s.is_control && s.condition.is_some())
+        .collect();
+    encode_design(&in_group, setup, contrast, None)
+}
+
+/// Shared complete-case encoding. `condition_value` is the level coded `1`
+/// by the `condition` term (`None` for a continuous design, in which case a
+/// `condition` term is an error).
+fn encode_design(
+    in_group: &[&Sample],
+    setup: &OlsSetup,
+    comparison: &str,
+    condition_value: Option<&str>,
+) -> Result<OlsDesign> {
+    let condition_label = condition_value.map(|c| format!("condition{c}"));
 
     // Pull covariate values aligned with `in_group`; drop samples missing
-    // any formula covariate before classifying/encoding.
+    // any formula covariate (or any variable of an expression term) before
+    // classifying/encoding.
     let mut kept: Vec<(&Sample, Vec<Option<String>>)> = Vec::new();
     let mut report_rows = Vec::new();
-    for s in &in_group {
+    let expr_ok = |vals: &[Option<String>]| -> bool {
+        setup.terms.iter().all(|t| match t {
+            DesignTerm::Expression { expr, .. } => expr
+                .inner()
+                .eval(&|name| {
+                    cov_index(&setup.cov_names, name)
+                        .ok()
+                        .and_then(|i| vals[i].as_deref())
+                        .and_then(|v| v.trim().parse::<f64>().ok())
+                        .filter(|v| v.is_finite())
+                })
+                .is_some(),
+            _ => true,
+        })
+    };
+    for s in in_group {
         let vals = if setup.cov_names.is_empty() {
             Vec::new()
         } else {
@@ -360,7 +447,7 @@ pub(super) fn build_ols_design(
                 Some(v) => v.clone(),
                 None => {
                     report_rows.push(DesignReportRow {
-                        comparison: comparison.clone(),
+                        comparison: comparison.to_string(),
                         sample_id: s.sample_id.clone(),
                         condition: s.condition.clone().unwrap_or_default(),
                         included: false,
@@ -372,9 +459,9 @@ pub(super) fn build_ols_design(
                 }
             }
         };
-        if vals.iter().any(|v| v.is_none()) {
+        if vals.iter().any(|v| v.is_none()) || !expr_ok(&vals) {
             report_rows.push(DesignReportRow {
-                comparison: comparison.clone(),
+                comparison: comparison.to_string(),
                 sample_id: s.sample_id.clone(),
                 condition: s.condition.clone().unwrap_or_default(),
                 included: false,
@@ -393,23 +480,52 @@ pub(super) fn build_ols_design(
         &kept.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>(),
     );
 
+    // Expression columns over the kept rows (`z()` standardizes here).
+    let mut expr_cols: HashMap<String, Vec<Option<f64>>> = HashMap::new();
+    for term in &setup.terms {
+        if let DesignTerm::Expression { text, expr } = term {
+            let col = evaluate_column(expr, kept.len(), &|k, name| {
+                cov_index(&setup.cov_names, name)
+                    .ok()
+                    .and_then(|i| kept[k].1[i].as_deref())
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .filter(|v| v.is_finite())
+            });
+            if col.iter().any(|v| v.is_none()) {
+                anyhow::bail!(
+                    "--design term {:?} is constant or undefined over the fitted samples of {}",
+                    text,
+                    comparison
+                );
+            }
+            expr_cols.insert(text.clone(), col);
+        }
+    }
+
     let mut design_labels = vec!["(Intercept)".to_string()];
     for term in &setup.terms {
         match term {
-            DesignTerm::Condition => design_labels.push(condition_label.clone()),
+            DesignTerm::Condition => match &condition_label {
+                Some(label) => design_labels.push(label.clone()),
+                None => anyhow::bail!(
+                    "--design contains `condition` but no comparison groups are defined"
+                ),
+            },
             DesignTerm::Covariate(name) => {
                 let idx = cov_index(&setup.cov_names, name)?;
                 design_labels.extend(cov_kinds[idx].col_labels(name));
             }
+            DesignTerm::Expression { text, .. } => design_labels.push(text.clone()),
         }
     }
-    let contrast = setup
-        .contrast
-        .as_deref()
-        .unwrap_or(condition_label.as_str());
+    let contrast = match (setup.contrast.as_deref(), condition_label.as_deref()) {
+        (Some(c), _) => c.to_string(),
+        (None, Some(label)) => label.to_string(),
+        (None, None) => anyhow::bail!("--contrast is required without comparison groups"),
+    };
     let group_col = design_labels
         .iter()
-        .position(|label| label == contrast)
+        .position(|label| label == &contrast)
         .ok_or_else(|| {
             anyhow!(
                 "contrast {:?} not found in design columns: {}",
@@ -417,15 +533,16 @@ pub(super) fn build_ols_design(
                 design_labels.join(",")
             )
         })?;
+    let group_is_indicator = condition_label.as_deref() == Some(contrast.as_str());
 
     let mut rows: Vec<(String, Vec<f64>)> = Vec::with_capacity(kept.len());
-    for (s, vals) in kept {
+    for (k, (s, vals)) in kept.iter().enumerate() {
         let mut row: Vec<f64> = Vec::with_capacity(design_labels.len());
         row.push(1.0);
         for term in &setup.terms {
             match term {
                 DesignTerm::Condition => {
-                    row.push(if s.condition.as_deref() == Some(comp_a) {
+                    row.push(if s.condition.as_deref() == condition_value {
                         1.0
                     } else {
                         0.0
@@ -435,10 +552,13 @@ pub(super) fn build_ols_design(
                     let idx = cov_index(&setup.cov_names, name)?;
                     push_encoded_covariate(&mut row, name, &cov_kinds[idx], &vals[idx])?;
                 }
+                DesignTerm::Expression { text, .. } => {
+                    row.push(expr_cols[text][k].expect("expression evaluated over kept rows"));
+                }
             }
         }
         report_rows.push(DesignReportRow {
-            comparison: comparison.clone(),
+            comparison: comparison.to_string(),
             sample_id: s.sample_id.clone(),
             condition: s.condition.clone().unwrap_or_default(),
             included: true,
@@ -452,14 +572,14 @@ pub(super) fn build_ols_design(
         });
         rows.push((s.sample_id.clone(), row));
     }
-    ensure_full_rank(&rows, &design_labels, &comparison)?;
+    ensure_full_rank(&rows, &design_labels, comparison)?;
 
     Ok(OlsDesign {
         rows,
         group_col,
         design_labels,
         report_rows,
-        group_is_indicator: true,
+        group_is_indicator,
     })
 }
 

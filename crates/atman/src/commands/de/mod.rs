@@ -29,9 +29,9 @@ use limma::run_limma;
 use moderated::apply_moderated_shrinkage;
 use msqrob::run_msqrob;
 use ols_design::{
-    augment_ols_design_with_external, build_ols_design, build_ols_setup, ols_to_paired_t_result,
-    paired_t_covariate_adjusted, raw_group_means, resolve_comparisons,
-    validate_random_intercept_design, OlsDesign,
+    augment_ols_design_with_external, build_ols_design, build_ols_design_continuous,
+    build_ols_setup, ols_to_paired_t_result, paired_t_covariate_adjusted, raw_group_means,
+    resolve_comparisons, validate_random_intercept_design, OlsDesign,
 };
 use output_rows::{
     apply_subset, override_condition, override_subject_id, write_covariate_rows,
@@ -444,6 +444,10 @@ pub fn run(args: Args) -> Result<()> {
     if args.test == "mixed" {
         validate_random_intercept_design(&samples, &comparisons, args.min_pairs)?;
     }
+    let has_continuous = comparisons.iter().any(|(_, b)| b.is_empty());
+    if has_continuous && !args.adjust_for.is_empty() {
+        anyhow::bail!("--adjust-for is not supported with a continuous --contrast");
+    }
 
     // Lookup: sample_id → (subject, condition, is_control)
     let sample_by_id: HashMap<&str, &atman_core::Sample> =
@@ -664,12 +668,20 @@ pub fn run(args: Args) -> Result<()> {
     let mut missingness_by_comparison = JsonMap::new();
     if args.test != "limma" && args.test != "msqrob" {
         for (comp_a, comp_b) in &comparisons {
-            let comparison_label = format!("{}-{}", comp_a, comp_b);
+            let continuous = comp_b.is_empty();
+            let comparison_label = if continuous {
+                comp_a.clone()
+            } else {
+                format!("{}-{}", comp_a, comp_b)
+            };
             let n_comparison_samples = samples
                 .iter()
                 .filter(|s| {
                     !s.is_control
-                        && matches!(s.condition.as_deref(), Some(c) if c == comp_a || c == comp_b)
+                        && match s.condition.as_deref() {
+                            Some(c) => continuous || c == comp_a || c == comp_b,
+                            None => false,
+                        }
                 })
                 .count();
             let mut n_missingness_dropped = 0usize;
@@ -686,7 +698,11 @@ pub fn run(args: Args) -> Result<()> {
                 let setup = model_setup
                     .as_ref()
                     .expect("model_setup populated when is_ols_routed");
-                let mut design = build_ols_design(&samples, comp_a, comp_b, setup)?;
+                let mut design = if continuous {
+                    build_ols_design_continuous(&samples, setup)?
+                } else {
+                    build_ols_design(&samples, comp_a, comp_b, setup)?
+                };
                 // Augment with --adjust-for external covariate columns.
                 if let Some(ext) = external_covariates.as_ref() {
                     augment_ols_design_with_external(&mut design, ext, comp_a, comp_b)?;
@@ -699,8 +715,12 @@ pub fn run(args: Args) -> Result<()> {
 
             for ((panel, gene), by_condition) in &cells {
                 if args.max_missing_fraction < 1.0 {
-                    let present = by_condition.get(comp_a).map(Vec::len).unwrap_or(0)
-                        + by_condition.get(comp_b).map(Vec::len).unwrap_or(0);
+                    let present = if continuous {
+                        by_condition.values().map(Vec::len).sum()
+                    } else {
+                        by_condition.get(comp_a).map(Vec::len).unwrap_or(0)
+                            + by_condition.get(comp_b).map(Vec::len).unwrap_or(0)
+                    };
                     let missing = 1.0 - present as f64 / n_comparison_samples.max(1) as f64;
                     if missing > args.max_missing_fraction + 1e-12 {
                         n_missingness_dropped += 1;
@@ -848,8 +868,12 @@ pub fn run(args: Args) -> Result<()> {
                         }
                     }
                     // Compute raw group means for schema compatibility with
-                    // paired-t / welch-t.
-                    let (mean_a_raw, mean_b_raw) = raw_group_means(&y, &rows, design.group_col);
+                    // paired-t / welch-t (undefined for a continuous contrast).
+                    let (mean_a_raw, mean_b_raw) = if design.group_is_indicator {
+                        raw_group_means(&y, &rows, design.group_col)
+                    } else {
+                        (None, None)
+                    };
                     (
                         ols_to_paired_t_result(
                             fit,
@@ -920,8 +944,8 @@ pub fn run(args: Args) -> Result<()> {
                         uniprot: uniprot.join(","),
                         comparison: comparison_label.clone(),
                         n_pairs: *n_pairs,
-                        mean_a: Some(*mean_a),
-                        mean_b: Some(*mean_b),
+                        mean_a: Some(*mean_a).filter(|v| v.is_finite()),
+                        mean_b: Some(*mean_b).filter(|v| v.is_finite()),
                         mean_diff: Some(*mean_diff),
                         t: Some(*t),
                         df: Some(*df),

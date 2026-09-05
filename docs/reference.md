@@ -186,6 +186,16 @@ both routings against R references)
   subjects (`effect_size_method = cohen_d`) with its large-sample CI in
   `ci_low`/`ci_high`, and `de_results.tsv` carries `n_a`/`n_b` (observed
   subjects per group; also filled for `welch-t`).
+- `--design` accepts covariate expressions: `~ condition + z(age) + sex +
+  log10(QAlb) + log10(leukocyte_count + 1)`; `z()` standardizes over the
+  fitted samples (the condition coefficient and p are invariant to it; the
+  covariate row in `de_covariates.tsv` is then per SD).
+- Continuous contrasts: `--design '~ log10(QAlb) + z(age) + sex' --contrast
+  'log10(QAlb)'` without `--groups` fits every sample (complete case per
+  protein) and reports the named coefficient: `comparison` = the term,
+  `mean_diff` = beta, `t`, `p_value`, `bh_q` over the proteins; `mean_a`,
+  `mean_b`, `effect_size` are empty. The `--contrast` text must match the
+  `--design` term exactly.
 
 ### atman bench decompose --tools atman.<method>
 

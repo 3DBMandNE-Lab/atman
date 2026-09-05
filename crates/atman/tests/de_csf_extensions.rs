@@ -184,3 +184,107 @@ fn de_condition_col_subset_and_collapse_others() {
     assert!(sidecar.contains("\"condition-col\": \"grp\""));
     assert!(sidecar.contains("site!=Y"));
 }
+
+#[test]
+fn de_continuous_contrast_with_expression_term() {
+    let tmp = tempfile::tempdir().unwrap();
+    let r = run_atman(&[
+        "de",
+        "--input-dir",
+        fixture().to_str().unwrap(),
+        "--output-dir",
+        tmp.path().to_str().unwrap(),
+        "--test",
+        "ols",
+        "--design",
+        "~ log10(age) + sex",
+        "--contrast",
+        "log10(age)",
+        "--include-controls",
+        "--min-pairs",
+        "5",
+    ]);
+    assert!(
+        r.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let rows = read_rows(&tmp.path().join("de_results.tsv"));
+    let reference = read_rows(&fixture().join("reference_continuous.tsv"));
+    assert_eq!(rows.len(), 3);
+    for rr in &reference {
+        let g = rows
+            .iter()
+            .find(|x| x["gene_symbol"] == rr["gene_symbol"])
+            .unwrap();
+        assert_eq!(g["comparison"], "log10(age)");
+        assert!(g["mean_a"].is_empty() && g["mean_b"].is_empty());
+        assert!(g["effect_size"].is_empty());
+        assert!((num(g, "mean_diff") - num(rr, "beta")).abs() < 1e-8);
+        assert!((num(g, "t") - num(rr, "t")).abs() < 1e-8);
+        assert!((num(g, "p_value") - num(rr, "p_value")).abs() < 1e-8);
+        assert_eq!(g["n_pairs"], rr["n_obs"]);
+    }
+    let covs = read_rows(&tmp.path().join("de_covariates.tsv"));
+    assert!(covs.iter().any(|c| c["covariate"] == "sexM"));
+}
+
+#[test]
+fn de_z_age_leaves_condition_effect_unchanged() {
+    let run = |design: &str, dir: &std::path::Path| {
+        let r = run_atman(&[
+            "de",
+            "--input-dir",
+            fixture().to_str().unwrap(),
+            "--output-dir",
+            dir.to_str().unwrap(),
+            "--test",
+            "ols",
+            "--design",
+            design,
+            "--groups",
+            "Case-Ctrl",
+            "--include-controls",
+            "--min-pairs",
+            "5",
+        ]);
+        assert!(
+            r.status.success(),
+            "stderr:\n{}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+        read_rows(&dir.join("de_results.tsv"))
+    };
+    let t1 = tempfile::tempdir().unwrap();
+    let t2 = tempfile::tempdir().unwrap();
+    let raw = run("~ condition + age + sex", t1.path());
+    let z = run("~ condition + z(age) + sex", t2.path());
+    for (a, b) in raw.iter().zip(z.iter()) {
+        assert_eq!(a["gene_symbol"], b["gene_symbol"]);
+        assert!((num(a, "mean_diff") - num(b, "mean_diff")).abs() < 1e-9);
+        assert!((num(a, "p_value") - num(b, "p_value")).abs() < 1e-9);
+    }
+    let covs = read_rows(&t2.path().join("de_covariates.tsv"));
+    assert!(covs.iter().any(|c| c["covariate"] == "z(age)"));
+}
+
+#[test]
+fn de_continuous_contrast_rejects_groups_and_condition_term() {
+    let tmp = tempfile::tempdir().unwrap();
+    let r = run_atman(&[
+        "de",
+        "--input-dir",
+        fixture().to_str().unwrap(),
+        "--output-dir",
+        tmp.path().to_str().unwrap(),
+        "--test",
+        "ols",
+        "--design",
+        "~ condition + log10(age)",
+        "--contrast",
+        "log10(age)",
+        "--include-controls",
+    ]);
+    assert!(!r.status.success());
+    assert!(String::from_utf8_lossy(&r.stderr).contains("--groups"));
+}

@@ -288,7 +288,7 @@ pub(super) fn apply_per_subject_proxy(args: &mut Args) -> Result<()> {
         let terms = parse_design_terms(design)?;
         if !terms.iter().any(|term| match term {
             DesignTerm::Covariate(name) => name == &proxy,
-            DesignTerm::Condition => false,
+            DesignTerm::Condition | DesignTerm::Expression { .. } => false,
         }) {
             design.push_str(" + ");
             design.push_str(&proxy);
