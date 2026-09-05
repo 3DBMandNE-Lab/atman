@@ -466,6 +466,60 @@ fn align_bootstrap_nmf_exp2_clip_transform_handles_signed_input() {
     assert_eq!(sidecar["args"]["transform-clamp"], 6.0);
 }
 
+/// Sidecar provenance records the RESOLVED effective parameter set, not
+/// the raw flag. `--transform exp2-clip` without an explicit
+/// `--transform-clamp` still decomposes with clamp `6.0`
+/// (`DEFAULT_EXP2_CLIP_CLAMP`) — the sidecar must show `6.0`, not
+/// `null`, so a reader can reproduce the run from the sidecar alone.
+#[test]
+fn align_bootstrap_nmf_exp2_clip_default_clamp_is_resolved_in_sidecar() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("cohort_a");
+    let b = tmp.path().join("cohort_b");
+    write_signed_cohort(&a, "A", 1);
+    write_signed_cohort(&b, "B", 2);
+    let out = tmp.path().join("summary.tsv");
+    let status = run_atman(&[
+        "align",
+        "bootstrap",
+        "--cohorts",
+        &format!("{},{}", a.display(), b.display()),
+        "--labels",
+        "A,B",
+        "--decomposition",
+        "nmf",
+        "--transform",
+        "exp2-clip",
+        "--k",
+        "2",
+        "--n-boot",
+        "4",
+        "--seed",
+        "7",
+        "--cosine-tau",
+        "0.1",
+        "--match-tau",
+        "0.1",
+        "--min-subjects",
+        "8",
+        "--output",
+        out.to_str().unwrap(),
+    ]);
+    assert!(
+        status.status.success(),
+        "align bootstrap with exp2-clip (default clamp) failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&status.stdout),
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let sidecar = read_sidecar(&out);
+    assert_eq!(sidecar["args"]["transform"], "exp2-clip");
+    assert_eq!(
+        sidecar["args"]["transform-clamp"], 6.0,
+        "sidecar must record the resolved default clamp (6.0), not null, \
+         when --transform-clamp is omitted"
+    );
+}
+
 /// `--transform-clamp` is refused unless `--transform exp2-clip`,
 /// mirroring `decompose nmf`.
 #[test]

@@ -402,6 +402,13 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         "spearman" => AlignMetric::Spearman,
         other => bail!("--metric {other:?}; expected cosine, jaccard, or spearman"),
     };
+    // Resolved effective `--transform-clamp`, for the sidecar's provenance
+    // record (the RESOLVED parameter set — `Some(DEFAULT_EXP2_CLIP_CLAMP)`
+    // when `--transform exp2-clip` is used without an explicit clamp, not
+    // the raw possibly-`None` flag value). Stays `None` for `--transform
+    // none`/`shift-min` (no clamp is in effect) and for `--decomposition
+    // ica` (transform is not applied at all).
+    let mut resolved_transform_clamp: Option<f64> = None;
     let decomposition = match args.decomposition.as_str() {
         "ica" => Decomposition::Ica {
             max_iter: args.max_iter,
@@ -437,9 +444,11 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
             }
             let transform = match args.transform.as_str() {
                 "none" => NmfTransform::None,
-                "exp2-clip" => NmfTransform::Exp2Clip {
-                    clamp: args.transform_clamp.unwrap_or(DEFAULT_EXP2_CLIP_CLAMP),
-                },
+                "exp2-clip" => {
+                    let clamp = args.transform_clamp.unwrap_or(DEFAULT_EXP2_CLIP_CLAMP);
+                    resolved_transform_clamp = Some(clamp);
+                    NmfTransform::Exp2Clip { clamp }
+                }
                 "shift-min" => NmfTransform::ShiftMin,
                 other => bail!(
                     "--transform {:?}: expected `none`, `exp2-clip`, or `shift-min`",
@@ -521,7 +530,11 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
             "nmf-max-iter": args.nmf_max_iter,
             "nmf-tol": args.nmf_tol,
             "transform": args.transform,
-            "transform-clamp": args.transform_clamp,
+            // Resolved effective clamp (6.0 default when --transform
+            // exp2-clip is used without an explicit --transform-clamp),
+            // not the raw flag — the sidecar records the resolved
+            // parameter set. null for none/shift-min/ica.
+            "transform-clamp": resolved_transform_clamp,
             "output": args.output.display().to_string(),
             // bootstrap always runs its chosen decomposition (ica|nmf)
             // internally per resample — no external loadings TSV to sniff.

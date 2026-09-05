@@ -161,6 +161,27 @@ fn fit_and_canonicalize(
     canonicalize_ica(&result)
 }
 
+/// Reject a decomposition's loadings if any entry is NaN or ±∞, rather
+/// than letting it flow silently into cosine similarity, archetype
+/// grouping, and the bootstrap/BCa accumulators downstream. Degenerate
+/// resamples (duplicate rows, zero-variance columns) can in principle
+/// drive an iterative decomposition to diverge; this is the shared
+/// loud-failure gate for that, applied identically to both
+/// [`Decomposition`] variants. `context` names the cohort and call site
+/// (point estimate / bootstrap iteration / jackknife replicate) so the
+/// error is debuggable.
+fn check_finite_loadings(loadings: Vec<Vec<f64>>, context: &str) -> Result<Vec<Vec<f64>>, String> {
+    if loadings.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(format!(
+            "align bootstrap: decomposition produced non-finite loadings for {context}; \
+             this usually means a degenerate resample (duplicate rows / zero-variance \
+             column) drove the fit to diverge. Consider a smaller --k, a different --seed, \
+             or (for --decomposition nmf) --transform exp2-clip to bound the input scale."
+        ));
+    }
+    Ok(loadings)
+}
+
 /// Fit the configured [`Decomposition`] on `data` (n × p, rows =
 /// samples, columns = the shared protein universe) and return its
 /// `k × p` feature loadings.
@@ -170,17 +191,21 @@ fn fit_and_canonicalize(
 /// same per-call behavior at all three sites. For [`Decomposition::Nmf`],
 /// `transform` is applied to a fresh copy of `data` right before
 /// decomposition (see [`Decomposition::Nmf`] for why it is never
-/// cached across resamples).
+/// cached across resamples). Both branches route their result through
+/// [`check_finite_loadings`] before returning. `context` names the
+/// cohort and call site, used only in the (rare) error messages.
 fn fit_loadings(
     data: &[Vec<f64>],
     k: usize,
     seed: u64,
     decomposition: &Decomposition,
+    context: &str,
 ) -> Result<Vec<Vec<f64>>, String> {
     match decomposition {
-        Decomposition::Ica { max_iter, tol } => {
-            Ok(fit_and_canonicalize(data, k, seed, *max_iter, *tol).loadings)
-        }
+        Decomposition::Ica { max_iter, tol } => check_finite_loadings(
+            fit_and_canonicalize(data, k, seed, *max_iter, *tol).loadings,
+            context,
+        ),
         Decomposition::Nmf {
             beta_loss,
             init,
@@ -196,8 +221,8 @@ fn fit_loadings(
                         if v < 0.0 {
                             return Err(format!(
                                 "align bootstrap: NMF (--transform none) requires \
-                                 non-negative input, but found value {v}. Apply a \
-                                 non-negativity-preserving transform (--transform \
+                                 non-negative input, but found value {v} for {context}. \
+                                 Apply a non-negativity-preserving transform (--transform \
                                  exp2-clip or --transform shift-min) before running \
                                  align bootstrap --decomposition nmf."
                             ));
@@ -213,7 +238,7 @@ fn fit_loadings(
                 tol: *tol,
                 seed,
             };
-            Ok(nmf(&transformed, &cfg).h)
+            check_finite_loadings(nmf(&transformed, &cfg).h, context)
         }
     }
 }
@@ -399,12 +424,19 @@ fn point_estimate_match_counts(
     params: &BootstrapParams,
     universe: &[String],
     pe_archetypes: &[(usize, Vec<String>, Vec<f64>)],
+    context: &str,
 ) -> Result<Vec<f64>, String> {
     let loadings: Vec<(String, Vec<Vec<f64>>)> = cohorts
         .iter()
         .map(|c| {
-            fit_loadings(&c.data, params.k, params.seed, &params.decomposition)
-                .map(|l| (c.label.clone(), l))
+            fit_loadings(
+                &c.data,
+                params.k,
+                params.seed,
+                &params.decomposition,
+                &format!("cohort {:?} ({context})", c.label),
+            )
+            .map(|l| (c.label.clone(), l))
         })
         .collect::<Result<Vec<_>, String>>()?;
     let (progs, labels) = align_program_loadings(
@@ -474,7 +506,16 @@ fn jackknife_n_cohorts(
                     }
                 })
                 .collect();
-            let counts = point_estimate_match_counts(&reduced, params, universe, pe_archetypes)?;
+            let counts = point_estimate_match_counts(
+                &reduced,
+                params,
+                universe,
+                pe_archetypes,
+                &format!(
+                    "jackknife drop cohort {:?} subject #{drop_idx}",
+                    cohort.label
+                ),
+            )?;
             for (ai, n) in counts.iter().enumerate() {
                 jack[ai].push(*n);
             }
@@ -530,8 +571,14 @@ pub fn align_bootstrap(
     let pe_loadings: Vec<(String, Vec<Vec<f64>>)> = cohorts
         .iter()
         .map(|c| {
-            fit_loadings(&c.data, params.k, params.seed, &params.decomposition)
-                .map(|l| (c.label.clone(), l))
+            fit_loadings(
+                &c.data,
+                params.k,
+                params.seed,
+                &params.decomposition,
+                &format!("cohort {:?} (point estimate)", c.label),
+            )
+            .map(|l| (c.label.clone(), l))
         })
         .collect::<Result<Vec<_>, String>>()?;
     let (pe_programs, pe_labels) = align_program_loadings(
@@ -565,8 +612,14 @@ pub fn align_bootstrap(
             .map(|(ci, c)| {
                 let resampled = resample_rows(&c.data, &mut rng);
                 let cohort_seed = sub_seed.wrapping_add(0x1_0000_0000 + ci as u64);
-                fit_loadings(&resampled, params.k, cohort_seed, &params.decomposition)
-                    .map(|l| (c.label.clone(), l))
+                fit_loadings(
+                    &resampled,
+                    params.k,
+                    cohort_seed,
+                    &params.decomposition,
+                    &format!("cohort {:?} (bootstrap iter {iter})", c.label),
+                )
+                .map(|l| (c.label.clone(), l))
             })
             .collect::<Result<Vec<_>, String>>()?;
         let (bs_programs, bs_labels) = align_program_loadings(
@@ -931,5 +984,34 @@ mod tests {
         for (p, q) in x.iter().zip(y.iter()) {
             assert_eq!(p, q);
         }
+    }
+
+    #[test]
+    fn check_finite_loadings_rejects_nan() {
+        let bad = vec![vec![1.0, f64::NAN], vec![2.0, 3.0]];
+        let err = check_finite_loadings(bad, "cohort \"A\" (test)").unwrap_err();
+        assert!(err.contains("non-finite"), "unexpected: {err}");
+        assert!(err.contains("cohort \"A\" (test)"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn check_finite_loadings_rejects_infinite() {
+        let bad = vec![vec![f64::INFINITY, 0.0]];
+        let err = check_finite_loadings(bad, "cohort \"B\" (test)").unwrap_err();
+        assert!(err.contains("non-finite"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn check_finite_loadings_rejects_negative_infinity() {
+        let bad = vec![vec![0.0, f64::NEG_INFINITY]];
+        let err = check_finite_loadings(bad, "cohort \"C\" (test)").unwrap_err();
+        assert!(err.contains("non-finite"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn check_finite_loadings_accepts_finite_matrix() {
+        let good = vec![vec![1.0, 2.0], vec![-3.5, 0.0]];
+        let out = check_finite_loadings(good.clone(), "cohort \"D\" (test)").unwrap();
+        assert_eq!(out, good);
     }
 }
