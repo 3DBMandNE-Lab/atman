@@ -560,27 +560,35 @@ the plan content changes (unless `--allow-drift` is passed).
 # plan.yaml
 name: dube_heat_2023
 plan_commit: "2026-04-20.v1"
+vars:
+  out: out
 stages:
   - id: ingest
     inputs: [example_data/dube_heat_2023/*.csv]
-    outputs: [out/samples.tsv, out/proteins.tsv, out/measurements.tsv]
+    outputs: ["${out}/samples.tsv", "${out}/proteins.tsv", "${out}/measurements.tsv"]
     command: >
       python3 adapters/generic/olink_explore_to_atman.py
-      --output-dir out example_data/dube_heat_2023/*.csv
+      --output-dir ${out} example_data/dube_heat_2023/*.csv
   - id: de
-    inputs: [out/measurements.tsv, out/samples.tsv]
-    outputs: [out/de_results.tsv, out/de_report.tsv]
+    inputs: ["${out}/measurements.tsv", "${out}/samples.tsv"]
+    outputs: ["${out}/de_results.tsv", "${out}/de_report.tsv"]
     command: >
-      atman de --input-dir out --output-dir out
+      atman de --input-dir ${out} --output-dir ${out}
       --test paired-t
       --groups "PT1-PR1,PR2-PR1" --min-pairs 5
 ```
 
 ```bash
+atman run --plan plan.yaml --output-dir out --dry-run   # validate: paths, ${vars}, input provenance
 atman run --plan plan.yaml --output-dir out
 ```
 
-The manifest is written to `<output-dir>/plan_manifest.tsv`.
+The manifest is written to `<output-dir>/plan_manifest.tsv`. Each stage's
+declared outputs are hashed, and so is every `<output>.run.json` sidecar
+found next to them (`sidecar_hash` column), so the manifest chains to the
+per-command provenance. A stage whose declared output is missing afterwards
+is recorded with `exit_code 2` and aborts the run (`--strict-outputs false`
+to relax).
 
 ## Decomposition: discovering protein programs
 

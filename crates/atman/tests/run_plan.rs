@@ -54,7 +54,7 @@ stages:
     let manifest_path = output_dir.join("plan_manifest.tsv");
     let manifest = std::fs::read_to_string(&manifest_path).unwrap();
     assert!(manifest.starts_with(
-        "plan_name\tplan_commit\tplan_hash\tstage_id\tcommand\tinput_hash\toutput_hash\truntime_s\texit_code\tatman_version\tsystem\tstarted_at_unix_s\n"
+        "plan_name\tplan_commit\tplan_hash\tstage_id\tcommand\tinput_hash\toutput_hash\truntime_s\texit_code\tatman_version\tsystem\tstarted_at_unix_s\tsidecar_hash\n"
     ));
     let rows: Vec<Vec<&str>> = manifest
         .lines()
@@ -194,4 +194,172 @@ stages:
     let cols: Vec<&str> = row.split('\t').collect();
     assert_eq!(cols[3], "boom");
     assert_eq!(cols[8], "3");
+}
+
+#[test]
+fn run_plan_dry_run_validates_inputs_without_executing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input_dir = tmp.path().join("work");
+    std::fs::create_dir(&input_dir).unwrap();
+    std::fs::write(input_dir.join("seed.txt"), "hello\n").unwrap();
+    let plan = tmp.path().join("plan.yaml");
+    std::fs::write(
+        &plan,
+        r#"
+name: dry
+vars:
+  out: results
+stages:
+  - id: a
+    command: mkdir -p ${out} && cp seed.txt ${out}/staged.txt
+    inputs: [seed.txt]
+    outputs: ["${out}/staged.txt"]
+  - id: b
+    command: cp ${out}/staged.txt ${out}/final.txt
+    inputs: ["${out}/staged.txt"]
+    outputs: ["${out}/final.txt"]
+"#,
+    )
+    .unwrap();
+    let output_dir = tmp.path().join("manifest");
+    let r = run_atman(&[
+        "run",
+        "--plan",
+        plan.to_str().unwrap(),
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--output-dir",
+        output_dir.to_str().unwrap(),
+        "--dry-run",
+    ]);
+    let stderr = String::from_utf8_lossy(&r.stderr);
+    assert!(r.status.success(), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("results/staged.txt  (produced by an earlier stage)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("dry run ok"));
+    assert!(
+        !input_dir.join("results").exists(),
+        "dry run must not execute"
+    );
+    assert!(!output_dir.join("plan_manifest.tsv").exists());
+
+    // A missing input that no earlier stage produces is rejected.
+    std::fs::write(
+        &plan,
+        r#"
+name: dry
+stages:
+  - id: a
+    command: cat nope.txt
+    inputs: [nope.txt]
+"#,
+    )
+    .unwrap();
+    let r = run_atman(&[
+        "run",
+        "--plan",
+        plan.to_str().unwrap(),
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--output-dir",
+        output_dir.to_str().unwrap(),
+        "--dry-run",
+    ]);
+    assert!(!r.status.success());
+    assert!(String::from_utf8_lossy(&r.stderr).contains("nope.txt"));
+
+    // An undefined variable is rejected at parse time.
+    std::fs::write(
+        &plan,
+        "name: dry\nstages:\n  - id: a\n    command: echo ${missing}\n",
+    )
+    .unwrap();
+    let r = run_atman(&[
+        "run",
+        "--plan",
+        plan.to_str().unwrap(),
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--output-dir",
+        output_dir.to_str().unwrap(),
+        "--dry-run",
+    ]);
+    assert!(!r.status.success());
+    assert!(String::from_utf8_lossy(&r.stderr).contains("undefined variable"));
+}
+
+#[test]
+fn run_plan_hashes_sidecars_and_enforces_strict_outputs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input_dir = tmp.path().join("work");
+    std::fs::create_dir(&input_dir).unwrap();
+    let plan = tmp.path().join("plan.yaml");
+    std::fs::write(
+        &plan,
+        r#"
+name: sidecars
+stages:
+  - id: with_sidecar
+    command: printf 'x\n' > out.tsv && printf '{}\n' > out.tsv.run.json
+    outputs: [out.tsv]
+  - id: forgets_output
+    command: "true"
+    outputs: [never.tsv]
+"#,
+    )
+    .unwrap();
+    let output_dir = tmp.path().join("manifest");
+    let r = run_atman(&[
+        "run",
+        "--plan",
+        plan.to_str().unwrap(),
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--output-dir",
+        output_dir.to_str().unwrap(),
+    ]);
+    assert!(
+        !r.status.success(),
+        "strict outputs must fail the second stage"
+    );
+    assert!(String::from_utf8_lossy(&r.stderr).contains("never.tsv"));
+    let manifest = std::fs::read_to_string(output_dir.join("plan_manifest.tsv")).unwrap();
+    let rows: Vec<Vec<&str>> = manifest
+        .lines()
+        .skip(1)
+        .map(|l| l.split('\t').collect())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0][3], "with_sidecar");
+    assert_eq!(rows[0][8], "0");
+    assert_eq!(
+        rows[0][12].len(),
+        64,
+        "sidecar_hash populated: {:?}",
+        rows[0][12]
+    );
+    assert_eq!(rows[1][3], "forgets_output");
+    assert_eq!(rows[1][8], "2");
+    assert!(rows[1][12].is_empty());
+
+    // --strict-outputs false restores the permissive behaviour.
+    let output_dir2 = tmp.path().join("manifest2");
+    let r = run_atman(&[
+        "run",
+        "--plan",
+        plan.to_str().unwrap(),
+        "--input-dir",
+        input_dir.to_str().unwrap(),
+        "--output-dir",
+        output_dir2.to_str().unwrap(),
+        "--strict-outputs",
+        "false",
+    ]);
+    assert!(
+        r.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&r.stderr)
+    );
 }
