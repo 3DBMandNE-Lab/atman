@@ -11,3 +11,4 @@ mdpdf.log
 
 # Internal planning docs / probe findings — never committed
 docs/superpowers/
+.worktrees/
