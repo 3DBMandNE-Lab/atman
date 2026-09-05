@@ -10,6 +10,7 @@ pub mod align_bootstrap;
 pub mod align_project;
 pub mod bench_decompose;
 pub mod compositional;
+pub mod contrast;
 pub mod de;
 pub mod decompose_unmix;
 pub mod deqms;
@@ -39,6 +40,10 @@ pub use align_bootstrap::{
     align_bootstrap, resample_rows, BootstrapParams, BootstrapRow, CohortMatrix, Decomposition,
 };
 pub use compositional::{apply_transform, Transform};
+pub use contrast::{
+    auc_mann_whitney, cohen_d_ci, cohen_d_pooled, kruskal_wallis, percentile, spearman_with_p,
+    t_ci_mean, zscore, KruskalWallis,
+};
 pub use de::{bh_fdr, paired_t, PairedTResult, SkipReason};
 pub use deqms::{deqms_shrink, tricube_moving_average, DeqmsShrinkage};
 pub use ensemble::{
