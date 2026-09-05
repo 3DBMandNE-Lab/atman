@@ -8,6 +8,7 @@ pub mod table;
 
 mod build;
 mod contrast;
+mod groups;
 
 use anyhow::{bail, Result};
 use atman_core::SplitMix64;
@@ -33,12 +34,15 @@ enum Command {
     /// Disease modulation of subject scores: Cohen d, Welch, AUC, adjusted
     /// OLS with nested designs, BH within family, subject bootstrap.
     Contrast(contrast::ContrastArgs),
+    /// Per-group score summaries, Kruskal–Wallis, reference-vs-group effects.
+    Groups(groups::GroupsArgs),
 }
 
 pub fn run(args: Args) -> Result<()> {
     match args.command {
         Command::Build(a) => build::run(a),
         Command::Contrast(a) => contrast::run(a),
+        Command::Groups(a) => groups::run(a),
     }
 }
 

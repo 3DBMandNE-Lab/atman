@@ -517,3 +517,13 @@ SplitMix64 stream per contrast seeded by `derive_sub_seed(seed, contrast_index)`
 Multi-level categorical covariates are one-hot encoded; `--omnibus-factor
 COL` (repeatable) adds `omnibus_f` rows to `--output-covariates` with the
 joint F-test of that factor's columns (`f, df_num, df_den, p`).
+
+#### atman axes groups
+
+`--cohort`, `--group-by COL`, `--groups a,b,...` (order; default sorted
+observed values), `--score-cols`, `--median-cols "age,QIgG/QAlb"`,
+`--reference GROUP`, `--ci`, `--output` (`group, n, <expr>_median…,
+<score>_mean, <score>_ci_lo, <score>_ci_hi`; t-based CI, n ≥ 3),
+`--output-tests` (`kind, score, reference, group, n_ref, n_group, statistic,
+p`: `kruskal` rows carry H and its chi-square p; `reference_vs_group` rows
+carry pooled-SD Cohen d of reference minus group and the Welch p).
