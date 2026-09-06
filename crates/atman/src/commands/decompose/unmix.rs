@@ -44,10 +44,17 @@ pub struct UnmixArgs {
     #[arg(long, default_value_t = 0.10)]
     k_elbow_threshold: f64,
 
-    /// Endmember extraction method. `vca` (default): deterministic
-    /// projection-onto-complement. `nfindr`: iterative simplex-volume
-    /// maximization initialized from VCA.
-    #[arg(long, default_value = "vca")]
+    /// Endmember extraction method.
+    ///
+    /// `spa` (default): Successive Projection Algorithm — greedy
+    /// max-residual vertex search with no RNG, so the endmember set is
+    /// a function of the data alone and `--seed` does not affect it.
+    /// `vca`: Vertex Component Analysis, which probes the reduced space
+    /// with random directions; correct, but its vertex set can still
+    /// move with `--seed` on noisy data, so sweep seeds before
+    /// reporting. `nfindr`: iterative simplex-volume maximization,
+    /// initialized from VCA and therefore also seed-dependent.
+    #[arg(long, default_value = "spa")]
     method: String,
 
     /// Max N-FINDR passes (ignored for `--method vca`). A full pass
@@ -128,11 +135,12 @@ pub struct UnmixArgs {
 pub(super) fn run_unmix(args: UnmixArgs) -> Result<()> {
     let started_at = SystemTime::now();
     let endmember_method = match args.method.as_str() {
+        "spa" => EndmemberMethod::Spa,
         "vca" => EndmemberMethod::Vca,
         "nfindr" => EndmemberMethod::Nfindr {
             max_passes: args.nfindr_max_passes,
         },
-        other => bail!("--method {other:?}; expected `vca` or `nfindr`"),
+        other => bail!("--method {other:?}; expected `spa`, `vca` or `nfindr`"),
     };
     let abundance_method = match args.abundance.as_str() {
         "fcls" => AbundanceMethod::Fcls,
@@ -360,6 +368,9 @@ pub(super) fn run_unmix(args: UnmixArgs) -> Result<()> {
             "k-max": args.k_max,
             "k-elbow-threshold": args.k_elbow_threshold,
             "method": args.method,
+            // `spa` ignores the seed entirely; recording that here means
+            // a reader does not have to know which methods are stochastic.
+            "seed-affects-endmembers": args.method != "spa",
             "nfindr-max-passes": args.nfindr_max_passes,
             "abundance": args.abundance,
             "transform": args.transform,

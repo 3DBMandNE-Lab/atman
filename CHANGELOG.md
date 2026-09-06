@@ -8,18 +8,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Documented instability of `decompose unmix` endmember selection.**
-  VCA endmembers are actual samples at simplex vertices, so admitting
-  more sparsely-measured (mean-imputed) proteins can replace every
-  vertex. Measured on two unrelated cohorts: a 26-subject CSF cohort
-  loses all four vertex subjects between `--max-missing-fraction` 0.3
-  and 0.4, and a 110-subject CPTAC GBM cohort retains one of four
-  between 0.0 and 0.3 and none between 0.3 and 0.4. Sample size does not
-  rescue it and `--k auto` is not a stable anchor. `docs/recipes.md` now
-  tells users to sweep the threshold before reporting an endmember, and
-  notes that `decompose nmf` / `decompose ica` return synthetic loading
-  vectors and do not share the failure mode. No code change: the
-  behaviour is inherent to sample-selecting extraction.
+- **`decompose unmix --method spa`, now the default: deterministic
+  endmember extraction.** The Successive Projection Algorithm (Araújo et
+  al. 2001; robustness analysed by Gillis & Vavasis 2014) takes the
+  sample of largest residual norm and projects it out, repeatedly. It
+  uses no random direction, so the endmember set is a function of the
+  data alone and `--seed` cannot reach it — verified on real data, where
+  four different seeds give identical vertices on both matrices of a CSF
+  cohort. `vca` and `nfindr` remain available under `--method`; both are
+  seed-dependent on noisy data, and the sidecar now records
+  `seed-affects-endmembers` so a reader does not need to know which is
+  which. SPA also refuses loudly when `k` exceeds the dimensionality the
+  data supports, instead of returning a vertex made of numerical noise:
+  the relative residual falls by seven orders of magnitude at the true
+  rank, and the threshold sits in that gap.
 - **Real-data sanity test for `decompose unmix`** on the CSF CrossDisease
   SIH cohort (`crates/atman/tests/unmix_csf_plasma_endmember.rs`):
   albumin-ratio normalization should collapse the bipolar
@@ -135,6 +137,34 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`decompose unmix` (VCA) picked endmembers almost arbitrarily.** Two
+  defects compounded. First, the vertex search ran in the full
+  `p`-dimensional feature space instead of the `k`-dimensional signal
+  subspace — the dimensionality-reduction stage of Nascimento &
+  Bioucas-Dias (2005), which a code comment had dismissed as a
+  constant-factor speed step and removed. In `p` dimensions a random
+  unit direction is almost orthogonal to a `k`-dimensional simplex, so
+  `argmax |u·y|` was decided by noise. Second, the Gram-Schmidt step made
+  a single pass over a *non-orthogonal* basis, so the search direction
+  was never actually orthogonal to the vertices already chosen. Together
+  they made the selected vertex set a function of the RNG seed rather
+  than of the data: on a 110-subject CPTAC GBM cohort with no imputation
+  at all, seeds 42/43/44 produced three *disjoint* vertex sets.
+  The subspace projection is now computed from the `n × n` Gram matrix
+  (cheap for `p ≫ n`, same subspace), with eigenvector signs
+  canonicalised for reproducibility, followed by the projective
+  transform onto the simplex hyperplane; the mean direction seeds the
+  orthogonal basis for the first draw only, as in the published
+  formulation; and the basis is kept orthonormal. On a planted simplex
+  the vertex set is now identical across seeds and recovers the planted
+  samples exactly. **This changes `decompose unmix` output.** No result
+  in either manuscript project depends on it (both confirmed they have
+  never run it for a reported number), but a prior unmix run is not
+  reproducible against this version and should be re-run. Real data
+  remains harder than a planted simplex: on a 26-subject cohort eight
+  seeds still gave six distinct vertex sets, so `docs/recipes.md` now
+  tells users to sweep seeds and report selection frequency rather than
+  a single winner.
 - **`atman de --ridge-lambda auto` no longer silently means "no
   shrinkage".** `auto` was the flag's default and resolved to `0.0`
   without comment, so a user who selected it — or who simply accepted the

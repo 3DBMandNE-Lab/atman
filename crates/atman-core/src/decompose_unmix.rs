@@ -28,12 +28,20 @@
 //! `--n-boot`, and `--annotate-markers`. Each is its own
 //! ~150-line follow-on; the core pipeline is already substantial.
 
+use crate::ica::jacobi_eigen;
 use crate::rng::{derive_sub_seed, Xoshiro256pp};
 
 /// In-place modified Gram-Schmidt: subtract from `w` its projection
 /// onto each non-zero basis vector in `basis`. Skips degenerate
 /// (zero-norm) basis vectors so the orthogonalization is robust to
 /// linearly-dependent inputs.
+/// Remove from `w` its component along every vector in `basis`.
+///
+/// **`basis` must be orthonormal.** A single Gram-Schmidt pass over a
+/// non-orthogonal basis does not leave `w` orthogonal to the basis's
+/// span — subtracting the projection onto one vector reintroduces
+/// components along the others whenever they are correlated. Build the
+/// basis with [`push_orthonormal`], which keeps that invariant.
 fn orthogonalize_against(w: &mut [f64], basis: &[Vec<f64>]) {
     for v in basis {
         let v_norm_sq = dot_product(v, v);
@@ -47,6 +55,27 @@ fn orthogonalize_against(w: &mut [f64], basis: &[Vec<f64>]) {
     }
 }
 
+/// Orthonormalise `v` against `basis` and append it, preserving the
+/// orthonormal invariant [`orthogonalize_against`] relies on. Returns
+/// `false` (appending nothing) when `v` lies in the existing span.
+fn push_orthonormal(basis: &mut Vec<Vec<f64>>, v: &[f64]) -> bool {
+    let mut c = v.to_vec();
+    // Two passes: classical Gram-Schmidt loses orthogonality on
+    // near-parallel inputs, and simplex vertices sharing a large common
+    // component are exactly that case.
+    orthogonalize_against(&mut c, basis);
+    orthogonalize_against(&mut c, basis);
+    let norm = dot_product(&c, &c).sqrt();
+    if norm <= 1e-12 {
+        return false;
+    }
+    for x in &mut c {
+        *x /= norm;
+    }
+    basis.push(c);
+    true
+}
+
 #[derive(Debug, Clone)]
 pub struct VcaResult {
     /// Sample indices of the selected endmembers in the original
@@ -54,6 +83,211 @@ pub struct VcaResult {
     pub endmember_sample_indices: Vec<usize>,
     /// `[k][p]` feature-space loading vectors (original coordinates).
     pub endmember_loadings: Vec<Vec<f64>>,
+}
+
+/// Project `data` onto its `k`-dimensional signal subspace and apply the
+/// projective transform onto the simplex hyperplane.
+///
+/// Shared by [`spa`] and [`vca`]: both need the same reduced geometry,
+/// and only their vertex-selection rule differs. Returns
+/// `projected[sample][component]` alongside the mean direction.
+fn reduce_to_simplex_coords(data: &[Vec<f64>], k: usize) -> (Vec<Vec<f64>>, Vec<f64>) {
+    let n = data.len();
+    // p ≫ n here, so take the subspace from the n × n Gram matrix
+    // rather than a p × p covariance: with Y = U S Vᵀ, Gram = YᵀY =
+    // V S² Vᵀ, and the projected coordinate of sample j along component
+    // d is s_d · V[j][d]. Same subspace, n × n eigenproblem.
+    let mut gram = vec![vec![0.0_f64; n]; n];
+    for i in 0..n {
+        for j in i..n {
+            let g = dot_product(&data[i], &data[j]);
+            gram[i][j] = g;
+            gram[j][i] = g;
+        }
+    }
+    let (eigenvalues, eigenvectors) = jacobi_eigen(&gram);
+
+    let mut coords: Vec<Vec<f64>> = vec![vec![0.0; k]; n];
+    for d in 0..k {
+        let s_d = eigenvalues.get(d).copied().unwrap_or(0.0).max(0.0).sqrt();
+        for (c, evec_row) in coords.iter_mut().zip(eigenvectors.iter()) {
+            c[d] = s_d * evec_row[d];
+        }
+    }
+    // Eigenvector signs are arbitrary; canonicalise so the same input
+    // yields the same coordinates on every platform and build.
+    for d in 0..k {
+        let mut pivot = 0usize;
+        let mut best = -1.0_f64;
+        for (j, c) in coords.iter().enumerate() {
+            let a = c[d].abs();
+            if a > best + 1e-15 {
+                best = a;
+                pivot = j;
+            }
+        }
+        if coords[pivot][d] < 0.0 {
+            for c in coords.iter_mut() {
+                c[d] = -c[d];
+            }
+        }
+    }
+
+    let mut mean_dir = vec![0.0_f64; k];
+    for c in &coords {
+        for (d, v) in c.iter().enumerate() {
+            mean_dir[d] += *v / (n as f64);
+        }
+    }
+    let mut projected: Vec<Vec<f64>> = Vec::with_capacity(n);
+    for c in &coords {
+        let denom = dot_product(c, &mean_dir);
+        if denom.abs() > 1e-12 {
+            projected.push(c.iter().map(|v| v / denom).collect());
+        } else {
+            projected.push(c.clone());
+        }
+    }
+    (projected, mean_dir)
+}
+
+/// Relative residual below which SPA declares the data exhausted.
+///
+/// Measured against the first (largest) residual, so it is scale-free.
+/// The gap at the true rank is enormous — on a rank-3 fixture the ratio
+/// falls from 2.3e-1 at the last real endmember to 1.9e-8 at the first
+/// spurious one — so any threshold inside that gap behaves identically;
+/// 1e-6 sits well below real structure and well above numerical noise.
+const RESIDUAL_COLLAPSE_RATIO: f64 = 1e-6;
+
+/// Successive Projection Algorithm (Araújo et al. 2001; analysed as
+/// robust separable-NMF by Gillis & Vavasis 2014).
+///
+/// **Deterministic.** Where VCA probes the reduced space with random
+/// directions and takes `argmax |u · y|`, SPA repeatedly takes the point
+/// of largest residual norm and projects it out:
+///
+/// ```text
+/// R ← projected samples
+/// repeat k times:
+///     j ← argmax_j ‖R_j‖          (ties: lowest index)
+///     select j
+///     u ← R_j / ‖R_j‖
+///     R ← R − u (uᵀ R)            (deflate)
+/// ```
+///
+/// The greedy max-residual rule is exactly QR with column pivoting on
+/// the reduced matrix, and under near-separability it provably recovers
+/// the vertices with error bounded by the noise level. Because there is
+/// no random direction there is no seed: the vertex set is a function of
+/// the data alone, which is what makes an endmember claim reproducible
+/// rather than a draw.
+pub fn spa(data: &[Vec<f64>], k: usize) -> Result<VcaResult, String> {
+    let n = validate_endmember_input(data, k)?;
+    let (projected, _mean_dir) = reduce_to_simplex_coords(data, k);
+
+    let mut residual = projected;
+    let mut selected: Vec<usize> = Vec::with_capacity(k);
+    let mut loadings: Vec<Vec<f64>> = Vec::with_capacity(k);
+    // Scale reference for the "no independent direction left" test,
+    // taken from the data itself: an absolute tolerance would be
+    // meaningless because the projective transform sets the coordinate
+    // scale.
+    let mut scale_ref = 0.0_f64;
+
+    for step in 0..k {
+        let mut best_idx = usize::MAX;
+        let mut best_norm = -1.0_f64;
+        for (j, r) in residual.iter().enumerate() {
+            if selected.contains(&j) {
+                continue;
+            }
+            let norm_sq = dot_product(r, r);
+            // Strict `>` keeps the lowest index on a tie, so the result
+            // does not depend on iteration order.
+            if norm_sq > best_norm + 1e-15 {
+                best_norm = norm_sq;
+                best_idx = j;
+            }
+        }
+        if best_idx == usize::MAX {
+            return Err(format!(
+                "SPA: ran out of candidate samples at step {step} (k={k}, n={n})"
+            ));
+        }
+        let best_len = best_norm.max(0.0).sqrt();
+        if step == 0 {
+            scale_ref = best_len;
+        } else if best_len <= RESIDUAL_COLLAPSE_RATIO * scale_ref {
+            // Every remaining sample lies in the span of the vertices
+            // already chosen, so the next pick would be numerical noise.
+            return Err(format!(
+                "SPA: no independent direction left after {step} endmembers (largest \
+                 remaining residual is {:.3e} of the first, k={k}); the data does not \
+                 support {k} distinct endmembers — lower --k",
+                best_len / scale_ref.max(f64::MIN_POSITIVE)
+            ));
+        }
+        selected.push(best_idx);
+        loadings.push(data[best_idx].clone());
+
+        if step + 1 == k {
+            break;
+        }
+        // Deflate: remove the selected direction from every residual.
+        let pivot = residual[best_idx].clone();
+        let pivot_norm = dot_product(&pivot, &pivot).sqrt();
+        if pivot_norm <= RESIDUAL_COLLAPSE_RATIO * scale_ref.max(f64::MIN_POSITIVE) {
+            return Err(format!(
+                "SPA: residual collapsed after {} endmembers; k={k} exceeds the \
+                 dimensionality actually present in the data — lower --k",
+                step + 1
+            ));
+        }
+        let u: Vec<f64> = pivot.iter().map(|v| v / pivot_norm).collect();
+        for r in residual.iter_mut() {
+            let c = dot_product(r, &u);
+            for (ri, ui) in r.iter_mut().zip(u.iter()) {
+                *ri -= c * ui;
+            }
+        }
+    }
+
+    Ok(VcaResult {
+        endmember_sample_indices: selected,
+        endmember_loadings: loadings,
+    })
+}
+
+/// Shared shape/finiteness validation for endmember extractors.
+fn validate_endmember_input(data: &[Vec<f64>], k: usize) -> Result<usize, String> {
+    let n = data.len();
+    if n == 0 {
+        return Err("endmember extraction: empty sample matrix".into());
+    }
+    if k < 2 {
+        return Err(format!("endmember extraction: k must be ≥ 2 (got {k})"));
+    }
+    if k > n {
+        return Err(format!(
+            "endmember extraction: k ({k}) > n_samples ({n}); problem is under-determined"
+        ));
+    }
+    let p = data[0].len();
+    if p == 0 {
+        return Err("endmember extraction: samples have zero features".into());
+    }
+    for row in data {
+        if row.len() != p {
+            return Err("endmember extraction: non-rectangular sample matrix".into());
+        }
+        for v in row {
+            if !v.is_finite() {
+                return Err("endmember extraction: non-finite value in input".into());
+            }
+        }
+    }
+    Ok(n)
 }
 
 /// VCA endmember extraction on a sample × feature matrix.
@@ -89,86 +323,167 @@ pub fn vca(data: &[Vec<f64>], k: usize, seed: u64) -> Result<VcaResult, String> 
             }
         }
     }
-    // Feature-space matrix Y with columns = samples (p × n).
-    let mut y: Vec<Vec<f64>> = vec![vec![0.0; n]; p];
-    for (i, row) in data.iter().enumerate() {
-        for (j, &v) in row.iter().enumerate() {
-            y[j][i] = v;
+    // ---- Signal-subspace projection ------------------------------
+    //
+    // The vertex search MUST happen in the k-dimensional signal
+    // subspace, not in the p-dimensional ambient space. In p
+    // dimensions a random unit direction is almost orthogonal to a
+    // k-dimensional simplex (concentration of measure), so
+    // `argmax |u · y|` is decided by noise and the selected vertices
+    // depend on the seed rather than on the data. This is the
+    // dimensionality-reduction stage of Nascimento & Bioucas-Dias
+    // (2005) — noise suppression, not a speed optimisation.
+    //
+    // p ≫ n here, so the subspace is obtained from the n × n Gram
+    // matrix rather than a p × p covariance: with Y = U S Vᵀ,
+    // Gram = YᵀY = V S² Vᵀ, and the projected coordinate of sample j
+    // along component d is s_d · V[j][d]. Same subspace, n × n
+    // eigenproblem. (Same trick as `nmf::nndsvda`'s init.)
+    let mut gram = vec![vec![0.0_f64; n]; n];
+    for i in 0..n {
+        for j in i..n {
+            let g = dot_product(&data[i], &data[j]);
+            gram[i][j] = g;
+            gram[j][i] = g;
+        }
+    }
+    let (eigenvalues, eigenvectors) = jacobi_eigen(&gram);
+
+    // Projected coordinates: `coords[sample][component]`, k components.
+    let mut coords: Vec<Vec<f64>> = vec![vec![0.0; k]; n];
+    for d in 0..k {
+        let s_d = eigenvalues.get(d).copied().unwrap_or(0.0).max(0.0).sqrt();
+        for (c, evec_row) in coords.iter_mut().zip(eigenvectors.iter()) {
+            c[d] = s_d * evec_row[d];
         }
     }
 
-    // A holds selected endmembers as columns in the FEATURE space:
-    // a (p × i) matrix after i picks. We work in feature space
-    // directly (skipping the SVD reduction step in Nascimento &
-    // Bioucas-Dias' paper). This is slower by a constant factor for
-    // large p but removes an entire moving part.
-    let mut selected: Vec<usize> = Vec::with_capacity(k);
-    let mut a: Vec<Vec<f64>> = Vec::new(); // [endmember_index][feature]
+    // Eigenvector signs are arbitrary; canonicalise so the same input
+    // yields the same coordinates on every platform and build. Rule:
+    // the entry of largest magnitude in each component is positive,
+    // ties broken by lowest sample index.
+    for d in 0..k {
+        let mut pivot = 0usize;
+        let mut best = -1.0_f64;
+        for (j, c) in coords.iter().enumerate() {
+            let a = c[d].abs();
+            if a > best + 1e-15 {
+                best = a;
+                pivot = j;
+            }
+        }
+        if coords[pivot][d] < 0.0 {
+            for c in coords.iter_mut() {
+                c[d] = -c[d];
+            }
+        }
+    }
 
-    // Initial direction: random unit vector in feature space.
+    // Projective transform onto the simplex hyperplane: divide each
+    // sample's coordinate vector by its projection onto the mean
+    // direction, so vertices are picked by composition rather than by
+    // overall magnitude. Samples whose projection is degenerate keep
+    // their unscaled coordinates.
+    let mut mean_dir = vec![0.0_f64; k];
+    for c in &coords {
+        for (d, v) in c.iter().enumerate() {
+            mean_dir[d] += *v / (n as f64);
+        }
+    }
+    let mut projected: Vec<Vec<f64>> = Vec::with_capacity(n);
+    for c in &coords {
+        let denom = dot_product(c, &mean_dir);
+        if denom.abs() > 1e-12 {
+            projected.push(c.iter().map(|v| v / denom).collect());
+        } else {
+            projected.push(c.clone());
+        }
+    }
+
+    // ---- Vertex search, in the reduced space ---------------------
+    let mut selected: Vec<usize> = Vec::with_capacity(k);
+    // Selected vertices in original feature coordinates, for output.
+    let mut a: Vec<Vec<f64>> = Vec::new();
+
+    // Gram-Schmidt basis the search direction is kept orthogonal to.
+    //
+    // It is seeded with the mean direction and that seed is DISCARDED
+    // once the first vertex is picked, mirroring the auxiliary matrix
+    // in Nascimento & Bioucas-Dias' formulation, whose fixed initial
+    // column is overwritten by the first selected vertex. The seeding
+    // matters because after the projective transform every sample has
+    // the same component along `mean_dir`, which adds an identical
+    // offset to every projection — harmless for `argmax`, but
+    // `argmax |·|` is not shift-invariant, so a seed-dependent offset
+    // would silently decide the winner. Retaining it afterwards would
+    // be equally wrong: it would consume one of the k dimensions and
+    // leave the final vertex to the degenerate fallback.
+    let mut ortho_basis: Vec<Vec<f64>> = Vec::with_capacity(k + 1);
+    push_orthonormal(&mut ortho_basis, &mean_dir);
+
     let mut rng = Xoshiro256pp::new(seed);
-    let mut u = (0..p).map(|_| rng.next_normal()).collect::<Vec<f64>>();
+    let mut u = (0..k).map(|_| rng.next_normal()).collect::<Vec<f64>>();
+    orthogonalize_against(&mut u, &ortho_basis);
     normalize_in_place(&mut u);
 
     for step in 0..k {
-        // Project every sample onto u: v_j = u · y[:, j].
-        let mut projections = vec![0.0_f64; n];
-        for j in 0..n {
-            let mut acc = 0.0;
-            for f in 0..p {
-                acc += u[f] * y[f][j];
-            }
-            projections[j] = acc;
-        }
-        // Argmax |projection|. Skip already-selected to preserve
-        // distinct endmember indices.
-        let mut best_idx = 0usize;
+        let mut best_idx = usize::MAX;
         let mut best_abs = -1.0_f64;
-        for (j, &v) in projections.iter().enumerate() {
+        for (j, pj) in projected.iter().enumerate() {
             if selected.contains(&j) {
                 continue;
             }
-            let av = v.abs();
+            let av = dot_product(&u, pj).abs();
             if av > best_abs {
                 best_abs = av;
                 best_idx = j;
             }
         }
+        if best_idx == usize::MAX {
+            return Err(format!(
+                "VCA: ran out of candidate samples at step {step} (k={k}, n={n})"
+            ));
+        }
         selected.push(best_idx);
-        let loading: Vec<f64> = (0..p).map(|f| y[f][best_idx]).collect();
-        a.push(loading.clone());
+        if step == 0 {
+            // Drop the mean-direction seed; from here the basis spans
+            // the vertices chosen so far.
+            ortho_basis.clear();
+        }
+        push_orthonormal(&mut ortho_basis, &projected[best_idx]);
+        a.push(data[best_idx].clone());
 
         if step + 1 == k {
             break;
         }
 
-        // Draw new random direction, then orthogonalize against the
-        // span of selected loadings (modified Gram-Schmidt).
+        // New random direction, orthogonalised against the span of the
+        // vertices already chosen (modified Gram-Schmidt), in reduced
+        // space.
         let sub_seed = derive_sub_seed(seed, step + 1);
         let mut rng2 = Xoshiro256pp::new(sub_seed);
-        let mut w = (0..p).map(|_| rng2.next_normal()).collect::<Vec<f64>>();
-        orthogonalize_against(&mut w, &a);
+        let mut w = (0..k).map(|_| rng2.next_normal()).collect::<Vec<f64>>();
+        orthogonalize_against(&mut w, &ortho_basis);
         let w_norm = dot_product(&w, &w).sqrt();
         if w_norm <= 1e-15 {
-            // Degenerate — fall back to a canonical basis direction
-            // we haven't fully consumed yet.
-            for (f, wf) in w.iter_mut().enumerate() {
-                *wf = ((f + step) as f64).sin();
+            // Degenerate draw: fall back to a deterministic direction
+            // and re-orthogonalise.
+            for (d, wd) in w.iter_mut().enumerate() {
+                *wd = ((d + step + 1) as f64).sin();
             }
-            orthogonalize_against(&mut w, &a);
+            orthogonalize_against(&mut w, &ortho_basis);
             let nn = dot_product(&w, &w).sqrt();
             if nn > 1e-15 {
                 for v in &mut w {
                     *v /= nn;
                 }
             }
-            u = w;
         } else {
             for v in &mut w {
                 *v /= w_norm;
             }
-            u = w;
         }
+        u = w;
     }
 
     Ok(VcaResult {
@@ -361,6 +676,10 @@ pub enum AbundanceMethod {
 
 #[derive(Debug, Clone, Copy)]
 pub enum EndmemberMethod {
+    /// Successive Projection Algorithm — deterministic greedy
+    /// max-residual vertex search. No RNG, so the result is a function
+    /// of the data alone. Default.
+    Spa,
     Vca,
     /// Iterative simplex-volume maximization (N-FINDR, Winter 1999),
     /// initialized from VCA's picks. Swaps each endmember with the
@@ -581,6 +900,7 @@ pub struct UnmixConfig {
 /// estimation → per-sample reconstruction residual.
 pub fn unmix(data: &[Vec<f64>], k: usize, cfg: UnmixConfig) -> Result<UnmixResult, String> {
     let vca_result = match cfg.endmember_method {
+        EndmemberMethod::Spa => spa(data, k)?,
         EndmemberMethod::Vca => vca(data, k, cfg.seed)?,
         EndmemberMethod::Nfindr { max_passes } => nfindr(data, k, cfg.seed, max_passes)?,
     };
@@ -1233,6 +1553,140 @@ mod tests {
                 "NFINDR regressed cosine for planted endmember {i}: vca={v}, nfindr={n}"
             );
         }
+    }
+
+    /// SPA has no seed at all, so the only stability question is
+    /// whether it recovers the planted vertices. It must, exactly.
+    #[test]
+    fn spa_recovers_the_planted_pure_samples() {
+        for noise in [0.0_f64, 0.01, 0.05, 0.1] {
+            let data = planted_simplex(60, 1200, 4, noise, 20260906);
+            let got = spa(&data, 4).expect("spa");
+            let mut sorted = got.endmember_sample_indices.clone();
+            sorted.sort();
+            assert_eq!(
+                sorted,
+                vec![0, 1, 2, 3],
+                "noise={noise}: expected the four planted pure endmembers, got {sorted:?}"
+            );
+        }
+    }
+
+    /// The property the whole change exists for: on real-shaped data
+    /// where VCA's answer moves with the seed, SPA has no seed to move
+    /// with. Repeated calls are identical by construction, and the
+    /// result depends only on the data.
+    #[test]
+    fn spa_is_a_function_of_the_data_alone() {
+        let data = planted_simplex(40, 800, 3, 0.08, 7);
+        let first = spa(&data, 3).expect("spa");
+        for _ in 0..5 {
+            let again = spa(&data, 3).expect("spa");
+            assert_eq!(
+                first.endmember_sample_indices, again.endmember_sample_indices,
+                "SPA must be deterministic"
+            );
+        }
+        // And it must not silently agree with an arbitrary answer: the
+        // selection has to actually be the extreme points.
+        let mut sorted = first.endmember_sample_indices.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![0, 1, 2]);
+    }
+
+    /// `k` beyond the dimensionality actually present must fail loudly
+    /// rather than return an arbitrary extra vertex.
+    #[test]
+    fn spa_refuses_k_beyond_available_dimensionality() {
+        // Three planted sources, so the simplex is 3-vertex; ask for 6.
+        let data = planted_simplex(30, 400, 3, 0.0, 11);
+        let err = spa(&data, 6).unwrap_err();
+        assert!(
+            err.contains("no independent direction left")
+                || err.contains("residual collapsed")
+                || err.contains("under-determined"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Planted-simplex fixture in high ambient dimension: `k` pure
+    /// endmember samples plus convex mixtures of them, with small noise
+    /// on every feature. The simplex structure lives in a `k`-dimensional
+    /// subspace of `p` dimensions.
+    fn planted_simplex(n: usize, p: usize, k: usize, noise: f64, seed: u64) -> Vec<Vec<f64>> {
+        let mut rng = Xoshiro256pp::new(seed);
+        // k pure source spectra.
+        let sources: Vec<Vec<f64>> = (0..k)
+            .map(|_| (0..p).map(|_| 5.0 + rng.next_normal()).collect())
+            .collect();
+        let mut out: Vec<Vec<f64>> = Vec::with_capacity(n);
+        // First k samples are the pure endmembers.
+        for src in &sources {
+            out.push(src.clone());
+        }
+        // Remainder are interior convex mixtures.
+        for _ in k..n {
+            let mut w: Vec<f64> = (0..k).map(|_| rng.next_f64().abs() + 0.05).collect();
+            let tot: f64 = w.iter().sum();
+            for x in &mut w {
+                *x /= tot;
+            }
+            let row: Vec<f64> = (0..p)
+                .map(|f| {
+                    let mixed: f64 = (0..k).map(|c| w[c] * sources[c][f]).sum();
+                    mixed + noise * rng.next_normal()
+                })
+                .collect();
+            out.push(row);
+        }
+        for row in out.iter_mut() {
+            for v in row.iter_mut() {
+                if !v.is_finite() {
+                    *v = 0.0;
+                }
+            }
+        }
+        out
+    }
+
+    /// The vertex search must run in the signal subspace, not in the
+    /// ambient feature space. In `p` dimensions a random unit direction
+    /// is almost orthogonal to a `k`-dimensional simplex, so `argmax|u·y|`
+    /// is decided by noise and the selected vertex set depends on the
+    /// seed rather than on the data. Selection must be seed-invariant.
+    #[test]
+    fn vca_endmember_selection_is_invariant_to_seed() {
+        let data = planted_simplex(60, 1200, 4, 0.05, 20260906);
+        let baseline = vca(&data, 4, 1).expect("vca");
+        let mut baseline_sorted = baseline.endmember_sample_indices.clone();
+        baseline_sorted.sort();
+        for seed in [2u64, 7, 42, 99, 12345] {
+            let got = vca(&data, 4, seed).expect("vca");
+            let mut got_sorted = got.endmember_sample_indices.clone();
+            got_sorted.sort();
+            assert_eq!(
+                got_sorted, baseline_sorted,
+                "seed {seed} selected a different vertex set ({got_sorted:?}) than seed 1 \
+                 ({baseline_sorted:?}); the vertex search is being decided by the random \
+                 direction rather than by simplex geometry"
+            );
+        }
+    }
+
+    /// With the subspace projection in place the selected vertices are
+    /// the planted pure samples (indices 0..k), not arbitrary interior
+    /// mixtures.
+    #[test]
+    fn vca_selects_the_planted_pure_samples() {
+        let data = planted_simplex(60, 1200, 4, 0.05, 4242);
+        let got = vca(&data, 4, 20260420).expect("vca");
+        let mut sorted = got.endmember_sample_indices.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            vec![0, 1, 2, 3],
+            "expected the four planted pure endmembers; got {sorted:?}"
+        );
     }
 
     #[test]

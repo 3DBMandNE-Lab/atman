@@ -687,35 +687,39 @@ Outputs: `endmembers.tsv` (rank-ordered proteins per endmember),
 `abundances.tsv` (per-subject fractions, rows sum to 1),
 `unmix_diagnostics.tsv`, `marker_enrichment.tsv`.
 
-**Sweep `--max-missing-fraction` before you report an endmember.**
-VCA endmembers are *actual samples* sitting at simplex vertices, not
-synthetic loading vectors, so admitting more sparsely-measured
-(mean-imputed) proteins can move every vertex. Measured on two
-unrelated cohorts on 2026-09-06:
+**`--method spa` (the default) is deterministic; `vca` is not.**
+Endmembers here are *actual samples* sitting at simplex vertices, so a
+vertex set is a discrete choice among your subjects and it matters
+whether that choice is a function of the data or of the RNG.
 
-| Cohort | n | Threshold change | Proteins admitted | Vertex subjects retained |
-|---|---|---|---|---|
-| CSF, Olink/MaxQuant | 26 | 0.3 → 0.4 | 561 → 623 | 0 of 4 |
-| CPTAC GBM, TMT | 110 | 0.0 → 0.3 | 9,363 → 10,464 | 1 of 4 |
-| CPTAC GBM, TMT | 110 | 0.3 → 0.4 | 10,464 → 10,653 | 0 of 4 |
+- **`spa`** (Successive Projection Algorithm; Araújo et al. 2001, robustness
+  analysed by Gillis & Vavasis 2014) repeatedly takes the sample of
+  largest residual norm and projects it out. There is no random
+  direction and no seed dependence: the same matrix always yields the
+  same endmembers. This is the default and what you should report.
+- **`vca`** probes the reduced space with random directions. It is the
+  published algorithm and is available, but on noisy real data its
+  vertex set can still move with `--seed`, so sweep seeds and report
+  selection frequency if you use it.
+- **`nfindr`** initialises from VCA, so it inherits that seed dependence.
 
-Sample size does not rescue it: a 110-subject tumour cohort behaves
-like a 26-subject CSF one. Nor does `--k auto` anchor it — the elbow
-rule selected different `k` on matrices differing only in
-normalization.
+Two defects were fixed on 2026-09-06 that had made the VCA path close to
+arbitrary — the vertex search ran in the full feature space rather than
+the k-dimensional signal subspace, and the Gram-Schmidt basis was not
+orthonormal. If you have unmix results from before that date, re-run
+them.
 
-Practical consequences:
+Remaining advice that still applies:
 
-- Name `--k` and `--max-missing-fraction` explicitly; do not lean on
-  `--k auto` for a result you intend to report.
-- Re-run across a few thresholds. If the vertex set turns over, say so:
-  "endmember identity is not stable to the missingness admission
-  threshold" is a legitimate finding about the method, not a failed run.
-- Do not name a particular subject as *the* endmember for a biological
-  compartment without that sweep behind you.
-- This is specific to sample-selecting extraction (VCA, N-FINDR).
-  `decompose nmf` and `decompose ica` return synthetic loading vectors
-  and do not share this failure mode.
+- Name `--k` explicitly. `--k auto` is not a stable anchor: the elbow
+  rule selected different `k` on matrices differing only in
+  normalization. Prefer a claim that holds across several `k`.
+- `--max-missing-fraction` changes which proteins enter and can still
+  move a vertex, though far less than the seed used to. On a 26-subject
+  CSF cohort, thresholds 0.3 and 0.4 now give identical endmembers and
+  complete-case differs in one of four.
+- `decompose nmf` and `decompose ica` return synthetic loading vectors,
+  not selected samples, and never had a vertex-identity problem.
 
 ### Variance partition: attributing variation to covariates
 

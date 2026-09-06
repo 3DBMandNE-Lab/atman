@@ -30,43 +30,24 @@
 //! per-protein z-scores over the cohort, and requires a plasma endmember
 //! to be plasma-high, neuronal-low, *and* not merely immunoglobulin-high.
 //!
-//! # What this test does NOT establish
+//! # Why this no longer sweeps seeds
 //!
-//! The result is specific to the pinned configuration, and the pinning is
-//! not cosmetic. Measured on 2026-09-06:
+//! Until 2026-09-06 `decompose unmix` defaulted to VCA, which probes
+//! the reduced space with random directions, and carried two defects
+//! that made its vertex choice close to arbitrary: the search ran in the
+//! full feature space instead of the k-dimensional signal subspace, and
+//! its Gram-Schmidt pass used a non-orthogonal basis. Both are fixed,
+//! and the default method is now SPA, which has no RNG at all — the
+//! endmember set is a function of the data alone.
 //!
-//! - At `--max-missing-fraction 0.3` (561 proteins) VCA puts its four
-//!   endmembers on subjects ST1304 / ST1296 / ST1289 / ST1301, and ST1301
-//!   is the plasma pole (plasma +0.98, neuronal −0.12, Ig −0.50).
-//! - At `0.4` (623 proteins) it puts them on ST1287 / ST1299 / ST1285 /
-//!   ST1311 — **no overlap at all** — and no endmember clears the plasma
-//!   bar. The panel is not what changed: dropping HP from the panel moves
-//!   the best score by 0.07, while the endmember *sample set* turns over
-//!   completely.
+//! So the axis worth sweeping is no longer the seed (there is nothing
+//! to sweep) but `k`. This test runs k = 3, 4 and 5 and requires the
+//! biology to hold at every one, which is a stronger claim than any
+//! single configuration. It also pins the determinism property directly
+//! by asserting that two different `--seed` values give byte-identical
+//! endmembers.
 //!
-//! **This is a property of the method, not of this cohort.** The atman
-//! methods-paper session reproduced it independently on CPTAC GBM — 110
-//! subjects, TMT rather than Olink/MaxQuant, bulk tumour rather than
-//! CSF, run against the PIN2 binary rather than this one. Varying only
-//! `--max-missing-fraction` at fixed `k = 4`: threshold 0.0 admits 9,363
-//! proteins, 0.3 admits 10,464 and retains one of four vertex subjects,
-//! 0.4 admits 10,653 and retains none. Evidence at
-//! `atman-paper/runs/determinism/plan2_unmix_stability_check.txt`.
-//!
-//! Two cohorts, two platforms, two binaries, four times the sample size,
-//! same failure mode. Sample size does not rescue it. The mechanism is
-//! that VCA endmembers are actual samples at simplex vertices, so
-//! admitting more sparsely-measured, mean-imputed proteins can move
-//! every vertex.
-//!
-//! This test therefore pins one configuration and checks that the
-//! expected biology appears there. It is a regression guard on
-//! `decompose unmix`, not evidence that the plasma pole is recoverable
-//! under any reasonable preprocessing. Do not cite it as the latter.
-//! `docs/recipes.md` carries the user-facing guidance: sweep the
-//! threshold before reporting an endmember.
-//!
-//! # Running it
+//! # Running it//! # Running it//! # Running it
 //!
 //! The inputs are gitignored and live outside this repo, so the test is
 //! `#[ignore]` and reads the canonical root from `ATMAN_CSF_CANONICAL_DIR`
@@ -238,8 +219,16 @@ fn score_panels(
     }
 }
 
-/// Run `decompose unmix` on one canonical dir and score every endmember.
-fn unmix_and_score(input_dir: &Path, output_dir: &Path) -> Vec<(String, PanelScores)> {
+/// Component counts swept for every matrix.
+const KS: &[usize] = &[3, 4, 5];
+
+/// Run `decompose unmix` once and score every endmember.
+fn unmix_and_score(
+    input_dir: &Path,
+    output_dir: &Path,
+    k: usize,
+    seed: u64,
+) -> Vec<(String, PanelScores)> {
     assert!(
         input_dir.join("measurements.tsv").is_file(),
         "no measurements.tsv under {}",
@@ -251,12 +240,13 @@ fn unmix_and_score(input_dir: &Path, output_dir: &Path) -> Vec<(String, PanelSco
             "unmix",
             "--input-dir",
             input_dir.to_str().unwrap(),
-            // Fixed k rather than `--k auto`: the elbow rule selects 8
-            // here and 6 on albnorm, and the finding is stable at k =
-            // 4, 5 and 8 on primary, so a small explicit k keeps the
-            // test's claim independent of the selection heuristic.
+            // The default, stated for the record: deterministic.
+            "--method",
+            "spa",
             "--k",
-            "4",
+            &k.to_string(),
+            "--seed",
+            &seed.to_string(),
             // ~26% of cells are missing or QC-dropped in this cohort.
             "--max-missing-fraction",
             "0.3",
@@ -269,7 +259,7 @@ fn unmix_and_score(input_dir: &Path, output_dir: &Path) -> Vec<(String, PanelSco
         .expect("run atman decompose unmix");
     assert!(
         out.status.success(),
-        "decompose unmix failed on {}:\n{}",
+        "decompose unmix failed on {} (k={k}):\n{}",
         input_dir.display(),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -279,6 +269,25 @@ fn unmix_and_score(input_dir: &Path, output_dir: &Path) -> Vec<(String, PanelSco
         .into_iter()
         .map(|(id, loadings)| (id, score_panels(&loadings, &moments)))
         .collect()
+}
+
+/// Per-k plasma-pole counts for one matrix, plus a readable breakdown.
+fn plasma_poles_by_k(input_dir: &Path, tmp: &Path, label: &str) -> (Vec<usize>, String) {
+    let mut counts = Vec::new();
+    let mut report = format!("{label}:\n");
+    for &k in KS {
+        let scored = unmix_and_score(input_dir, &tmp.join(format!("{label}_k{k}")), k, 42);
+        let poles = scored.iter().filter(|(_, p)| p.is_plasma_pole()).count();
+        counts.push(poles);
+        report.push_str(&format!("  k={k}: {poles} plasma pole(s)\n"));
+        for (id, p) in &scored {
+            report.push_str(&format!(
+                "      {id} plasma={:+.2} neuronal={:+.2} ig={:+.2}\n",
+                p.plasma, p.neuronal, p.immunoglobulin
+            ));
+        }
+    }
+    (counts, report)
 }
 
 fn canonical_root() -> PathBuf {
@@ -310,58 +319,53 @@ fn shellexpand_tilde(p: &str) -> String {
 
 #[test]
 #[ignore = "needs the gitignored CSF CrossDisease canonical inputs; see module docs"]
-fn unmix_finds_plasma_endmember_on_primary_but_not_on_albumin_normalized() {
+fn albumin_normalization_removes_the_plasma_endmember_at_every_k() {
     let root = canonical_root();
     let tmp = tempfile::tempdir().unwrap();
+    let primary_dir = root.join("primary/sih");
+    let albnorm_dir = root.join("albnorm/sih");
 
-    let primary = unmix_and_score(&root.join("primary/sih"), &tmp.path().join("primary"));
-    let albnorm = unmix_and_score(&root.join("albnorm/sih"), &tmp.path().join("albnorm"));
+    let (primary, primary_report) = plasma_poles_by_k(&primary_dir, tmp.path(), "primary");
+    let (albnorm, albnorm_report) = plasma_poles_by_k(&albnorm_dir, tmp.path(), "albnorm");
+    let report = format!("{primary_report}{albnorm_report}");
 
-    let describe = |label: &str, scored: &[(String, PanelScores)]| -> String {
-        let mut s = format!("{label}:\n");
-        for (id, p) in scored {
-            s.push_str(&format!(
-                "  {id} plasma={:+.2} neuronal={:+.2} ig={:+.2} plasma_pole={}\n",
-                p.plasma,
-                p.neuronal,
-                p.immunoglobulin,
-                p.is_plasma_pole()
-            ));
-        }
-        s
+    assert!(
+        primary.iter().all(|&c| c >= 1),
+        "the primary matrix should carry a plasma endmember at every k, got {primary:?}\n{report}"
+    );
+    assert!(
+        albnorm.iter().all(|&c| c == 0),
+        "albumin normalization should leave no plasma endmember at any k, got {albnorm:?}\n{report}"
+    );
+
+    // The decomposition must be real, not degenerate — otherwise the
+    // albnorm assertion above could pass for the wrong reason.
+    let albnorm_k5 = unmix_and_score(&albnorm_dir, &tmp.path().join("albnorm_guard"), 5, 42);
+    assert_eq!(
+        albnorm_k5.len(),
+        5,
+        "expected 5 albnorm endmembers at k=5\n{report}"
+    );
+
+    // Determinism: the default method has no RNG, so the seed must not
+    // reach the result. This is the property that makes a single run
+    // citable.
+    let a = unmix_and_score(&primary_dir, &tmp.path().join("seed_a"), 4, 1);
+    let b = unmix_and_score(&primary_dir, &tmp.path().join("seed_b"), 4, 987_654);
+    let key = |v: &[(String, PanelScores)]| -> Vec<(String, i64, i64)> {
+        v.iter()
+            .map(|(id, p)| {
+                (
+                    id.clone(),
+                    (p.plasma * 1e6) as i64,
+                    (p.neuronal * 1e6) as i64,
+                )
+            })
+            .collect()
     };
-    let report = format!(
-        "{}{}",
-        describe("primary", &primary),
-        describe("albnorm", &albnorm)
-    );
-
-    let primary_poles: Vec<&String> = primary
-        .iter()
-        .filter(|(_, p)| p.is_plasma_pole())
-        .map(|(id, _)| id)
-        .collect();
-    assert!(
-        !primary_poles.is_empty(),
-        "expected at least one plasma endmember on the primary matrix\n{report}"
-    );
-
-    let albnorm_poles: Vec<&String> = albnorm
-        .iter()
-        .filter(|(_, p)| p.is_plasma_pole())
-        .map(|(id, _)| id)
-        .collect();
-    assert!(
-        albnorm_poles.is_empty(),
-        "albumin normalization should leave no plasma endmember, found {albnorm_poles:?}\n{report}"
-    );
-
-    // The albnorm run must still produce a usable decomposition — an
-    // empty or degenerate one would satisfy the assertion above for the
-    // wrong reason.
-    assert!(
-        albnorm.len() >= 4,
-        "albnorm decomposition returned {} endmembers; expected 4\n{report}",
-        albnorm.len()
+    assert_eq!(
+        key(&a),
+        key(&b),
+        "--seed must not change the endmember set under the default method"
     );
 }
