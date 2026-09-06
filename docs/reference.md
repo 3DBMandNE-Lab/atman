@@ -87,24 +87,24 @@ reconstructs the input matrix. Multi-seed stability framework assesses
 robustness across random initializations.
 
 **Flags:**
-- `--k <INT>` — fixed rank; required when `--k-selection fixed` (the default)
+- `--k <INT>` — fixed rank. Required when `--k-selection fixed` (the default)
 - `--k-selection <RULE>` — `fixed` (default, uses `--k`), `cophenetic-knee`, or `rss-knee`
-- `--k-min <INT>` — minimum k for the automatic sweep (≥ 2); required when `--k-selection` is not `fixed` (no default)
-- `--k-max <INT>` — maximum k for the automatic sweep (≤ 50, > `--k-min`); required when `--k-selection` is not `fixed` (no default)
+- `--k-min <INT>` — minimum k for the automatic sweep (≥ 2). Required when `--k-selection` is not `fixed` (no default)
+- `--k-max <INT>` — maximum k for the automatic sweep (≤ 50, > `--k-min`). Required when `--k-selection` is not `fixed` (no default)
 - `--beta-loss <STR>` — loss function: `frobenius` (default, squared error) or `kullback-leibler` (alias `kl`)
 - `--init <STR>` — initialization: `nndsvda` (default, deterministic) or `random`
 - `--solver <STR>` — update algorithm: `mu` (default; the only supported value — multiplicative updates)
 - `--max-iter <INT>` — iteration limit (default 400)
 - `--tol <FLOAT>` — convergence tolerance on the per-iteration change in Frobenius error (default 1e-6)
 - `--seed <INT>` — PRNG seed, used only when `--init random` (default 42)
-- `--n-seeds <INT>` — number of independent runs (default 1); `> 1` enables multi-seed stability filtering
+- `--n-seeds <INT>` — number of independent runs (default 1). `> 1` enables multi-seed stability filtering
 - `--seed-base <INT>` — base seed for multi-seed runs, `seed_i = seed_base + i` (default 42)
 - `--min-stable-seed-fraction <FLOAT>` — fraction of seeds a program must survive in to pass multi-seed filtering (default 0.9)
 - `--stability-metric <STR>` — reproducibility metric: `jaccard-top20` only (Jaccard overlap of the top-`--stability-top-n` loadings)
 - `--stability-top-n <INT>` — top *n* loadings used by the stability metric (default 20)
-- `--max-missing-fraction <FLOAT>` — drop assays whose missing-sample fraction exceeds this value (default 0.0, strict complete-case; mirrors `decompose ica`); the sidecar records the resolved value plus `n_assays_retained`/`n_assays_dropped_missingness`
+- `--max-missing-fraction <FLOAT>` — drop assays whose missing-sample fraction exceeds this value (default 0.0, strict complete-case; mirrors `decompose ica`). The sidecar records the resolved value plus `n_assays_retained`/`n_assays_dropped_missingness`
 - `--transform <STR>` — pre-decomposition transform: `none` (default; NMF requires non-negative input and rejects negative values loudly), `exp2-clip` (`2^clamp(x, -c, +c)` — restores a non-negative ratio scale from log2-ratio input while winsorizing extreme tails), or `shift-min` (`x - min(X)` over the whole matrix — a sensitivity alternative to `exp2-clip`)
-- `--transform-clamp <FLOAT>` — clamp radius `c` for `--transform exp2-clip` (default 6.0 when omitted); only valid together with `--transform exp2-clip` — a hard error otherwise
+- `--transform-clamp <FLOAT>` — clamp radius `c` for `--transform exp2-clip` (default 6.0 when omitted). Only valid together with `--transform exp2-clip` — a hard error otherwise
 - `--output-loadings <PATH>` — protein weights per component (required)
 - `--output-activations <PATH>` — per-sample component activations (optional)
 - `--output-stability <PATH>` — cross-seed reproducibility scores (written only when `--n-seeds > 1`)
@@ -416,6 +416,156 @@ tables:
 The DE sanity test also verifies that canonical heat-shock proteins increase
 in both acute heat comparisons.
 
+### atman harmonize
+
+`harmonize` compares cross-cohort harmonisation methods by held-out
+transfer. It has two subcommands and a strict contract between them.
+
+`harmonize fit` reads the training cohorts. It writes one model file.
+
+`harmonize apply` reads that model file and one cohort. It reads nothing
+else. A held-out evaluation therefore cannot leak training data. The
+command refuses to apply a model to a cohort that the model was fit on.
+
+The model file records four things: the shared feature axis, the disease
+direction in that method's representation, the labels of the training
+cohorts, and a SHA-256 hash of their inputs. The hash matters because a
+label can be reused over different data. A replay can check the hash and
+prove that the held-out cohort was absent.
+
+**Methods** (`--method`):
+
+- `zscore` — per-cohort standardisation. This is the null
+  harmonisation. It learns nothing from the training cohorts, because a
+  new cohort is standardised by its own statistics.
+- `rank` — within-sample rank, rescaled to `[0, 1]`. Also stateless.
+- `quantile` — quantile normalisation against a reference profile
+  learned on the training cohorts. Each training subject contributes its
+  own observed values, interpolated onto the common grid. A subject with
+  two or more observed features counts.
+- `reference-protein` — per-sample division by the geometric mean of a
+  reference set. `--reference-k` sets the size. The command selects the
+  set on the training cohorts only. `apply` receives the chosen set in
+  the model and cannot reselect.
+
+Read `method_is_fitted` in the model file to tell the two stateless
+methods from the two fitted ones. A stateless method that matches a
+fitted one is a result. It means the fitted state did not carry the
+signal.
+
+**The negative control** (`--permute-labels`):
+
+Every method produces a score on a held-out cohort. A benchmark whose
+entries all beat zero measures nothing. `--permute-labels` shuffles the
+case and control labels inside each training cohort before it learns the
+direction. The permuted model travels the same `apply` path.
+
+One permuted fit is one draw from the null. It is not the null. Run
+several `--seed` values and compare the observed effect against that
+distribution. A single draw can be large in either direction. On a
+60-feature synthetic fixture one draw reached −4.45 against a real
+effect of +11.90.
+
+**Direction centring** (`--center-direction` on `apply`):
+
+Every per-sample normalisation leaves a per-subject term in the
+harmonised value. A direction with a non-zero mean projects onto that
+term. For `reference-protein` the score carries
+`−anchor × mean(direction)` exactly. If the anchor differs between the
+arms of the held-out cohort, any direction separates them, including a
+direction learned from shuffled labels.
+
+`--center-direction` subtracts the direction's mean over each subject's
+own used features. It is per-subject and not global, because missing
+data makes the usable feature set differ between subjects.
+
+The flag is off by default, so that runs made before it existed stay
+reproducible. `apply` warns whenever the flag is off and the method is a
+per-sample normalisation. Turn the flag on unless you have a reason not
+to.
+
+Centring has a cost. A disease effect that raises every protein by the
+same amount is not separable from an anchor shift under a per-sample
+normalisation. Centring does not discard recoverable signal. It declines
+to claim unrecoverable signal.
+
+### atman decompose ica — missingness and convergence flags
+
+- `--weighted-whitening` — use the detection model to weight the
+  whitening. An observed cell counts fully. An undetected cell counts by
+  `1 − P(detected)` at its imputed value. The contrast function stays
+  unweighted. Off by default.
+- `--degeneracy-floor <FLOAT>` — stop the joint loop when the imputed
+  cells come within this fraction of their first-iteration distance to
+  their own reconstruction. Default 0.1. Set 0 to disable the guard.
+- `--joint-tol <FLOAT>` — convergence tolerance for the joint loop.
+  Default 1e-6.
+
+The joint loop is iterated reconstruction-imputation. Its fixed point is
+the state where the imputed cells equal their own reconstruction. At
+that point the missing cells carry no independent information, and the
+fit explains them by construction. Running the loop to convergence
+therefore produces a worse model than stopping earlier.
+
+Measured on the committed ground-truth fixture over six seeds, mean
+absolute error against the planted sources:
+
+| Configuration | MAE |
+|---|---|
+| mean-imputation, then ICA | 0.0768 |
+| joint loop, detection curve discarded | 0.0759 |
+| weighted whitening inside the joint loop | 0.0754 |
+| `--weighted-whitening --max-joint-iter 1` | **0.0737** |
+
+The last row is best on every seed. Prefer it.
+
+`mnar_joint_stop_reason` in the sidecar records why the loop stopped. It
+takes three values: `converged`, `degeneracy-floor`, and
+`max-iterations`. A stop on the degeneracy floor is not a convergence,
+and `ica_converged` stays false for it.
+
+`mnar_joint_trace.tsv` records `beta0`, `beta1`, the step size, the
+change in the imputed cells, and the reconstruction gap at every joint
+iteration. Read `imputation_delta` to see whether the state is settling.
+Read `reconstruction_gap` to see whether it is settling on the
+degenerate fixed point.
+
+### atman align — metric selectivity
+
+`--metric cosine-centered` mean-centres each loading vector before the
+cosine. Use it whenever you compare non-negative loadings against signed
+ones.
+
+Plain cosine has a positivity floor on non-negative vectors. Two NMF
+programs cannot score below zero, and in practice they sit high because
+they share a baseline. One threshold is then selective for signed
+loadings and inert for non-negative ones. Measured across six CPTAC
+cohorts on a shared 4,375-gene universe: the median cross-cohort cosine
+was −0.004 for ICA and +0.813 for NMF, so `--tau 0.30` admitted 7.7% of
+ICA pairs and 99.9% of NMF pairs.
+
+`align programs` and `align bootstrap` report what fraction of
+cross-cohort pairs the supplied tau admits. They warn above 90%. Above
+that fraction the threshold is not thresholding, and reciprocal-best
+matching alone decides the archetypes. A sweep over tau then looks
+robust because it is saturated.
+
+`align bootstrap` applies the metric twice. `--cosine-tau` groups
+bootstrap programs into archetypes. `--match-tau` matches those
+archetypes back to the point estimate. Both gates report their admitted
+fraction.
+
+### atman network differential — bounded edge-pairwise output
+
+`--mode edge-pairwise` streams the leading `--top-rows` rows through a
+bounded heap. A capped run holds `--top-rows` candidates whatever the
+input size.
+
+An uncapped run (`--top-rows 0`) counts the candidate rows first. It
+refuses above 100 million rows and names the count. Pass `--top-rows N`
+to keep the N largest-`|z_diff|` rows in bounded memory, or use
+`--mode edge-summary`.
+
 ## Input Support
 
 Atman has three input modes, all landing on the same canonical TSV schema:
@@ -561,6 +711,20 @@ runtime from the spectrum; `decompose unmix --k auto` sweeps and
 picks the elbow). The sidecar records both the **rule** in `args`
 and the **resolved value** (e.g. `k_resolved`) so reviewers can
 see the runtime decision without re-reading output files.
+
+The same convention covers rules that fail rather than resolve. A
+recorded value cannot show that a rule was never satisfied, so each of
+these fields records what happened next to what was asked for:
+
+| Field | Command | Meaning |
+|---|---|---|
+| `k_selection_bound_hit` | `decompose ica`, `decompose nmf`, `decompose unmix` | `k_max`, `k_min`, or null. A rule that returns its own search bound has not selected anything. It ran out of room, and its criterion may never have been met. An explicit `--k` records null, because that is not a selection. |
+| `scale-free-fit-achieved` | `modules discover` | Whether any soft power met the scale-free criterion. `scale-free-best-r-squared` and `soft-power-fallback-rule` record how far short the data fell and which rule supplied the power. |
+| `ica_converged`, `ica_n_iterations`, `ica_final_tol` | `decompose ica` | Whether the reference fit converged, and the evidence. `ica_n_seeds_not_converged` covers the alternative seeds behind the stability ranking. |
+| `abundance_n_not_converged` | `decompose unmix` | Per-subject abundance solves that hit `--fcls-max-iter`. Always 0 for `--abundance ucls`, which is closed-form. |
+| `ridge-lambda-resolved` | `de` | The penalty that applied. Null when the shrinkage path did not run, so a sidecar naming a ridge value is not evidence that msqrob ran. |
+| `stability_alt_seed_method` | `decompose ica` | Which method the alternative seeds ran. The seed-stability column is only comparable when it matches the reference method. |
+| `n_empty_outputs` | `atman run` | Declared outputs that exist and carry no data row. Existence and non-emptiness are different checks.
 
 ### Plan manifests (`atman run`)
 
