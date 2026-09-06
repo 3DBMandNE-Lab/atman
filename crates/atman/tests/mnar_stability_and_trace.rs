@@ -245,3 +245,43 @@ fn mnar_joint_tol_is_honoured() {
         "a huge --joint-tol should converge at the first comparable step"
     );
 }
+
+/// The alternative seeds exist only to rank stability. Changing how many
+/// there are, or which method they use, must not move the reference
+/// fit's loadings or activations by a single byte.
+///
+/// This is the invariant that bounds a caller's exposure when the
+/// stability machinery changes: if it holds, a pinned tree keeps its
+/// loadings and only its stability column comes from the newer commit.
+/// Verified across this session's changes against the pre-session
+/// binary; pinned here so it stays true.
+#[test]
+fn mnar_reference_output_does_not_depend_on_n_seeds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    write_mnar_fixture(&input, 24, 30);
+
+    let one = tmp.path().join("one");
+    let many = tmp.path().join("many");
+    for (out_dir, n_seeds) in [(&one, "1"), (&many, "4")] {
+        let out = run_mnar(
+            &input,
+            out_dir,
+            &["--n-seeds", n_seeds, "--max-joint-iter", "3"],
+        );
+        assert!(
+            out.status.success(),
+            "mnar ica failed at --n-seeds {n_seeds}:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    for f in ["loadings.tsv", "activations.tsv"] {
+        let a = std::fs::read(one.join(f)).unwrap();
+        let b = std::fs::read(many.join(f)).unwrap();
+        assert_eq!(
+            a, b,
+            "{f} changed with --n-seeds; the reference fit must be independent of the \
+             stability machinery"
+        );
+    }
+}
