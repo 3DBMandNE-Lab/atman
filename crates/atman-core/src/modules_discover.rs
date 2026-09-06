@@ -60,6 +60,9 @@ pub struct DiscoveryResult {
     pub soft_power_sweep: Vec<SoftPowerSweepRow>,
     /// Chosen β (0 for `hard-threshold`).
     pub soft_power_chosen: usize,
+    /// Full outcome of the automatic sweep, when one ran. `None` for an
+    /// explicit `--soft-power` and for `hard-threshold`.
+    pub soft_power_selection: Option<SoftPowerSelection>,
     /// Audit counts for the |similarity| matrix construction.
     pub similarity_audit: SimilarityAudit,
 }
@@ -257,16 +260,64 @@ pub fn scale_free_r_squared(a: &[Vec<f64>], n_bins: usize) -> (f64, f64, f64) {
     (r2, slope, mean_k)
 }
 
+/// Outcome of an automatic soft-power sweep.
+///
+/// `criterion_met` is the field that matters: β alone cannot tell a
+/// reader whether the scale-free criterion was satisfied or whether the
+/// sweep fell back, and those are very different runs.
+#[derive(Debug, Clone)]
+pub struct SoftPowerSelection {
+    /// β to use for the adjacency.
+    pub beta: usize,
+    /// Whether some β in range actually met `R² ≥ r2_target` with
+    /// negative slope. When false, `beta` came from the fallback rule.
+    pub criterion_met: bool,
+    /// Best `R²` seen anywhere in the sweep, and the β that produced it.
+    /// Reported whether or not the criterion was met, so a reader can
+    /// see how far short the data fell.
+    pub best_r_squared: f64,
+    pub best_r_squared_beta: usize,
+    /// Names the fallback rule when `criterion_met` is false.
+    pub fallback_rule: Option<&'static str>,
+}
+
+/// WGCNA's documented default soft power for when no β satisfies the
+/// scale-free criterion, as a function of sample count.
+///
+/// From the WGCNA FAQ's table for **unsigned** networks, which is what
+/// `|r|^β` builds: fewer than 20 samples → 9, 20–30 → 8, 30–40 → 7,
+/// above 40 → 6.
+///
+/// The point is that the fallback must be a *typical* power, not an
+/// extreme one. Falling back to the β with the largest `R²` sounds
+/// reasonable and is a trap: when the scale-free fit degrades
+/// monotonically — which is what a bulk proteome tends to do — the
+/// largest `R²` sits at β = 1, which is no soft-thresholding at all.
+/// That keeps every weak correlation in the adjacency and collapses the
+/// whole feature set into the grey catch-all, i.e. it inverts the
+/// purpose of the sweep at exactly the moment the sweep failed.
+pub fn wgcna_default_soft_power(n_samples: usize) -> usize {
+    match n_samples {
+        0..=19 => 9,
+        20..=30 => 8,
+        31..=40 => 7,
+        _ => 6,
+    }
+}
+
 /// Sweep β ∈ 1..=max_beta and pick the smallest whose scale-free
-/// R² ≥ r2_target AND slope < 0. Returns `(chosen_beta, sweep_rows)`.
-/// If no β meets the criterion, returns the β with largest R² as a
-/// fallback (and logs nothing — caller inspects the diagnostics).
+/// R² ≥ r2_target AND slope < 0.
+///
+/// When no β qualifies, falls back to [`wgcna_default_soft_power`]
+/// (clamped to the swept range) and says so in the returned
+/// [`SoftPowerSelection`].
 pub fn auto_soft_power(
     abs_sim: &[Vec<f64>],
     max_beta: usize,
     r2_target: f64,
     n_bins: usize,
-) -> (usize, Vec<SoftPowerSweepRow>) {
+    n_samples: usize,
+) -> (SoftPowerSelection, Vec<SoftPowerSweepRow>) {
     let mut rows = Vec::with_capacity(max_beta);
     let mut best: Option<(usize, f64)> = None;
     let mut chosen: Option<usize> = None;
@@ -286,8 +337,27 @@ pub fn auto_soft_power(
             best = Some((beta, r2));
         }
     }
-    let picked = chosen.or(best.map(|(b, _)| b)).unwrap_or(1);
-    (picked, rows)
+    let (best_beta, best_r2) = best.unwrap_or((1, f64::NAN));
+    let selection = match chosen {
+        Some(beta) => SoftPowerSelection {
+            beta,
+            criterion_met: true,
+            best_r_squared: best_r2,
+            best_r_squared_beta: best_beta,
+            fallback_rule: None,
+        },
+        None => {
+            let fallback = wgcna_default_soft_power(n_samples).clamp(1, max_beta.max(1));
+            SoftPowerSelection {
+                beta: fallback,
+                criterion_met: false,
+                best_r_squared: best_r2,
+                best_r_squared_beta: best_beta,
+                fallback_rule: Some("wgcna-default-by-sample-count"),
+            }
+        }
+    };
+    (selection, rows)
 }
 
 /// Average-linkage (UPGMA) hierarchical clustering on a symmetric
@@ -400,18 +470,25 @@ pub fn discover(
     }
     let (abs_sim, similarity_audit) = pairwise_abs_similarity(data, sim);
 
-    let (adjacency, sweep, chosen_beta) = match method {
+    let (adjacency, sweep, chosen_beta, soft_power_selection) = match method {
         DiscoveryMethod::WgcnaSoft {
             beta: None,
             r2_target,
             n_bins,
             max_beta,
         } => {
-            let (picked, rows) = auto_soft_power(&abs_sim, max_beta, r2_target, n_bins);
-            (soft_adjacency(&abs_sim, picked), rows, picked)
+            let (selection, rows) =
+                auto_soft_power(&abs_sim, max_beta, r2_target, n_bins, data.len());
+            let picked = selection.beta;
+            (
+                soft_adjacency(&abs_sim, picked),
+                rows,
+                picked,
+                Some(selection),
+            )
         }
         DiscoveryMethod::WgcnaSoft { beta: Some(b), .. } => {
-            (soft_adjacency(&abs_sim, b), Vec::new(), b)
+            (soft_adjacency(&abs_sim, b), Vec::new(), b, None)
         }
         DiscoveryMethod::HardThreshold { threshold } => {
             let mut adj = vec![vec![0.0_f64; p]; p];
@@ -423,7 +500,7 @@ pub fn discover(
                     adj[j][i] = v;
                 }
             }
-            (adj, Vec::new(), 0)
+            (adj, Vec::new(), 0, None)
         }
     };
     let tom = compute_tom(&adjacency);
@@ -530,6 +607,7 @@ pub fn discover(
         report,
         soft_power_sweep: sweep,
         soft_power_chosen: chosen_beta,
+        soft_power_selection,
         similarity_audit,
     })
 }
@@ -760,6 +838,115 @@ mod tests {
         )
         .unwrap();
         assert!(!out.modules.is_empty());
+    }
+
+    /// A matrix whose scale-free fit only gets worse with β — which is
+    /// what a dense bulk-proteome correlation structure tends to do —
+    /// must NOT fall back to β = 1. β = 1 is no soft-thresholding at
+    /// all: it keeps every weak correlation, which collapses everything
+    /// into the grey catch-all and yields zero real modules.
+    #[test]
+    fn soft_power_fallback_is_not_the_minimum_when_the_criterion_fails() {
+        // Dense, nearly-uniform similarity: no power produces a
+        // scale-free degree distribution.
+        let p = 40;
+        let abs_sim: Vec<Vec<f64>> = (0..p)
+            .map(|i| {
+                (0..p)
+                    .map(|j| {
+                        if i == j {
+                            1.0
+                        } else {
+                            let (a, b) = if i < j { (i, j) } else { (j, i) };
+                            0.55 + 0.02 * (((a * 31 + b * 17) % 7) as f64 / 7.0)
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        // r2_target = 0.99 is unreachable here, forcing the fallback.
+        let (sel, rows) = auto_soft_power(&abs_sim, 20, 0.99, 10, 93);
+        assert_eq!(rows.len(), 20);
+        assert!(
+            !sel.criterion_met,
+            "fixture must not satisfy the criterion; best R² was {}",
+            sel.best_r_squared
+        );
+        assert_ne!(
+            sel.beta, 1,
+            "falling back to β = 1 disables soft-thresholding entirely"
+        );
+        assert_eq!(
+            sel.beta,
+            wgcna_default_soft_power(93),
+            "fallback should be WGCNA's default for this sample count"
+        );
+        assert_eq!(sel.fallback_rule, Some("wgcna-default-by-sample-count"));
+    }
+
+    /// The fallback follows WGCNA's documented unsigned-network table.
+    #[test]
+    fn wgcna_default_soft_power_matches_the_published_table() {
+        assert_eq!(wgcna_default_soft_power(12), 9);
+        assert_eq!(wgcna_default_soft_power(25), 8);
+        assert_eq!(wgcna_default_soft_power(35), 7);
+        assert_eq!(wgcna_default_soft_power(93), 6);
+    }
+
+    /// A `criterion_met` selection is reported as such, and reports the
+    /// best R² regardless. Uses the same two-block fixture as the
+    /// range test below, which has genuine block structure.
+    #[test]
+    fn soft_power_selection_reports_whether_the_criterion_was_met() {
+        let (data, labels) = two_block_fixture(321);
+        let out = discover(
+            &data,
+            &labels,
+            Similarity::Pearson,
+            DiscoveryMethod::WgcnaSoft {
+                beta: None,
+                r2_target: 0.8,
+                n_bins: 10,
+                max_beta: 20,
+            },
+            0.5,
+            10,
+        )
+        .unwrap();
+        let sel = out
+            .soft_power_selection
+            .expect("an auto sweep must report its selection");
+        assert_eq!(sel.beta, out.soft_power_chosen);
+        assert!(
+            sel.best_r_squared.is_finite(),
+            "best R² must be reported whether or not the criterion was met"
+        );
+        // Whichever way this fixture falls, the two fields must agree:
+        // a met criterion has no fallback rule, and vice versa.
+        assert_eq!(sel.criterion_met, sel.fallback_rule.is_none());
+    }
+
+    /// An explicit `--soft-power` is not a selection, so no selection is
+    /// reported and no fallback can be silently attributed to it.
+    #[test]
+    fn explicit_soft_power_reports_no_selection() {
+        let (data, labels) = two_block_fixture(321);
+        let out = discover(
+            &data,
+            &labels,
+            Similarity::Pearson,
+            DiscoveryMethod::WgcnaSoft {
+                beta: Some(6),
+                r2_target: 0.8,
+                n_bins: 10,
+                max_beta: 20,
+            },
+            0.5,
+            10,
+        )
+        .unwrap();
+        assert_eq!(out.soft_power_chosen, 6);
+        assert!(out.soft_power_selection.is_none());
     }
 
     #[test]

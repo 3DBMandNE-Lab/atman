@@ -72,6 +72,24 @@ pub fn run(args: Args) -> Result<()> {
 
     let comparisons = parse_comparisons(&args.groups)?;
     let modules = read_modules(&args.modules_tsv)?;
+    // A module set whose only member is the grey catch-all is not a
+    // module set: every gene is in one bucket, so the "per-module" test
+    // is a single test of the mean of every feature, which is
+    // well-formed, meaningless, and can easily come out significant.
+    // `modules discover` refuses to emit such a set, but this file may
+    // predate that check or come from elsewhere.
+    let non_grey: Vec<&String> = modules.keys().filter(|m| m.as_str() != "grey").collect();
+    if non_grey.is_empty() {
+        anyhow::bail!(
+            "module-de: {:?} contains no module other than the grey catch-all ({} genes). A \
+             single all-features module is not a module: the resulting test compares the mean \
+             of every feature between groups and its p-value means nothing. Re-run `modules \
+             discover` with a lower --cut-height, a smaller --min-module-size, or an explicit \
+             --soft-power.",
+            args.modules_tsv,
+            modules.get("grey").map(|g| g.len()).unwrap_or(0)
+        );
+    }
     let measurements = read_measurements_long(&args.input_dir.join("measurements.tsv"))?;
     let samples = crate::io::read_samples(&args.input_dir.join("samples.tsv"))?;
 

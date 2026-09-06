@@ -234,6 +234,49 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
     )
     .map_err(|e| anyhow::anyhow!(e))?;
 
+    // Checked BEFORE anything is written: a degenerate result must not
+    // leave a well-formed file on disk for a downstream command to pick
+    // up.
+    let non_grey = result.report.iter().filter(|r| r.module != "grey").count();
+    if let Some(sel) = &result.soft_power_selection {
+        if !sel.criterion_met {
+            eprintln!(
+                "modules discover: warning: no soft power in 1..={} reached the scale-free \
+                 target R2 >= {} with negative slope. Best was R2 = {:.3} at beta = {}. Fell \
+                 back to beta = {} ({}), WGCNA's default for {} samples — deliberately NOT the \
+                 beta with the best fit, which on a monotonically-declining sweep is beta = 1 \
+                 and applies no soft-thresholding at all. Consider passing --soft-power \
+                 explicitly.",
+                args.max_beta,
+                args.r2_target,
+                sel.best_r_squared,
+                sel.best_r_squared_beta,
+                sel.beta,
+                sel.fallback_rule.unwrap_or("fallback"),
+                filtered_data.len(),
+            );
+        }
+    }
+    if non_grey == 0 {
+        let cause = match &result.soft_power_selection {
+            Some(sel) if !sel.criterion_met => format!(
+                " The scale-free criterion also failed (best R2 = {:.3} at beta = {}; used beta \
+                 = {} by fallback), which is the usual cause.",
+                sel.best_r_squared, sel.best_r_squared_beta, sel.beta
+            ),
+            _ => String::new(),
+        };
+        bail!(
+            "modules discover: all {} features landed in the grey catch-all, so no module was \
+             discovered.{} Nothing was written: a downstream command would treat this as a \
+             single K=1 \"module\" holding every feature and compute statistics on it that \
+             look well-formed and mean nothing. Try a lower --cut-height, a smaller \
+             --min-module-size, or an explicit --soft-power.",
+            kept_features.len(),
+            cause,
+        );
+    }
+
     std::fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("creating {:?}", args.output_dir))?;
 
@@ -288,6 +331,24 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
             "min-module-size": args.min_module_size,
             "cut-height": args.cut_height,
             "chosen-beta": result.soft_power_chosen,
+            // `chosen-beta` alone cannot distinguish a β that met the
+            // scale-free criterion from one the fallback supplied.
+            "scale-free-fit-achieved": result
+                .soft_power_selection
+                .as_ref()
+                .map(|s| s.criterion_met),
+            "scale-free-best-r-squared": result
+                .soft_power_selection
+                .as_ref()
+                .map(|s| s.best_r_squared),
+            "scale-free-best-r-squared-beta": result
+                .soft_power_selection
+                .as_ref()
+                .map(|s| s.best_r_squared_beta),
+            "soft-power-fallback-rule": result
+                .soft_power_selection
+                .as_ref()
+                .and_then(|s| s.fallback_rule),
             "n-features-retained": kept_features.len(),
             "similarity_audit": {
                 "n_pairs_total": result.similarity_audit.n_pairs_total,

@@ -137,6 +137,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`modules discover --soft-power auto` fell back to β = 1, producing a
+  degenerate result that looked well-formed.** When no power satisfies
+  the scale-free criterion the sweep returned the β with the *largest*
+  R², which sounds reasonable and is a trap: on a bulk proteome the fit
+  degrades monotonically, so the largest R² sits at β = 1 — no
+  soft-thresholding at all. Reported from a real run: on a 93-sample,
+  9,376-feature contrast, R² fell from 0.505 at β = 1 to 0.133 at β = 20,
+  the sweep chose β = 1, every feature landed in the grey catch-all, and
+  `module-de` then emitted a single row testing the mean of all 9,376
+  proteins between subtypes at q = 0.04. Exit code 0, well-formed output,
+  meaningless number.
+  Three changes. The fallback is now WGCNA's documented default by
+  sample count for unsigned networks (9/8/7/6 as n crosses 20/30/40),
+  clamped to the swept range, instead of the best-fitting β. The sidecar
+  records `scale-free-fit-achieved`, `scale-free-best-r-squared`,
+  `scale-free-best-r-squared-beta` and `soft-power-fallback-rule`, so β
+  alone no longer has to carry the distinction between a selection and a
+  fallback, and stderr warns when the criterion failed. And a discovery
+  in which every feature is grey is now refused before anything is
+  written, with `module-de` independently refusing a module set whose
+  only member is grey — a single all-features "module" is not a module,
+  and every statistic computed on it is meaningless while looking
+  perfectly well-formed.
 - **Automatic `k`-selection that lands on its own search bound now says
   so.** A rule returning `--k-max` has not selected anything: it ran out
   of room, and the criterion it was asked to satisfy may never have been
