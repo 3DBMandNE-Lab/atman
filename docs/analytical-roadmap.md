@@ -445,6 +445,22 @@ Acceptance:
   `mean_a − mean_b` for an `A-B` comparison.
 - `--ridge-lambda auto` parses but currently equals `0.0`; data-driven
   selection is a follow-on.
+
+  **Read this before writing a capability sentence, 2026-09-06.**
+  `auto` is accepted, silently resolves to no shrinkage, and reports
+  nothing — so it reads as working while doing nothing, which is the
+  dangerous state for a provenance tool. Two consequences found while
+  surveying users:
+
+  - Do not write "supports data-driven ridge selection" from the
+    `--help` text. It is accepted, not implemented.
+  - `ridge-lambda: auto` appears in run sidecars even when `--test` is
+    not `msqrob`, because the sidecar records the resolved CLI argument
+    set rather than the executed path. Ten such sidecars exist in the
+    CSF CrossDisease project, all `test=ols`, none of which ran ridge
+    shrinkage. A sidecar naming `auto` is therefore not evidence that
+    msqrob ran, and any future change to `auto` must not retroactively
+    change how those existing sidecars read.
 - `--min-peptides` refuses proteins with too few observed peptides,
   emitting `skip_reason = "insufficient_peptides"`.
 - Integration tests cover direction recovery on a 3-protein synthetic
@@ -791,12 +807,22 @@ Acceptance:
   or any test other than `ols`.
 - Refuses when no `--design` is supplied.
 
-v1 scope trim:
+v1 scope trim (**superseded — see below**):
 
 - No automatic Tukey HSD or Dunnett pairwise contrasts (requires
   studentized-range and multivariate-t distributions not in
   statrs). User-supplied `--contrast-list` with Sidak adjustment
   is the next increment on the post-hoc track.
+
+**Status correction, 2026-09-06.** That trim no longer describes the
+code. All three post-hoc methods ship and are dispatched today:
+`--post-hoc sidak`, `--post-hoc tukey` (studentized-range) and
+`--post-hoc dunnett` (Dunnett–Hsu, with the unbalanced-design
+correlation path). The distributions the trim called missing were
+added in-tree as `atman_core::studentized_range` and
+`atman_core::multivariate_t`; see the CHANGELOG entries and
+`atman de --help`. Check capability claims against `--help` and the
+CHANGELOG rather than against this section.
 
 ### 22. Feature-covariance network influence (`atman network influence`) (implemented)
 
