@@ -8,6 +8,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Real-data sanity test for `decompose unmix`** on the CSF CrossDisease
+  SIH cohort (`crates/atman/tests/unmix_csf_plasma_endmember.rs`):
+  albumin-ratio normalization should collapse the bipolar
+  plasma↔neuronal axis, so a plasma endmember must appear on the primary
+  matrix and must not appear on the albumin-normalized one. `#[ignore]`
+  and gated on `ATMAN_CSF_CANONICAL_DIR`, since the inputs are
+  gitignored and live outside the repo. Scores three disjoint marker
+  panels on per-protein z-scores rather than a cosine against the
+  published Axis 1 consensus vector: that vector's negative pole carries
+  the immunoglobulins (IGHA2 −0.230, IGHG3 −0.151, IGHA1 −0.096)
+  alongside the plasma proteins, so a whole-vector cosine reaches only
+  −0.35 for the genuine plasma endmember and −0.66 for the
+  immunoglobulin one — it cannot separate the two poles.
 - **`atman align bootstrap --threads N`** — the bootstrap iterations and
   the pooled-subject jackknife replicates now run as a rayon parallel map
   (default: one thread per core; `--threads 1` restores serial execution).

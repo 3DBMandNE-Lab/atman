@@ -53,11 +53,3 @@ the nuisance — sits naturally on top of the existing
 
 A `--effect-size-scale clr` flag on `atman de` that reports CLR-space
 coefficients alongside the standard log-FC.
-
-### CSF plasma-endmember sanity check (deferred test)
-
-Real-data sanity check on `sih/qc_measurements.tsv` for
-`atman decompose unmix`. Requires the live `atman_inputs_albnorm/`
-dataset, which lives downstream of atman's in-repo test surface.
-Tracked here so the next in-repo pass picks it up when the dataset
-is available.
