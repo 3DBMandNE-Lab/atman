@@ -30,6 +30,28 @@
 //! per-protein z-scores over the cohort, and requires a plasma endmember
 //! to be plasma-high, neuronal-low, *and* not merely immunoglobulin-high.
 //!
+//! # What this test does NOT establish
+//!
+//! The result is specific to the pinned configuration, and the pinning is
+//! not cosmetic. Measured on 2026-09-06:
+//!
+//! - At `--max-missing-fraction 0.3` (561 proteins) VCA puts its four
+//!   endmembers on subjects ST1304 / ST1296 / ST1289 / ST1301, and ST1301
+//!   is the plasma pole (plasma +0.98, neuronal −0.12, Ig −0.50).
+//! - At `0.4` (623 proteins) it puts them on ST1287 / ST1299 / ST1285 /
+//!   ST1311 — **no overlap at all** — and no endmember clears the plasma
+//!   bar. The panel is not what changed: dropping HP from the panel moves
+//!   the best score by 0.07, while the endmember *sample set* turns over
+//!   completely.
+//!
+//! So the honest reading is that VCA's vertex selection on this cohort
+//! (26 subjects, ~26% missing) is sensitive to which sparsely-measured
+//! proteins are admitted and mean-imputed. This test pins one
+//! configuration and checks that the expected biology appears there; it
+//! is a regression guard on `decompose unmix`, not evidence that the
+//! plasma pole is recoverable under any reasonable preprocessing. Do not
+//! cite it as the latter.
+//!
 //! # Running it
 //!
 //! The inputs are gitignored and live outside this repo, so the test is
@@ -45,11 +67,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Plasma-leak markers (CSF's list, minus HP which is not measured in
-/// this cohort, and minus IGHA2 which is an immunoglobulin and belongs
-/// to the panel below — keeping it here would blur the distinction the
-/// test exists to draw).
-const PLASMA: &[&str] = &["APCS", "APOB", "C4BPA", "ITIH3", "FGG", "FGB"];
+/// Plasma-leak markers, minus IGHA2: that one is an immunoglobulin and
+/// belongs to the panel below, and it is in any case not measured in
+/// this cohort (zero rows in `proteins.tsv`).
+///
+/// HP is listed here because it *is* measured — but at 8 of 26 subjects
+/// missing (31%) it does not survive `--max-missing-fraction 0.3`, so it
+/// contributes to the score only if that threshold is raised. Panel
+/// scoring skips markers absent from the decomposition rather than
+/// treating them as zero, so listing it is safe either way. Same story
+/// for HBB (35% missing); HBA1 is genuinely absent from this cohort.
+const PLASMA: &[&str] = &["APCS", "APOB", "C4BPA", "ITIH3", "FGG", "FGB", "HP"];
 /// Neuronal / brain-derived markers: the opposite pole of Axis 1.
 const NEURONAL: &[&str] = &[
     "CBLN4", "SPON1", "NCAN", "SPOCK1", "CADM2", "NPTXR", "NPTX1",
@@ -178,9 +206,14 @@ fn score_panels(
             .collect();
         assert!(
             z.len() >= 4,
-            "only {} of {} panel markers are measured; the panel is too thin to score",
+            "only {} of {} panel markers survived the decomposition ({:?}); \
+             too thin to score — check --max-missing-fraction",
             z.len(),
-            panel.len()
+            panel.len(),
+            panel
+                .iter()
+                .filter(|g| loadings.contains_key(**g))
+                .collect::<Vec<_>>()
         );
         z.iter().sum::<f64>() / z.len() as f64
     };
