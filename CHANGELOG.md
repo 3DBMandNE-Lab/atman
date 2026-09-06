@@ -8,6 +8,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`decompose ica --degeneracy-floor`** (default 0.1) stops the MNAR
+  joint loop when the imputed cells come within that fraction of their
+  first-iteration RMS distance to their own rank-`k` reconstruction. The
+  loop is iterated reconstruction-imputation, whose fixed point is the
+  state where imputed cells equal their reconstruction exactly, carrying
+  no independent information while the fit explains them by
+  construction; measured on a 110-subject cohort the gap decayed
+  geometrically at ratio ~0.992 per iteration with no floor, so running
+  longer converged steadily toward that state and no criterion noticed.
+  Stopping here is reported as `degeneracy-floor`, never as convergence:
+  `MnarIcaResult` gains a three-valued `stop_reason` (`converged`,
+  `degeneracy-floor`, `max-iterations`), recorded in the sidecar as
+  `mnar_joint_stop_reason`, because `joint_converged` alone cannot
+  distinguish outcomes that mean different things about the fit.
+  `--degeneracy-floor 0` restores the previous behaviour.
 - **`align programs --metric cosine-centered`, and a tau-selectivity
   report.** Plain cosine has a positivity floor on non-negative loadings:
   two NMF programs cannot score below zero and in practice sit high just

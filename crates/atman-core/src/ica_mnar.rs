@@ -238,6 +238,23 @@ pub struct MnarIcaConfig {
     /// Convergence tolerance on detection-curve coefficient change between
     /// joint iterations (max absolute change in beta0 or beta1).
     pub joint_tol: f64,
+    /// Stop when the imputed cells come within this RMS distance of
+    /// their own rank-`k` reconstruction, as a fraction of the gap at
+    /// the first joint iteration.
+    ///
+    /// The joint loop is iterated reconstruction-imputation, whose fixed
+    /// point is the state where imputed cells EQUAL their reconstruction
+    /// exactly. At that point they carry no independent information and
+    /// the fit explains them by construction, so running to convergence
+    /// produces a worse model than stopping earlier. Measured on a
+    /// 110-subject CPTAC GBM cohort, the gap decayed geometrically at
+    /// ratio ~0.992 per iteration with no floor, a tenfold reduction over
+    /// 290 iterations, while the detection-curve delta was still far from
+    /// its own tolerance — so the loop was converging steadily toward the
+    /// degenerate state and no stopping criterion noticed.
+    ///
+    /// `0.0` disables the guard and restores the previous behaviour.
+    pub degeneracy_floor: f64,
 }
 
 impl Default for MnarIcaConfig {
@@ -249,6 +266,7 @@ impl Default for MnarIcaConfig {
             tol: 1e-4,
             max_joint_iter: 5,
             joint_tol: 1e-6,
+            degeneracy_floor: 0.1,
         }
     }
 }
@@ -290,6 +308,31 @@ pub struct JointIterationRecord {
     pub reconstruction_gap: f64,
 }
 
+/// Why the joint loop stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JointStopReason {
+    /// The detection curve moved less than `joint_tol`. The intended
+    /// stopping condition.
+    Converged,
+    /// The imputed cells approached their own reconstruction closely
+    /// enough that further iterations would only complete the collapse.
+    /// Stopping here preserves whatever independent information the
+    /// missing cells still carry; it is not convergence.
+    DegeneracyFloor,
+    /// Ran out of iterations with neither condition met.
+    MaxIterations,
+}
+
+impl JointStopReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Converged => "converged",
+            Self::DegeneracyFloor => "degeneracy-floor",
+            Self::MaxIterations => "max-iterations",
+        }
+    }
+}
+
 pub struct MnarIcaResult {
     /// The underlying ICA result (unmixing, mixing, sources, mean, …).
     pub ica: crate::ica::IcaResult,
@@ -302,7 +345,13 @@ pub struct MnarIcaResult {
     /// The iterated state is the imputed matrix; the curve is a readout.
     pub joint_iterations: usize,
     /// Whether the joint loop converged before `max_joint_iter`.
+    ///
+    /// True only for a genuine detection-curve convergence. Stopping on
+    /// the degeneracy floor is NOT convergence and does not set this.
     pub joint_converged: bool,
+    /// Why the loop stopped. `joint_converged` alone cannot distinguish
+    /// the three cases, and they mean different things about the fit.
+    pub stop_reason: JointStopReason,
     /// Per-iteration detection-curve coefficients and step sizes.
     pub joint_trace: Vec<JointIterationRecord>,
 }
@@ -405,6 +454,10 @@ pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaR
     }];
     // Previous round's imputed matrix, for the state-space delta.
     let mut prev_imputed: Option<Vec<Vec<f64>>> = None;
+    // Reconstruction gap at the first joint iteration, the scale the
+    // degeneracy floor is measured against.
+    let mut first_gap: Option<f64> = None;
+    let mut stop_reason = JointStopReason::MaxIterations;
 
     // Joint iteration: re-impute via ICA reconstruction, refit curve, re-run.
     // The detection curve informs the re-imputation: we use the ICA
@@ -487,7 +540,23 @@ pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaR
         });
         if delta < config.joint_tol {
             joint_converged = true;
+            stop_reason = JointStopReason::Converged;
             break;
+        }
+        // Degeneracy guard. The gap shrinking toward zero means the
+        // imputed cells are becoming their own reconstruction, so the
+        // missing data is ceasing to inform the fit. Stop before that
+        // completes rather than after.
+        if let Some(g0) = first_gap {
+            if config.degeneracy_floor > 0.0
+                && g0 > 0.0
+                && reconstruction_gap <= config.degeneracy_floor * g0
+            {
+                stop_reason = JointStopReason::DegeneracyFloor;
+                break;
+            }
+        } else if reconstruction_gap.is_finite() {
+            first_gap = Some(reconstruction_gap);
         }
     }
 
@@ -496,6 +565,7 @@ pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaR
         detection_curve: curve,
         joint_iterations,
         joint_converged,
+        stop_reason,
         joint_trace,
     }
 }
@@ -796,5 +866,121 @@ mod tests {
             got,
             expected
         );
+    }
+}
+
+#[cfg(test)]
+mod degeneracy_floor_tests {
+    use super::*;
+
+    /// Matrix with real MNAR dropout: low values are undetected, so the
+    /// joint loop has missing cells to re-impute.
+    fn mnar_matrix(n: usize, p: usize) -> Vec<Vec<f64>> {
+        (0..n)
+            .map(|i| {
+                (0..p)
+                    .map(|j| {
+                        let s1 = ((i as f64) * 0.83).sin() * 2.0;
+                        let s2 = ((i as f64) * 1.27).cos() * 2.0;
+                        let block = if j * 3 <= p { s1 } else { s2 };
+                        let v = 6.0 + block + (((i * 7 + j * 5) % 13) as f64) * 0.02;
+                        if v < 5.4 {
+                            f64::NAN
+                        } else {
+                            v
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn config(max_joint_iter: usize, degeneracy_floor: f64) -> MnarIcaConfig {
+        MnarIcaConfig {
+            k: 2,
+            seed: 42,
+            max_iter: 200,
+            tol: 1e-4,
+            max_joint_iter,
+            // Unreachable, so the loop cannot stop by converging and the
+            // test is about the other two exits.
+            joint_tol: 1e-300,
+            degeneracy_floor,
+        }
+    }
+
+    /// The guard must fire before the iteration budget is exhausted, and
+    /// must not be reported as convergence.
+    #[test]
+    fn degeneracy_floor_stops_the_loop_and_is_not_convergence() {
+        let x = mnar_matrix(24, 30);
+        let guarded = fast_ica_mnar(&x, &config(400, 0.5));
+        assert_eq!(
+            guarded.stop_reason,
+            JointStopReason::DegeneracyFloor,
+            "the gap should reach half its initial value well inside 400 iterations"
+        );
+        assert!(
+            !guarded.joint_converged,
+            "stopping on the degeneracy floor is not convergence"
+        );
+        assert!(
+            guarded.joint_iterations < 400,
+            "should stop early, used {}",
+            guarded.joint_iterations
+        );
+    }
+
+    /// With the guard disabled the same run exhausts its budget, which
+    /// is the previous behaviour and must remain reachable.
+    #[test]
+    fn disabling_the_floor_restores_the_old_behaviour() {
+        let x = mnar_matrix(24, 30);
+        let unguarded = fast_ica_mnar(&x, &config(40, 0.0));
+        assert_eq!(unguarded.stop_reason, JointStopReason::MaxIterations);
+        assert_eq!(unguarded.joint_iterations, 40);
+        assert!(!unguarded.joint_converged);
+    }
+
+    /// The guard must stop the loop strictly earlier than the budget
+    /// would, on the same data and seed.
+    #[test]
+    fn the_floor_stops_earlier_than_the_budget() {
+        let x = mnar_matrix(24, 30);
+        let guarded = fast_ica_mnar(&x, &config(200, 0.5));
+        let unguarded = fast_ica_mnar(&x, &config(200, 0.0));
+        assert!(
+            guarded.joint_iterations < unguarded.joint_iterations,
+            "guarded {} should stop before unguarded {}",
+            guarded.joint_iterations,
+            unguarded.joint_iterations
+        );
+        // And the trace should show the gap genuinely shrinking, which
+        // is what makes the guard meaningful rather than arbitrary.
+        let gaps: Vec<f64> = unguarded
+            .joint_trace
+            .iter()
+            .filter(|r| r.reconstruction_gap.is_finite())
+            .map(|r| r.reconstruction_gap)
+            .collect();
+        assert!(gaps.len() >= 3, "need several gap readings");
+        assert!(
+            gaps.last().unwrap() < &gaps[0],
+            "the reconstruction gap should decay: first {}, last {}",
+            gaps[0],
+            gaps.last().unwrap()
+        );
+    }
+
+    /// A genuine convergence must still be reported as convergence, not
+    /// pre-empted by the guard.
+    #[test]
+    fn real_convergence_is_still_reported_as_converged() {
+        let x = mnar_matrix(24, 30);
+        let mut cfg = config(200, 0.5);
+        cfg.joint_tol = 1e9; // trivially satisfied on the first comparison
+        let out = fast_ica_mnar(&x, &cfg);
+        assert_eq!(out.stop_reason, JointStopReason::Converged);
+        assert!(out.joint_converged);
     }
 }

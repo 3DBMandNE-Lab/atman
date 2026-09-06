@@ -132,6 +132,20 @@ pub struct IcaArgs {
     #[arg(long, default_value_t = 1e-6)]
     pub(super) joint_tol: f64,
 
+    /// Stop the joint loop when the imputed cells come within this
+    /// fraction of their first-iteration distance to their own
+    /// reconstruction. `0` disables the guard.
+    ///
+    /// The loop is iterated reconstruction-imputation and its fixed
+    /// point is the state where imputed cells EQUAL their
+    /// reconstruction, carrying no independent information while the
+    /// fit explains them by construction. Running to convergence
+    /// therefore produces a worse model than stopping earlier, so this
+    /// is not a performance setting. Stopping here is reported as
+    /// `degeneracy-floor` rather than as convergence.
+    #[arg(long, default_value_t = 0.1)]
+    pub(super) degeneracy_floor: f64,
+
     /// Gene symbol (matched against `samples` metadata `gene_symbol`)
     /// used as the reference for `--transform alr` or
     /// `--transform ratio-anchor`. Ignored for other transforms.
@@ -240,6 +254,7 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
 
     // Reference run: use MNAR-aware ICA if requested, else plain FastICA.
     let mut mnar_trace: Vec<atman_core::ica_mnar::JointIterationRecord> = Vec::new();
+    let mut mnar_stop_reason: Option<&'static str> = None;
     let (ref_seed, ref_run, mnar_joint_iters) = if args.missingness_model
         == MissingnessModel::AbundanceConditional
     {
@@ -251,6 +266,7 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
             tol: args.tol,
             max_joint_iter: args.max_joint_iter,
             joint_tol: args.joint_tol,
+            degeneracy_floor: args.degeneracy_floor,
         };
         let mnar_result = fast_ica_mnar(raw, &mnar_config);
         eprintln!(
@@ -260,7 +276,21 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
                 mnar_result.detection_curve.beta0,
                 mnar_result.detection_curve.beta1,
             );
-        if !mnar_result.joint_converged {
+        if mnar_result.stop_reason == atman_core::ica_mnar::JointStopReason::DegeneracyFloor {
+            eprintln!(
+                "decompose ica: the MNAR joint loop stopped at iteration {} on the degeneracy \
+                 floor, not by converging: the imputed cells had come within {:.0}% of their \
+                 first-iteration distance to their own reconstruction. Continuing would drive \
+                 that to zero, at which point the missing cells carry no independent \
+                 information and the fit explains them by construction. Raise \
+                 --degeneracy-floor to stop earlier, or set it to 0 to disable the guard.",
+                mnar_result.joint_iterations,
+                100.0 * args.degeneracy_floor,
+            );
+        }
+        if !mnar_result.joint_converged
+            && mnar_result.stop_reason != atman_core::ica_mnar::JointStopReason::DegeneracyFloor
+        {
             eprintln!(
                 "decompose ica: warning: the MNAR joint loop did not converge — stopped at \
                  --max-joint-iter={} with final step {:.3e}, above --joint-tol={:.1e}. See \
@@ -275,6 +305,7 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
             );
         }
         mnar_trace = mnar_result.joint_trace.clone();
+        mnar_stop_reason = Some(mnar_result.stop_reason.as_str());
         (
             args.seed,
             mnar_result.ica,
@@ -307,6 +338,7 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
                     tol: args.tol,
                     max_joint_iter: args.max_joint_iter,
                     joint_tol: args.joint_tol,
+                    degeneracy_floor: args.degeneracy_floor,
                 },
             )
             .ica
@@ -503,6 +535,9 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
             // `n_iterations` equal to `--max-iter` with `final_tol`
             // above `--tol` is a fit that ran out of iterations.
             extras.insert("ica_converged".into(), serde_json::json!(ref_converged));
+            if let Some(reason) = mnar_stop_reason {
+                extras.insert("mnar_joint_stop_reason".into(), serde_json::json!(reason));
+            }
             // Alternative seeds now run the same method as the
             // reference, so the seed-stability column measures seed
             // stability under both missingness models.

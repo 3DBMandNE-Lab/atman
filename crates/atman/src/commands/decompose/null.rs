@@ -141,6 +141,7 @@ pub(super) fn run_null(args: NullArgs) -> Result<()> {
         missingness_model: MissingnessModel::None,
         max_joint_iter: 5,
         joint_tol: 1e-6,
+        degeneracy_floor: 0.1,
     };
     let matrix = load_matrix(&adapter)?;
     if args.k > matrix.samples.len() || args.k > matrix.assays.len() {

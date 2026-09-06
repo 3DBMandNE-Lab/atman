@@ -535,6 +535,9 @@ fn run_atman_native_mnar_ica(
         // on a fully-observed fixture.  Satisfies the MAR-collapse contract.
         max_joint_iter: 1,
         joint_tol: 1e-6,
+        // Guard off: this harness benchmarks the loop itself, and a
+        // stopping rule would measure the guard instead.
+        degeneracy_floor: 0.0,
     };
     let start = Instant::now();
     let result = fast_ica_mnar(abundance, &config);
