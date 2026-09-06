@@ -254,6 +254,23 @@ impl Default for MnarIcaConfig {
 }
 
 /// Output of [`fast_ica_mnar`].
+/// One joint (impute → refit curve → ICA) iteration.
+///
+/// Emitting the whole trace, rather than only the final state, is what
+/// separates "did not converge" from "did not converge, and here is
+/// whether it was closing, oscillating, or diverging" — the second is
+/// reportable, the first is not.
+#[derive(Debug, Clone, Copy)]
+pub struct JointIterationRecord {
+    /// 1-based joint iteration index.
+    pub iteration: usize,
+    pub beta0: f64,
+    pub beta1: f64,
+    /// `max(|Δbeta0|, |Δbeta1|)` against the previous iteration; `NaN`
+    /// for the first, which has no predecessor.
+    pub delta: f64,
+}
+
 pub struct MnarIcaResult {
     /// The underlying ICA result (unmixing, mixing, sources, mean, …).
     pub ica: crate::ica::IcaResult,
@@ -263,6 +280,8 @@ pub struct MnarIcaResult {
     pub joint_iterations: usize,
     /// Whether the joint loop converged before `max_joint_iter`.
     pub joint_converged: bool,
+    /// Per-iteration detection-curve coefficients and step sizes.
+    pub joint_trace: Vec<JointIterationRecord>,
 }
 
 /// Missingness-aware FastICA for data with MNAR dropout.
@@ -353,6 +372,12 @@ pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaR
 
     let mut joint_iterations = 1;
     let mut joint_converged = false;
+    let mut joint_trace = vec![JointIterationRecord {
+        iteration: 1,
+        beta0: curve.beta0,
+        beta1: curve.beta1,
+        delta: f64::NAN,
+    }];
 
     // Joint iteration: re-impute via ICA reconstruction, refit curve, re-run.
     // The detection curve informs the re-imputation: we use the ICA
@@ -385,6 +410,12 @@ pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaR
         let delta = (curve.beta0 - prev_beta0)
             .abs()
             .max((curve.beta1 - prev_beta1).abs());
+        joint_trace.push(JointIterationRecord {
+            iteration: joint_iterations,
+            beta0: curve.beta0,
+            beta1: curve.beta1,
+            delta,
+        });
         if delta < config.joint_tol {
             joint_converged = true;
             break;
@@ -396,6 +427,7 @@ pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaR
         detection_curve: curve,
         joint_iterations,
         joint_converged,
+        joint_trace,
     }
 }
 

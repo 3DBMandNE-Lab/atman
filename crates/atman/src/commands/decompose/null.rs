@@ -140,6 +140,7 @@ pub(super) fn run_null(args: NullArgs) -> Result<()> {
         alr_reference: None,
         missingness_model: MissingnessModel::None,
         max_joint_iter: 5,
+        joint_tol: 1e-6,
     };
     let matrix = load_matrix(&adapter)?;
     if args.k > matrix.samples.len() || args.k > matrix.assays.len() {

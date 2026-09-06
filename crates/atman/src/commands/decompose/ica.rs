@@ -122,6 +122,16 @@ pub struct IcaArgs {
     #[arg(long, default_value_t = 5)]
     pub(super) max_joint_iter: usize,
 
+    /// Convergence tolerance for the outer joint loop: the loop stops
+    /// when `max(|Δbeta0|, |Δbeta1|)` of the detection curve falls
+    /// below this. Only used with `--missingness-model
+    /// abundance-conditional`. The per-iteration trace is written
+    /// alongside the loadings as `mnar_joint_trace.tsv`, so a run that
+    /// does not converge can be read as closing, oscillating, or
+    /// diverging rather than only as a failure.
+    #[arg(long, default_value_t = 1e-6)]
+    pub(super) joint_tol: f64,
+
     /// Gene symbol (matched against `samples` metadata `gene_symbol`)
     /// used as the reference for `--transform alr` or
     /// `--transform ratio-anchor`. Ignored for other transforms.
@@ -229,6 +239,7 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
     );
 
     // Reference run: use MNAR-aware ICA if requested, else plain FastICA.
+    let mut mnar_trace: Vec<atman_core::ica_mnar::JointIterationRecord> = Vec::new();
     let (ref_seed, ref_run, mnar_joint_iters) = if args.missingness_model
         == MissingnessModel::AbundanceConditional
     {
@@ -239,7 +250,7 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
             max_iter: args.max_iter,
             tol: args.tol,
             max_joint_iter: args.max_joint_iter,
-            joint_tol: 1e-6,
+            joint_tol: args.joint_tol,
         };
         let mnar_result = fast_ica_mnar(raw, &mnar_config);
         eprintln!(
@@ -249,6 +260,21 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
                 mnar_result.detection_curve.beta0,
                 mnar_result.detection_curve.beta1,
             );
+        if !mnar_result.joint_converged {
+            eprintln!(
+                "decompose ica: warning: the MNAR joint loop did not converge — stopped at \
+                 --max-joint-iter={} with final step {:.3e}, above --joint-tol={:.1e}. See \
+                 mnar_joint_trace.tsv beside the loadings for the per-iteration betas.",
+                args.max_joint_iter,
+                mnar_result
+                    .joint_trace
+                    .last()
+                    .map(|r| r.delta)
+                    .unwrap_or(f64::NAN),
+                args.joint_tol,
+            );
+        }
+        mnar_trace = mnar_result.joint_trace.clone();
         (
             args.seed,
             mnar_result.ica,
@@ -259,12 +285,34 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
         (args.seed, result, None)
     };
 
-    // Alternative seeds always use plain FastICA on the (imputed) matrix for
-    // stability ranking.  Multi-seed MNAR ICA is a deferred feature.
+    // Alternative seeds run the SAME method as the reference.
+    //
+    // They used to always run plain FastICA, even when the reference was
+    // the missingness-aware fit. The seed-stability column then compared
+    // an MNAR reference against plain-FastICA alternatives at a Jaccard
+    // threshold, which measures method disagreement rather than seed
+    // stability, and in practice returned exactly zero for every program
+    // — a column named `n_stable_runs` that could not report stability.
     let mut alt_runs: Vec<(u64, IcaResult)> = Vec::with_capacity(args.n_seeds.saturating_sub(1));
     for offset in 1..args.n_seeds {
         let seed = args.seed.wrapping_add(offset as u64);
-        let result = fast_ica(&matrix.data, k, seed, args.max_iter, args.tol);
+        let result = if args.missingness_model == MissingnessModel::AbundanceConditional {
+            let raw = mnar_raw.as_ref().expect("MNAR raw matrix");
+            fast_ica_mnar(
+                raw,
+                &MnarIcaConfig {
+                    k,
+                    seed,
+                    max_iter: args.max_iter,
+                    tol: args.tol,
+                    max_joint_iter: args.max_joint_iter,
+                    joint_tol: args.joint_tol,
+                },
+            )
+            .ica
+        } else {
+            fast_ica(&matrix.data, k, seed, args.max_iter, args.tol)
+        };
         alt_runs.push((seed, result));
     }
 
@@ -325,6 +373,36 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
     // Emit `transform_applied.json` next to the loadings whenever a
     // non-`none` transform ran, so downstream tools can audit which
     // coordinate system the archetypes live in.
+    // Per-iteration joint-loop trace, so a non-converged MNAR fit can be
+    // characterised rather than only reported as a failure.
+    let mut mnar_trace_path: Option<PathBuf> = None;
+    if !mnar_trace.is_empty() {
+        let trace_path = args
+            .output_loadings
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("mnar_joint_trace.tsv");
+        let mut buf = String::from("iteration\tbeta0\tbeta1\tdelta\tconverged_here\n");
+        for (i, r) in mnar_trace.iter().enumerate() {
+            let is_last = i + 1 == mnar_trace.len();
+            buf.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\n",
+                r.iteration,
+                format_float(r.beta0),
+                format_float(r.beta1),
+                if r.delta.is_finite() {
+                    format_float(r.delta)
+                } else {
+                    "NA".to_string()
+                },
+                u8::from(is_last && r.delta.is_finite() && r.delta < args.joint_tol),
+            ));
+        }
+        atomic_write(&trace_path, buf.as_bytes())?;
+        eprintln!("decompose ica: mnar joint trace={}", trace_path.display());
+        mnar_trace_path = Some(trace_path);
+    }
+
     let transform_applied_path = if transform_meta.name != "none" {
         let p = args
             .output_loadings
@@ -358,6 +436,9 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
     if let Some(p) = &transform_applied_path {
         outputs.push(p.clone());
     }
+    if let Some(p) = &mnar_trace_path {
+        outputs.push(p.clone());
+    }
     write_run_sidecar(
         &sidecar,
         "decompose ica",
@@ -379,6 +460,7 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
             "impute": args.impute,
             "missingness-model": missingness_model_str,
             "max-joint-iter": args.max_joint_iter,
+            "joint-tol": args.joint_tol,
             "mnar-joint-iterations": mnar_joint_iters,
             "output-loadings": args.output_loadings.display().to_string(),
             "output-activations": args.output_activations.display().to_string(),
@@ -409,6 +491,19 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
             // `n_iterations` equal to `--max-iter` with `final_tol`
             // above `--tol` is a fit that ran out of iterations.
             extras.insert("ica_converged".into(), serde_json::json!(ref_converged));
+            // Alternative seeds now run the same method as the
+            // reference, so the seed-stability column measures seed
+            // stability under both missingness models.
+            extras.insert(
+                "stability_alt_seed_method".into(),
+                serde_json::json!(if args.missingness_model
+                    == MissingnessModel::AbundanceConditional
+                {
+                    "abundance-conditional"
+                } else {
+                    "fastica"
+                }),
+            );
             extras.insert(
                 "ica_n_iterations".into(),
                 serde_json::json!(ref_run.n_iterations),

@@ -8,6 +8,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`atman decompose ica --joint-tol`, and a per-iteration MNAR joint
+  trace.** The outer joint loop's tolerance was hard-coded at 1e-6 and
+  only its final verdict was reported, so a run that stopped at
+  `--max-joint-iter` could not be described as closing, oscillating, or
+  diverging — which is the difference between a reportable sentence and
+  a bare failure. `--joint-tol` is now a flag, non-convergence warns with
+  the achieved step size, and `mnar_joint_trace.tsv` is written beside
+  the loadings with the detection-curve coefficients and step size at
+  every joint iteration. The trace is a recorded output, so its hash is
+  in the sidecar.
 - **`decompose unmix --method spa`, now the default: deterministic
   endmember extraction.** The Successive Projection Algorithm (Araújo et
   al. 2001; robustness analysed by Gillis & Vavasis 2014) takes the
@@ -137,6 +147,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **MNAR-ICA seed stability was structurally unable to report
+  stability.** With `--missingness-model abundance-conditional`, the
+  alternative seeds behind the stability ranking ran plain FastICA while
+  the reference ran the missingness-aware fit, so `n_stable_runs`
+  compared two different methods at a Jaccard threshold. Reported from a
+  real tree as exactly 0.000 for all 120 programs across three cohorts —
+  a column named for a measurement that could not produce one, and which
+  reads as "nothing was stable" rather than "this was never computed".
+  Alternative seeds now run the reference's method, so `--n-seeds` means
+  the same thing under both missingness models and the numbers are
+  comparable across methods. The sidecar records
+  `stability_alt_seed_method`.
 - **Iterative solvers that ran out of iterations said nothing.** Found
   by auditing for the pattern behind the three defects above, rather
   than from a failing run. `decompose ica` computed `n_iterations` and
