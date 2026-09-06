@@ -207,7 +207,6 @@ pub fn run(args: Args) -> Result<()> {
         if args.min_peptides < 2 {
             anyhow::bail!("--min-peptides must be >= 2");
         }
-        // `ridge_lambda` is validated inside run_msqrob.
     } else if args.peptide_measurements.is_some() && args.test != "ensemble" {
         anyhow::bail!("--peptide-measurements requires --test msqrob");
     } else if args.peptide_metadata.is_some() && args.test != "limma" && args.test != "ensemble" {
@@ -217,6 +216,39 @@ pub fn run(args: Args) -> Result<()> {
             args.test
         );
     }
+
+    // Resolve --ridge-lambda once, here, so the sidecar can record what
+    // actually applied. `auto` used to be this flag's default and
+    // silently meant "no shrinkage", which reads as working while doing
+    // nothing — the dangerous state for a provenance tool. It is now
+    // refused where it would matter and reported where it would not.
+    let ridge_lambda_resolved: Option<f64> = if args.test == "msqrob" {
+        let raw = args.ridge_lambda.trim();
+        if raw == "auto" {
+            anyhow::bail!(
+                "--ridge-lambda auto is not implemented: data-driven penalty selection is a \
+                 follow-on, and accepting `auto` here would silently apply no shrinkage. Pass a \
+                 number instead — `--ridge-lambda 0.0` for no shrinkage (the default), or a \
+                 positive value to shrink non-intercept fixed effects."
+            );
+        }
+        let lambda = raw
+            .parse::<f64>()
+            .with_context(|| format!("--ridge-lambda must be a number, got {raw:?}"))?;
+        if !lambda.is_finite() || lambda < 0.0 {
+            anyhow::bail!("--ridge-lambda must be finite and >= 0 (got {lambda})");
+        }
+        Some(lambda)
+    } else {
+        if args.ridge_lambda.trim() == "auto" {
+            eprintln!(
+                "de: warning: --ridge-lambda is ignored by --test {} (it applies only to \
+                 --test msqrob), and `auto` is not implemented in any case",
+                args.test
+            );
+        }
+        None
+    };
     if args.omnibus_factor.is_some() {
         if args.test != "ols" {
             anyhow::bail!(
@@ -1372,6 +1404,10 @@ pub fn run(args: Args) -> Result<()> {
             "peptide-measurements": args.peptide_measurements.as_ref().map(|p| p.display().to_string()),
             "peptide-metadata": args.peptide_metadata.as_ref().map(|p| p.display().to_string()),
             "ridge-lambda": args.ridge_lambda,
+            // The penalty that actually applied. Null when the shrinkage
+            // path never executed, so a sidecar naming a ridge value is
+            // not read as evidence that msqrob ran.
+            "ridge-lambda-resolved": ridge_lambda_resolved,
             "min-peptides": args.min_peptides,
             "omnibus-factor": args.omnibus_factor,
             "report-q-strict": args.report_q_strict,

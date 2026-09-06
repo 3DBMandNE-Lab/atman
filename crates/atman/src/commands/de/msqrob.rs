@@ -47,15 +47,14 @@ pub(super) fn run_msqrob(
     let pep_measurements = read_peptide_measurements(pep_meas_path)
         .with_context(|| format!("reading peptide measurements from {:?}", pep_meas_path))?;
 
-    let ridge_lambda: f64 = match args.ridge_lambda.trim() {
-        "auto" => 0.0,
-        other => other
-            .parse::<f64>()
-            .with_context(|| format!("--ridge-lambda must be a number or `auto`, got {other:?}"))?,
-    };
-    if !ridge_lambda.is_finite() || ridge_lambda < 0.0 {
-        anyhow::bail!("--ridge-lambda must be finite and >= 0 (got {ridge_lambda})");
-    }
+    // Validated and resolved in `super::run` so the sidecar can record
+    // the penalty that actually applied; `auto` is refused there.
+    let ridge_lambda: f64 = args.ridge_lambda.trim().parse::<f64>().with_context(|| {
+        format!(
+            "--ridge-lambda must be a number, got {:?}",
+            args.ridge_lambda
+        )
+    })?;
 
     // assay_id → (panel, gene_symbol, uniprot).
     let mut protein_meta: BTreeMap<String, (String, String, Vec<String>)> = BTreeMap::new();

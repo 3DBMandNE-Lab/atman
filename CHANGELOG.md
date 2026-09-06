@@ -123,6 +123,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`atman de --ridge-lambda auto` no longer silently means "no
+  shrinkage".** `auto` was the flag's default and resolved to `0.0`
+  without comment, so a user who selected it — or who simply accepted the
+  default under `--test msqrob` — got an unpenalised fit while the CLI
+  help and the run sidecar both said `auto`, which reads as data-driven
+  selection. The default is now literally `0.0` (numerically identical,
+  so no result changes), `auto` is refused under `--test msqrob` with a
+  message naming the numeric alternative, and under any other test it is
+  reported on stderr as ignored. The sidecar gains
+  `ridge-lambda-resolved`: the penalty that actually applied, null when
+  the shrinkage path never executed — so a sidecar mentioning a ridge
+  value can no longer be misread as evidence that msqrob ran. Old
+  sidecars are left as they are; they carry `ridge-lambda: auto`
+  regardless of test and no resolved field, and the absence of the
+  resolved field means "written before this change", not "no penalty".
+  Verified against the pre-change binary: `de_results.tsv` is
+  byte-identical for `--test ols` and `--test welch-t`, output hashes
+  match, and the sidecar differs only by the added
+  `ridge-lambda-resolved` key and the `ridge-lambda` default string. The
+  in-repo CPTAC msqrob fixture was passing `auto` and silently getting no
+  shrinkage; it now states `0.0` explicitly, with identical numerics.
 - **`atman align bootstrap` — non-finite loadings now rejected loudly.**
   A degenerate resample (duplicate rows, zero-variance column) could in
   principle drive either decomposition to diverge; `NaN`/±∞ loadings

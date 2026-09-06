@@ -443,24 +443,28 @@ Acceptance:
 - `effect_size_method = "msqrob-ridge"` on every fitted row.
 - Sign convention matches the rest of `atman de`: reported effect is
   `mean_a − mean_b` for an `A-B` comparison.
-- `--ridge-lambda auto` parses but currently equals `0.0`; data-driven
-  selection is a follow-on.
+- `--ridge-lambda auto` is **refused**, not silently zero. Data-driven
+  penalty selection remains a follow-on.
 
-  **Read this before writing a capability sentence, 2026-09-06.**
-  `auto` is accepted, silently resolves to no shrinkage, and reports
-  nothing — so it reads as working while doing nothing, which is the
-  dangerous state for a provenance tool. Two consequences found while
-  surveying users:
+  **History, 2026-09-06.** `auto` used to be this flag's default and
+  silently resolved to `0.0`, so it read as working while applying no
+  shrinkage — the dangerous state for a provenance tool. Fixed: the
+  default is now literally `0.0` (numerically unchanged), `auto` is
+  refused under `--test msqrob` with a message naming the numeric
+  alternative, and it is reported as ignored under any other test. The
+  sidecar gained `ridge-lambda-resolved`, the penalty that actually
+  applied, which is null when the shrinkage path did not execute.
 
-  - Do not write "supports data-driven ridge selection" from the
-    `--help` text. It is accepted, not implemented.
-  - `ridge-lambda: auto` appears in run sidecars even when `--test` is
-    not `msqrob`, because the sidecar records the resolved CLI argument
-    set rather than the executed path. Ten such sidecars exist in the
-    CSF CrossDisease project, all `test=ols`, none of which ran ridge
-    shrinkage. A sidecar naming `auto` is therefore not evidence that
-    msqrob ran, and any future change to `auto` must not retroactively
-    change how those existing sidecars read.
+  Two things to keep in mind when reading **old** sidecars, which the
+  fix deliberately does not rewrite:
+
+  - `ridge-lambda: auto` appears in pre-fix sidecars regardless of test,
+    because the sidecar records the resolved CLI argument set rather
+    than the executed path. Ten such sidecars exist in the CSF
+    CrossDisease project, all `test=ols`, none of which ran shrinkage.
+    A pre-fix sidecar naming `auto` is not evidence that msqrob ran.
+  - Pre-fix sidecars have no `ridge-lambda-resolved` field at all. Its
+    absence means "written before 2026-09-06", not "no penalty".
 - `--min-peptides` refuses proteins with too few observed peptides,
   emitting `skip_reason = "insufficient_peptides"`.
 - Integration tests cover direction recovery on a 3-protein synthetic

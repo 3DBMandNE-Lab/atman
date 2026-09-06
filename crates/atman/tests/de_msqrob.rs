@@ -11,8 +11,9 @@
 //!   (`mean_a − mean_b`) for the injected ground-truth effects.
 //! - Ridge `--ridge-lambda` is recorded in the per-row output and in
 //!   the sidecar.
-//! - `--ridge-lambda auto` is accepted and written as `0.0` (current
-//!   data-driven selection stub).
+//! - The `--ridge-lambda` default applies no shrinkage, and the
+//!   unimplemented `auto` is refused under msqrob and reported as
+//!   ignored elsewhere, rather than silently meaning `0.0`.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -196,11 +197,14 @@ fn msqrob_recovers_injected_direction_and_columns() {
     assert_eq!(j["args"]["min-peptides"], 2);
 }
 
+/// The default penalty is no shrinkage. This used to be spelled `auto`,
+/// which read as data-driven selection while doing nothing; the default
+/// is now literally `0.0` and the numeric behaviour is unchanged.
 #[test]
-fn msqrob_auto_ridge_lambda_is_zero() {
+fn msqrob_default_ridge_lambda_applies_no_shrinkage() {
     let tmp = tempfile::tempdir().unwrap();
     let input = tmp.path().join("canonical");
-    let output = tmp.path().join("auto_out");
+    let output = tmp.path().join("default_out");
     write_peptide_fixture(&input);
     std::fs::create_dir_all(&output).unwrap();
 
@@ -225,12 +229,15 @@ fn msqrob_auto_ridge_lambda_is_zero() {
     ]);
     assert!(
         out.status.success(),
-        "auto msqrob run failed:\n{}",
+        "default msqrob run failed:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     let (_, rows) = parse_tsv(&output.join("de_results.tsv"));
     for row in rows {
-        assert_eq!(row["ridge_lambda"], "0", "auto should default to 0");
+        assert_eq!(
+            row["ridge_lambda"], "0",
+            "default should apply no shrinkage"
+        );
     }
 }
 
@@ -293,5 +300,209 @@ fn msqrob_refuses_missing_peptide_files() {
     assert!(
         stderr.contains("--peptide-measurements"),
         "expected peptide-measurements complaint: {stderr}"
+    );
+}
+
+// ---- --ridge-lambda auto is not implemented ---------------------------
+//
+// `auto` used to be the flag's DEFAULT and silently resolved to 0.0, so
+// every `de` run recorded `ridge-lambda: auto` in its sidecar whether or
+// not msqrob ran, and a user who chose `auto` got no shrinkage and no
+// notice. The default is now the honest `0.0`; `auto` is only ever
+// present because someone asked for it, and asking gets an answer.
+
+/// Minimal two-group canonical dir with real abundances, for exercising
+/// non-msqrob paths (the peptide fixture writes an empty
+/// `measurements.tsv` on purpose).
+fn write_two_group_fixture(dir: &Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    let mut samples =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
+    for i in 1..=12 {
+        let cond = if i <= 6 { "A" } else { "B" };
+        samples.push_str(&format!("S{i:02}\tS{i:02}\t{cond}\t0\tplasma\t{i}\n"));
+    }
+    std::fs::write(dir.join("samples.tsv"), samples).unwrap();
+    std::fs::write(
+        dir.join("proteins.tsv"),
+        "platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n\
+         olink_explore_ngs\tA001\tQ00001\tG001\tP1\t\n\
+         olink_explore_ngs\tA002\tQ00002\tG002\tP1\t\n",
+    )
+    .unwrap();
+    let mut m = String::from(
+        "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\t\
+         abundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\t\
+         detection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n",
+    );
+    let mut order = 0;
+    for i in 1..=12 {
+        for (j, assay) in ["A001", "A002"].iter().enumerate() {
+            order += 1;
+            // Group B shifted up on A001; A002 is flat.
+            let base = if j == 0 && i > 6 { 3.0 } else { 1.0 };
+            let v = base + (i as f64) * 0.01 + (j as f64) * 0.5;
+            m.push_str(&format!(
+                "olink_explore_ngs\tS{i:02}\t{assay}\tG{n:03}\tP1\t{v:.6}\t{v:.6}\t{v:.6}\t\
+                 log2_npx\tPASS\tPASS\t\t0\t0\t\t\t{order}\n",
+                n = j + 1
+            ));
+        }
+    }
+    std::fs::write(dir.join("measurements.tsv"), m).unwrap();
+}
+
+fn read_sidecar(output_dir: &Path) -> serde_json::Value {
+    let p = output_dir.join("de_results.tsv.run.json");
+    let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
+    serde_json::from_str(&text).expect("parse sidecar")
+}
+
+#[test]
+fn msqrob_refuses_ridge_lambda_auto_as_unimplemented() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    let output = tmp.path().join("auto_reject");
+    write_peptide_fixture(&input);
+    std::fs::create_dir_all(&output).unwrap();
+
+    let out = run_atman(&[
+        "de",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--test",
+        "msqrob",
+        "--groups",
+        "A-B",
+        "--peptide-measurements",
+        input.join("peptide_measurements.tsv").to_str().unwrap(),
+        "--peptide-metadata",
+        input.join("peptides.tsv").to_str().unwrap(),
+        "--ridge-lambda",
+        "auto",
+        "--min-peptides",
+        "2",
+        "--min-pairs",
+        "4",
+    ]);
+    assert!(
+        !out.status.success(),
+        "--ridge-lambda auto must be refused under --test msqrob, not silently treated as 0.0"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("not implemented") && stderr.contains("0.0"),
+        "refusal must say auto is unimplemented and name the no-shrinkage value; got: {stderr}"
+    );
+}
+
+#[test]
+fn non_msqrob_run_warns_but_succeeds_on_explicit_ridge_lambda_auto() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    let output = tmp.path().join("auto_warn");
+    write_two_group_fixture(&input);
+    std::fs::create_dir_all(&output).unwrap();
+
+    let out = run_atman(&[
+        "de",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--test",
+        "welch-t",
+        "--groups",
+        "A-B",
+        "--ridge-lambda",
+        "auto",
+        "--min-pairs",
+        "4",
+    ]);
+    assert!(
+        out.status.success(),
+        "the flag is inert outside msqrob and must not fail the run:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--ridge-lambda") && stderr.contains("ignored"),
+        "an inert --ridge-lambda should say so on stderr; got: {stderr}"
+    );
+}
+
+#[test]
+fn sidecar_records_resolved_ridge_lambda_only_when_msqrob_ran() {
+    // msqrob run: the resolved numeric penalty is recorded.
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    let output = tmp.path().join("resolved");
+    write_peptide_fixture(&input);
+    std::fs::create_dir_all(&output).unwrap();
+    let out = run_atman(&[
+        "de",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output-dir",
+        output.to_str().unwrap(),
+        "--test",
+        "msqrob",
+        "--groups",
+        "A-B",
+        "--peptide-measurements",
+        input.join("peptide_measurements.tsv").to_str().unwrap(),
+        "--peptide-metadata",
+        input.join("peptides.tsv").to_str().unwrap(),
+        "--ridge-lambda",
+        "0.5",
+        "--min-peptides",
+        "2",
+        "--min-pairs",
+        "4",
+    ]);
+    assert!(
+        out.status.success(),
+        "msqrob run failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let j = read_sidecar(&output);
+    assert_eq!(j["args"]["ridge-lambda"], "0.5");
+    assert_eq!(
+        j["args"]["ridge-lambda-resolved"], 0.5,
+        "the executed penalty belongs in the sidecar as a number"
+    );
+
+    // Non-msqrob run: the shrinkage path never executed, so the resolved
+    // value must be null rather than implying msqrob ran.
+    let tmp2 = tempfile::tempdir().unwrap();
+    let input2 = tmp2.path().join("canonical");
+    let output2 = tmp2.path().join("unresolved");
+    write_two_group_fixture(&input2);
+    std::fs::create_dir_all(&output2).unwrap();
+    let out2 = run_atman(&[
+        "de",
+        "--input-dir",
+        input2.to_str().unwrap(),
+        "--output-dir",
+        output2.to_str().unwrap(),
+        "--test",
+        "welch-t",
+        "--groups",
+        "A-B",
+        "--min-pairs",
+        "4",
+    ]);
+    assert!(
+        out2.status.success(),
+        "welch-t run failed:\n{}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+    let j2 = read_sidecar(&output2);
+    assert!(
+        j2["args"]["ridge-lambda-resolved"].is_null(),
+        "a run that never entered the shrinkage path must record null, got {}",
+        j2["args"]["ridge-lambda-resolved"]
     );
 }

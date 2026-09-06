@@ -126,9 +126,14 @@ pub struct Args {
     pub(super) peptide_metadata: Option<PathBuf>,
 
     /// L2 ridge penalty on non-intercept fixed-effect coefficients
-    /// for `--test msqrob`. Numeric value ≥ 0 or `auto` (currently
-    /// equivalent to `0.0`; data-driven selection is a follow-on).
-    #[arg(long, default_value = "auto")]
+    /// for `--test msqrob`. A number ≥ 0; `0.0` (the default) means no
+    /// shrinkage. `auto` is **not implemented** and is refused rather
+    /// than silently treated as `0.0` — data-driven selection is a
+    /// follow-on. Ignored (with a warning) by every test other than
+    /// `msqrob`; the penalty actually applied is recorded as
+    /// `ridge-lambda-resolved` in the run sidecar, and is null when the
+    /// shrinkage path did not execute.
+    #[arg(long, default_value = "0.0")]
     pub(super) ridge_lambda: String,
 
     /// Minimum distinct peptides observed per protein required for

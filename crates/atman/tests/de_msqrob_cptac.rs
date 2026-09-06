@@ -269,8 +269,10 @@ fn msqrob_recovers_ups1_spike_in_on_cptac_study_6() {
         input.join("peptide_measurements.tsv").to_str().unwrap(),
         "--peptide-metadata",
         input.join("peptides.tsv").to_str().unwrap(),
+        // Was `auto`, which silently meant no shrinkage; now spelled
+        // literally so the fixture states the penalty it actually uses.
         "--ridge-lambda",
-        "auto",
+        "0.0",
         "--min-peptides",
         "2",
         "--min-pairs",
