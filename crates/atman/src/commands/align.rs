@@ -425,7 +425,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         "cosine-centered" | "cosine-centred" => AlignMetric::CosineCentered,
         "jaccard" => AlignMetric::Jaccard,
         "spearman" => AlignMetric::Spearman,
-        other => bail!("--metric {other:?}; expected cosine, jaccard, or spearman"),
+        other => bail!("--metric {other:?}; expected cosine, cosine-centered (alias cosine-centred), jaccard, or spearman"),
     };
     // Resolved effective `--transform-clamp`, for the sidecar's provenance
     // record (the RESOLVED parameter set — `Some(DEFAULT_EXP2_CLIP_CLAMP)`
@@ -444,7 +444,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
                 "frobenius" => BetaLoss::Frobenius,
                 "kullback-leibler" | "kl" => BetaLoss::KullbackLeibler,
                 other => bail!(
-                    "--beta-loss {:?}: expected `frobenius` or `kullback-leibler`",
+                    "--beta-loss {:?}: expected `frobenius` or `kullback-leibler` (alias `kl`)",
                     other
                 ),
             };
@@ -1456,7 +1456,7 @@ fn run_project(args: ProjectArgs) -> Result<()> {
             }
             ProjectionMethod::Ridge(args.ridge_lambda)
         }
-        other => bail!("--projection {other:?}; expected ls or ridge"),
+        other => bail!("--projection {other:?}; expected ls (alias least-squares) or ridge"),
     };
 
     // Parse atlas-loadings, read each per-cohort loadings TSV into
