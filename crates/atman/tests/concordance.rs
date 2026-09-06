@@ -216,3 +216,80 @@ fn concordance_tree_over_effect_tables() {
     assert!(!r.status.success());
     assert!(String::from_utf8_lossy(&r.stderr).contains("--tree-stage"));
 }
+
+// ---- undefined tree distances -----------------------------------------
+//
+// Contributed by the karna manuscript session, which found this shape in
+// its own pipeline: an empty unit is silently recoded as a negative
+// observation by almost every aggregation, and no parameter is involved.
+// Here the unit is a leaf pair's shared feature set.
+//
+// Scope, measured rather than assumed: the PAIR-level check below
+// already refused disjoint tables before the tree code ran, so the point
+// estimate was never exposed. The gap was inside the bootstrap, where a
+// feature resample can strip a pair that passes the full-data check down
+// below the floor; that replicate used to score the pair as maximally
+// dissimilar (`1 - spearman(...).unwrap_or(0.0)`) and feed it into clade
+// support. Those replicates are now skipped and counted.
+
+#[test]
+fn disjoint_tables_are_refused_before_a_tree_is_built() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Two effect tables over disjoint feature sets: nothing is shared,
+    // so no correlation between them exists.
+    let a = tmp.path().join("a.tsv");
+    let b = tmp.path().join("b.tsv");
+    let c = tmp.path().join("c.tsv");
+    std::fs::write(
+        &a,
+        "gene_symbol\teffect_size\tq_value\nG1\t1.0\t0.01\nG2\t2.0\t0.01\nG3\t3.0\t0.01\nG4\t4.0\t0.01\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &b,
+        "gene_symbol\teffect_size\tq_value\nG1\t1.1\t0.01\nG2\t2.1\t0.01\nG3\t2.9\t0.01\nG4\t4.2\t0.01\n",
+    )
+    .unwrap();
+    // Disjoint features: no overlap with a or b at all.
+    std::fs::write(
+        &c,
+        "gene_symbol\teffect_size\tq_value\nZ1\t1.0\t0.01\nZ2\t2.0\t0.01\nZ3\t3.0\t0.01\nZ4\t4.0\t0.01\n",
+    )
+    .unwrap();
+
+    let manifest = tmp.path().join("manifest.tsv");
+    std::fs::write(
+        &manifest,
+        format!(
+            "label\tpath\teffect_col\tfeature_col\tq_col\tstage\n\
+             A\t{}\teffect_size\t\tq_value\ts\n\
+             B\t{}\teffect_size\t\tq_value\ts\n\
+             C\t{}\teffect_size\t\tq_value\ts\n",
+            a.display(),
+            b.display(),
+            c.display()
+        ),
+    )
+    .unwrap();
+
+    let out = run_atman(&[
+        "concordance",
+        "--manifest",
+        manifest.to_str().unwrap(),
+        "--output",
+        tmp.path().join("out.tsv").to_str().unwrap(),
+        "--output-tree-linkage",
+        tmp.path().join("linkage.tsv").to_str().unwrap(),
+        "--n-bootstrap",
+        "10",
+    ]);
+    assert!(
+        !out.status.success(),
+        "a leaf pair with no shared features must not be scored as maximally distant"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("shares fewer than"),
+        "the refusal must name the pair and the overlap floor; got:\n{stderr}"
+    );
+}

@@ -147,6 +147,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Bootstrap replicates could score an incomputable distance as a
+  maximal one.** In `concordance --output-tree-linkage` and `axes tree`,
+  a pair whose distance could not be computed fell back to
+  `1 - 0.0 = 1.0` — maximally dissimilar. That turns an absence of
+  evidence into a definite claim. The point estimate was already safe
+  (`concordance` refuses table pairs sharing fewer than three features
+  up front, and a zero-length displacement vector is rare), but the
+  bootstrap was not: a feature resample can strip a pair that passes the
+  full-data check below the floor, and a subject resample can collapse a
+  leaf to a zero vector. Those replicates were silently pushing pairs
+  apart inside clade support. Both distance functions now return an
+  error instead of a fallback; the point estimate refuses with the pair
+  named, and a replicate that cannot be computed is skipped, warned
+  about, and excluded from the support denominator, which previously
+  used the requested replicate count rather than the usable one.
+  The shape was contributed by the karna manuscript session, which found
+  it in an unrelated pipeline: an empty unit is silently recoded as a
+  negative observation by almost every aggregation, and no parameter is
+  involved.
 - **MNAR-ICA seed stability was structurally unable to report
   stability.** With `--missingness-model abundance-conditional`, the
   alternative seeds behind the stability ranking ran plain FastICA while

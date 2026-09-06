@@ -10,6 +10,11 @@ use anyhow::{anyhow, bail, Context, Result};
 use atman_core::contrast::{percentile, spearman_with_p};
 use atman_core::stats::{jaccard_top_n, spearman};
 use atman_core::{derive_sub_seed, SplitMix64};
+
+/// Minimum number of features with an effect in BOTH leaves before a
+/// rank correlation between them is treated as meaningful. Below this a
+/// distance is undefined rather than large.
+const MIN_TREE_OVERLAP: usize = 3;
 use clap::Args as ClapArgs;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -443,7 +448,15 @@ pub fn run(args: Args) -> Result<()> {
                 union.iter().map(|f| t.get(f).map(|(e, _)| *e)).collect()
             })
             .collect();
-        let dissim = |idx: &[usize]| -> Vec<Vec<f64>> {
+        // Two leaves sharing too few observed features have an
+        // UNDEFINED distance, not a large one. Treating an incomputable
+        // correlation as zero correlation silently recodes "no shared
+        // data" as "maximally dissimilar", which is a definite claim
+        // where there is no evidence. It matters most inside the
+        // bootstrap: a feature resample can leave a low-overlap pair
+        // with nothing in common, and that replicate would otherwise
+        // push the pair apart and distort clade support.
+        let dissim = |idx: &[usize]| -> Result<Vec<Vec<f64>>, (usize, usize, usize)> {
             let n = effects.len();
             let mut d = vec![vec![0.0; n]; n];
             for i in 0..n {
@@ -456,27 +469,65 @@ pub fn run(args: Args) -> Result<()> {
                             y.push(b);
                         }
                     }
-                    let v = 1.0 - spearman(&x, &y).unwrap_or(0.0);
-                    d[i][j] = v;
-                    d[j][i] = v;
+                    let rho = if x.len() < MIN_TREE_OVERLAP {
+                        None
+                    } else {
+                        spearman(&x, &y)
+                    };
+                    match rho {
+                        Some(r) => {
+                            d[i][j] = 1.0 - r;
+                            d[j][i] = 1.0 - r;
+                        }
+                        None => return Err((i, j, x.len())),
+                    }
                 }
             }
-            d
+            Ok(d)
         };
         let all: Vec<usize> = (0..union.len()).collect();
-        let reference = crate::tree::Tree::from_dissimilarity(tree_labels.clone(), &dissim(&all));
+        let reference_d = dissim(&all).map_err(|(i, j, overlap)| {
+            anyhow::anyhow!(
+                "concordance --tree: leaves {:?} and {:?} share only {overlap} feature(s) with an \
+                 effect in both (minimum {MIN_TREE_OVERLAP}), so their distance is undefined. A \
+                 tree cannot be built over an undefined distance, and scoring it as maximally \
+                 dissimilar would assert something the data does not show. Restrict --labels to \
+                 comparable tables, or widen the shared feature set.",
+                tree_labels[i],
+                tree_labels[j],
+            )
+        })?;
+        let reference = crate::tree::Tree::from_dissimilarity(tree_labels.clone(), &reference_d);
         let mut rng = SplitMix64::new(derive_sub_seed(args.seed, usize::MAX / 2));
-        let replicates: Vec<crate::tree::Tree> = (0..args.n_bootstrap)
-            .map(|_| {
-                let idx: Vec<usize> = (0..union.len()).map(|_| rng.bounded(union.len())).collect();
-                crate::tree::Tree::from_dissimilarity(tree_labels.clone(), &dissim(&idx))
-            })
-            .collect();
+        // A resample that leaves any pair below the overlap floor is
+        // skipped rather than scored: counting it would let feature
+        // resampling, not the data, decide clade support.
+        let mut n_bootstrap_skipped = 0usize;
+        let mut replicates: Vec<crate::tree::Tree> = Vec::with_capacity(args.n_bootstrap);
+        for _ in 0..args.n_bootstrap {
+            let idx: Vec<usize> = (0..union.len()).map(|_| rng.bounded(union.len())).collect();
+            match dissim(&idx) {
+                Ok(d) => replicates.push(crate::tree::Tree::from_dissimilarity(
+                    tree_labels.clone(),
+                    &d,
+                )),
+                Err(_) => n_bootstrap_skipped += 1,
+            }
+        }
+        if n_bootstrap_skipped > 0 {
+            eprintln!(
+                "concordance: tree stage={stage} warning: {n_bootstrap_skipped} of {} bootstrap \
+                 replicates left some leaf pair below the {MIN_TREE_OVERLAP}-feature overlap \
+                 floor and were skipped; clade support is over {} replicates.",
+                args.n_bootstrap,
+                replicates.len(),
+            );
+        }
         let support = crate::tree::clade_support(&reference, &replicates);
         crate::tree::write_linkage(linkage_path, &reference)?;
         outputs.push(linkage_path.clone());
         if let Some(p) = &args.output_tree_support {
-            crate::tree::write_support(p, &reference, &support, args.n_bootstrap)?;
+            crate::tree::write_support(p, &reference, &support, replicates.len())?;
             outputs.push(p.clone());
         }
         if let Some(p) = &args.output_tree_newick {

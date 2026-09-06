@@ -95,13 +95,27 @@ fn leaf_vector(
     }
 }
 
-fn dissimilarity(vectors: &[Vec<f64>], cosine_distance: bool) -> Vec<Vec<f64>> {
+/// Cosine distance between leaves, or `Err(i, j)` when a pair's cosine
+/// is undefined.
+///
+/// `cosine` returns `None` for a zero-norm vector — a leaf with no
+/// displacement at all, which has no direction. Scoring that as
+/// `1.0 - 0.0 = 1.0` would place a leaf carrying no signal at maximum
+/// distance from everything, i.e. assert dissimilarity from an absence
+/// of evidence. Euclidean distance is always defined and is unaffected.
+fn dissimilarity(
+    vectors: &[Vec<f64>],
+    cosine_distance: bool,
+) -> Result<Vec<Vec<f64>>, (usize, usize)> {
     let n = vectors.len();
     let mut d = vec![vec![0.0; n]; n];
     for i in 0..n {
         for j in (i + 1)..n {
             let v = if cosine_distance {
-                1.0 - cosine(&vectors[i], &vectors[j]).unwrap_or(0.0)
+                match cosine(&vectors[i], &vectors[j]) {
+                    Some(c) => 1.0 - c,
+                    None => return Err((i, j)),
+                }
             } else {
                 vectors[i]
                     .iter()
@@ -114,7 +128,7 @@ fn dissimilarity(vectors: &[Vec<f64>], cosine_distance: bool) -> Vec<Vec<f64>> {
             d[j][i] = v;
         }
     }
-    d
+    Ok(d)
 }
 
 pub fn run(args: TreeArgs) -> Result<()> {
@@ -166,11 +180,24 @@ pub fn run(args: TreeArgs) -> Result<()> {
         .iter()
         .map(|s| leaf_vector(&cols, &s.case, &s.control, displacement))
         .collect();
-    let reference =
-        Tree::from_dissimilarity(labels.clone(), &dissimilarity(&vectors, cosine_distance));
+    let reference_d = dissimilarity(&vectors, cosine_distance).map_err(|(i, j)| {
+        anyhow::anyhow!(
+            "axes tree: cosine distance between {:?} and {:?} is undefined because at least one \
+             has a zero-length vector — no displacement at all, so no direction. Scoring that as \
+             maximally distant would assert dissimilarity from an absence of signal. Use \
+             --distance euclidean, or drop the empty group.",
+            labels[i],
+            labels[j],
+        )
+    })?;
+    let reference = Tree::from_dissimilarity(labels.clone(), &reference_d);
 
     let mut rng = SplitMix64::new(args.seed);
     let mut replicates: Vec<Tree> = Vec::with_capacity(args.n_bootstrap);
+    // A resample that collapses a leaf to a zero vector is skipped, not
+    // scored as maximally distant: otherwise resampling, rather than the
+    // data, would drive clade support apart.
+    let mut n_bootstrap_skipped = 0usize;
     for _ in 0..args.n_bootstrap {
         let vs: Vec<Vec<f64>> = selections
             .iter()
@@ -180,17 +207,25 @@ pub fn run(args: TreeArgs) -> Result<()> {
                 leaf_vector(&cols, case, control, displacement)
             })
             .collect();
-        replicates.push(Tree::from_dissimilarity(
-            labels.clone(),
-            &dissimilarity(&vs, cosine_distance),
-        ));
+        match dissimilarity(&vs, cosine_distance) {
+            Ok(d) => replicates.push(Tree::from_dissimilarity(labels.clone(), &d)),
+            Err(_) => n_bootstrap_skipped += 1,
+        }
+    }
+    if n_bootstrap_skipped > 0 {
+        eprintln!(
+            "axes tree: warning: {n_bootstrap_skipped} of {} bootstrap replicates collapsed a \
+             leaf to a zero vector and were skipped; clade support is over {} replicates.",
+            args.n_bootstrap,
+            replicates.len(),
+        );
     }
     let support = clade_support(&reference, &replicates);
 
     write_linkage(&args.output_linkage, &reference)?;
     let mut outputs = vec![args.output_linkage.clone()];
     if let Some(p) = &args.output_support {
-        write_support(p, &reference, &support, args.n_bootstrap)?;
+        write_support(p, &reference, &support, replicates.len())?;
         outputs.push(p.clone());
     }
     if let Some(p) = &args.output_newick {
