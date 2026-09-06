@@ -269,6 +269,25 @@ pub struct JointIterationRecord {
     /// `max(|Δbeta0|, |Δbeta1|)` against the previous iteration; `NaN`
     /// for the first, which has no predecessor.
     pub delta: f64,
+    /// Largest absolute change in an imputed (undetected) cell against
+    /// the previous iteration; `NaN` for the first.
+    ///
+    /// This is the quantity that actually iterates. The detection curve
+    /// is a readout: it is refit each round but never re-enters the
+    /// update, so `delta` above measures an observable rather than the
+    /// state. Convergence of the loop is a statement about the imputed
+    /// matrix, and this is the number that reports it.
+    pub imputation_delta: f64,
+    /// Root-mean-square gap between imputed cells and their own ICA
+    /// reconstruction.
+    ///
+    /// Iterated reconstruction-imputation has a degenerate attractor:
+    /// missing cells converge to exactly their rank-`k` reconstruction,
+    /// at which point they carry no independent information and the fit
+    /// explains them perfectly by construction. This value falling to
+    /// zero identifies that the loop is approaching that attractor,
+    /// which is a reason to stop early rather than a sign of health.
+    pub reconstruction_gap: f64,
 }
 
 pub struct MnarIcaResult {
@@ -277,6 +296,10 @@ pub struct MnarIcaResult {
     /// Fitted detection curve from the final joint iteration.
     pub detection_curve: DetectionCurve,
     /// Number of joint (impute → fit → ICA) iterations completed.
+    ///
+    /// NOTE: the detection curve is refit every round but does NOT
+    /// re-enter the update — the inner ICA runs with uniform weights.
+    /// The iterated state is the imputed matrix; the curve is a readout.
     pub joint_iterations: usize,
     /// Whether the joint loop converged before `max_joint_iter`.
     pub joint_converged: bool,
@@ -377,7 +400,11 @@ pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaR
         beta0: curve.beta0,
         beta1: curve.beta1,
         delta: f64::NAN,
+        imputation_delta: f64::NAN,
+        reconstruction_gap: f64::NAN,
     }];
+    // Previous round's imputed matrix, for the state-space delta.
+    let mut prev_imputed: Option<Vec<Vec<f64>>> = None;
 
     // Joint iteration: re-impute via ICA reconstruction, refit curve, re-run.
     // The detection curve informs the re-imputation: we use the ICA
@@ -390,6 +417,22 @@ pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaR
 
         // Re-impute missing cells using the ICA reconstruction.
         let reimputed = reimpute_from_ica(&ica_result, abundance, &detected, n, p);
+        // How far the state moved, over undetected cells only.
+        let imputation_delta = match &prev_imputed {
+            Some(prev) => {
+                let mut worst = 0.0_f64;
+                for i in 0..n {
+                    for j in 0..p {
+                        if !detected[i][j] {
+                            worst = worst.max((reimputed[i][j] - prev[i][j]).abs());
+                        }
+                    }
+                }
+                worst
+            }
+            None => f64::NAN,
+        };
+        prev_imputed = Some(reimputed.clone());
 
         // Refit detection curve on the re-imputed matrix.
         let log_ab_mat2 = log_abundance_for_fit(&reimputed);
@@ -410,11 +453,37 @@ pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaR
         let delta = (curve.beta0 - prev_beta0)
             .abs()
             .max((curve.beta1 - prev_beta1).abs());
+        // Gap between the imputed cells and the reconstruction of the
+        // matrix they were just used to fit. Zero is the degenerate
+        // attractor, not success.
+        let reconstruction_gap = {
+            let mut sum_sq = 0.0_f64;
+            let mut count = 0usize;
+            for i in 0..n {
+                for j in 0..p {
+                    if !detected[i][j] {
+                        let mut recon = ica_result.mean[j];
+                        for c in 0..ica_result.sources[i].len() {
+                            recon += ica_result.sources[i][c] * ica_result.mixing[j][c];
+                        }
+                        sum_sq += (reimputed[i][j] - recon).powi(2);
+                        count += 1;
+                    }
+                }
+            }
+            if count == 0 {
+                f64::NAN
+            } else {
+                (sum_sq / count as f64).sqrt()
+            }
+        };
         joint_trace.push(JointIterationRecord {
             iteration: joint_iterations,
             beta0: curve.beta0,
             beta1: curve.beta1,
             delta,
+            imputation_delta,
+            reconstruction_gap,
         });
         if delta < config.joint_tol {
             joint_converged = true;

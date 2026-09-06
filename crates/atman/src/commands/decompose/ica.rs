@@ -382,16 +382,28 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
             .parent()
             .unwrap_or(Path::new("."))
             .join("mnar_joint_trace.tsv");
-        let mut buf = String::from("iteration\tbeta0\tbeta1\tdelta\tconverged_here\n");
+        let mut buf = String::from(
+            "iteration\tbeta0\tbeta1\tdelta\timputation_delta\treconstruction_gap\tconverged_here\n",
+        );
         for (i, r) in mnar_trace.iter().enumerate() {
             let is_last = i + 1 == mnar_trace.len();
             buf.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 r.iteration,
                 format_float(r.beta0),
                 format_float(r.beta1),
                 if r.delta.is_finite() {
                     format_float(r.delta)
+                } else {
+                    "NA".to_string()
+                },
+                if r.imputation_delta.is_finite() {
+                    format_float(r.imputation_delta)
+                } else {
+                    "NA".to_string()
+                },
+                if r.reconstruction_gap.is_finite() {
+                    format_float(r.reconstruction_gap)
                 } else {
                     "NA".to_string()
                 },

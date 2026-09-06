@@ -8,6 +8,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **MNAR joint trace now records the state, not only the readout.**
+  `mnar_joint_trace.tsv` gains `imputation_delta` (largest change in an
+  imputed cell against the previous round) and `reconstruction_gap`
+  (RMS distance between imputed cells and their own ICA
+  reconstruction). The existing `delta` column tracks the detection
+  curve, which is refit every round but never re-enters the update —
+  the inner ICA runs with uniform weights — so the iterated state is the
+  imputed matrix and `delta` was reporting an observable rather than the
+  thing that moves. `reconstruction_gap` exists because iterated
+  reconstruction-imputation has a degenerate attractor: missing cells
+  converge to exactly their rank-`k` reconstruction, at which point they
+  carry no independent information and the fit explains them by
+  construction. That gap approaching zero is a reason to stop, not a
+  sign of health, and no previous output distinguished it from
+  convergence.
 - **`atman decompose ica --joint-tol`, and a per-iteration MNAR joint
   trace.** The outer joint loop's tolerance was hard-coded at 1e-6 and
   only its final verdict was reported, so a run that stopped at

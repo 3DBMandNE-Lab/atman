@@ -186,7 +186,10 @@ fn mnar_writes_a_per_iteration_joint_trace() {
     assert!(trace.is_file(), "no mnar_joint_trace.tsv was written");
     let text = std::fs::read_to_string(&trace).unwrap();
     let header = text.lines().next().unwrap();
-    assert_eq!(header, "iteration\tbeta0\tbeta1\tdelta\tconverged_here");
+    assert_eq!(
+        header,
+        "iteration\tbeta0\tbeta1\tdelta\timputation_delta\treconstruction_gap\tconverged_here"
+    );
     let rows: Vec<&str> = text.lines().skip(1).filter(|l| !l.is_empty()).collect();
     assert!(!rows.is_empty(), "trace has no iterations");
     // First iteration has no predecessor, so no step size.
