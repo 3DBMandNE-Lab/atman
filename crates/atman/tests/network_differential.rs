@@ -302,3 +302,173 @@ fn network_differential_requires_two_cohorts() {
     ]);
     assert!(!r.status.success(), "single-cohort input must error");
 }
+
+// ---- edge-pairwise bounded top-k ------------------------------------
+//
+// `--top-rows K` must produce exactly the first K data lines of the
+// uncapped output (same order, same bytes), and the uncapped path must
+// refuse loudly — not die silently — when the full row set would exceed
+// the materialisation limit.
+
+/// Generic cohort writer: `n_proteins` proteins, `n_subjects` subjects,
+/// per-subject driver shared by every fourth protein block so that
+/// planted structure differs by `block`.
+fn write_cohort_n(dir: &Path, block: usize, n_subjects: usize, n_proteins: usize) {
+    std::fs::create_dir_all(dir).unwrap();
+    let mut samples =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
+    for i in 1..=n_subjects {
+        samples.push_str(&format!("S{i:03}\tS{i:03}\tCase\t0\ttissue\t{i}\n"));
+    }
+    std::fs::write(dir.join("samples.tsv"), samples).unwrap();
+
+    let mut proteins = String::from("platform\tassay_id\tuniprot\tgene_symbol\tpanel\tpanel_lot\n");
+    for j in 0..n_proteins {
+        proteins.push_str(&format!(
+            "cptac_tmt_proteome\tP{j:05}\t\tP{j:05}\tsynth\t\n"
+        ));
+    }
+    std::fs::write(dir.join("proteins.tsv"), proteins).unwrap();
+
+    let mut measurements = String::with_capacity(n_subjects * n_proteins * 96);
+    measurements.push_str(
+        "platform\tsample_id\tassay_id\tgene_symbol\tpanel\tnpx_source_str\tabundance\tabundance_raw\tabundance_unit\tqc_sample\tqc_assay\tdetection_limit\tbelow_lod\tdropped_by_qc\tplate_id\tpanel_lot\tingest_order\n",
+    );
+    let mut order = 0u64;
+    for i in 1..=n_subjects {
+        let s = ((i as f64) * 1.7).sin();
+        let n = ((i as f64) * 0.31).cos() * 0.05;
+        for j in 0..n_proteins {
+            order += 1;
+            let tight = (j / 4) % 3 == block;
+            let value = if tight {
+                s + (j as f64) * 0.001 + n
+            } else {
+                ((i as f64) * (j as f64 + 1.7)).cos()
+            };
+            measurements.push_str(&format!(
+                "cptac_tmt_proteome\tS{i:03}\tP{j:05}\tP{j:05}\tsynth\t{v:.6}\t{v:.6}\t{v:.6}\tlog2_intensity\tPASS\tPASS\t\t0\t0\t\t\t{order}\n",
+                v = value
+            ));
+        }
+    }
+    std::fs::write(dir.join("measurements.tsv"), measurements).unwrap();
+}
+
+fn run_edge_pairwise(inputs: &str, top_rows: usize, out: &Path) -> Output {
+    run_atman(&[
+        "network",
+        "differential",
+        "--inputs",
+        inputs,
+        "--mode",
+        "edge-pairwise",
+        "--min-overlap",
+        "5",
+        "--top-rows",
+        &top_rows.to_string(),
+        "--output",
+        &out.display().to_string(),
+    ])
+}
+
+#[test]
+fn network_differential_edge_pairwise_top_rows_equals_prefix_of_uncapped_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs: Vec<_> = (0..3)
+        .map(|c| tmp.path().join(format!("C{}", c + 1)))
+        .collect();
+    write_cohort_n(&dirs[0], 0, 30, 12);
+    write_cohort_n(&dirs[1], 1, 25, 12);
+    write_cohort_n(&dirs[2], 2, 20, 12);
+    let inputs = format!(
+        "C1={},C2={},C3={}",
+        dirs[0].display(),
+        dirs[1].display(),
+        dirs[2].display()
+    );
+    let full_path = tmp.path().join("full.tsv");
+    let r = run_edge_pairwise(&inputs, 0, &full_path);
+    assert!(
+        r.status.success(),
+        "uncapped: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let full = std::fs::read_to_string(&full_path).unwrap();
+    let full_lines: Vec<&str> = full.lines().collect();
+    // 66 edges × 3 cohort pairs.
+    assert_eq!(full_lines.len(), 1 + 66 * 3, "uncapped row count");
+
+    for k in [1usize, 7, 50, 197, 198, 500] {
+        let capped_path = tmp.path().join(format!("cap{k}.tsv"));
+        let r = run_edge_pairwise(&inputs, k, &capped_path);
+        assert!(
+            r.status.success(),
+            "cap {k}: {}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+        let capped = std::fs::read_to_string(&capped_path).unwrap();
+        let want: String = full_lines
+            .iter()
+            .take(1 + k.min(198))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        assert_eq!(
+            capped, want,
+            "--top-rows {k} must be the byte-identical prefix"
+        );
+    }
+}
+
+/// Reproduces the CPTAC pan-cancer envelope that killed v1.0.0 silently:
+/// 6 cohorts × 6,700 shared features (22.4M edges × 15 cohort pairs ≈
+/// 336M candidate rows). Capped at 1e5 rows the run must succeed with a
+/// bounded heap; uncapped it must refuse with the candidate count and a
+/// pointer to `--top-rows` rather than allocate. Ignored by default: it
+/// takes minutes and several GB for the correlation matrices. Run with
+/// `cargo test --release --test network_differential -- --ignored`.
+#[test]
+#[ignore]
+fn network_differential_edge_pairwise_at_cptac_scale_caps_and_refuses_uncapped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let n_features = 6_700usize;
+    let dirs: Vec<_> = (0..6)
+        .map(|c| tmp.path().join(format!("K{}", c + 1)))
+        .collect();
+    for (c, d) in dirs.iter().enumerate() {
+        write_cohort_n(d, c % 3, 20, n_features);
+    }
+    let inputs = dirs
+        .iter()
+        .enumerate()
+        .map(|(c, d)| format!("K{}={}", c + 1, d.display()))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let capped_path = tmp.path().join("capped.tsv");
+    let r = run_edge_pairwise(&inputs, 100_000, &capped_path);
+    assert!(
+        r.status.success(),
+        "capped: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let n_lines = std::fs::read_to_string(&capped_path)
+        .unwrap()
+        .lines()
+        .count();
+    assert_eq!(n_lines, 1 + 100_000);
+
+    let uncapped_path = tmp.path().join("uncapped.tsv");
+    let r = run_edge_pairwise(&inputs, 0, &uncapped_path);
+    assert!(
+        !r.status.success(),
+        "uncapped run must refuse, not succeed or die silently"
+    );
+    let err = String::from_utf8_lossy(&r.stderr);
+    let expected_rows = n_features * (n_features - 1) / 2 * 15;
+    assert!(
+        err.contains(&expected_rows.to_string()) && err.contains("--top-rows"),
+        "refusal must state the candidate row count and point to --top-rows; got: {err}"
+    );
+    assert!(!uncapped_path.exists(), "no partial output on refusal");
+}

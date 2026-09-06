@@ -96,6 +96,28 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Streaming variant of [`atomic_write`]: `write` receives a buffered
+/// writer over a tempfile in the target directory; on success the
+/// tempfile is renamed into place, on error nothing is left at `path`.
+/// Use it when the content is too large to assemble in memory first.
+pub fn atomic_write_with(
+    path: &Path,
+    write: impl FnOnce(&mut dyn Write) -> Result<()>,
+) -> Result<()> {
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let tmp = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("creating tempfile in {:?}", parent))?;
+    {
+        let mut buf = std::io::BufWriter::with_capacity(1 << 20, tmp.as_file());
+        write(&mut buf)?;
+        buf.flush()
+            .with_context(|| format!("flushing tempfile for {:?}", path))?;
+    }
+    tmp.persist(path)
+        .with_context(|| format!("atomic rename to {:?}", path))?;
+    Ok(())
+}
+
 const LONG_TSV_HEADER: &[&str] = &[
     "platform",
     "sample_id",

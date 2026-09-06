@@ -11,24 +11,40 @@ Add new proposals as sections below. Remove entries once they land
 
 ## Open
 
-### Bounded-heap truncation for `network differential --mode edge-pairwise`
+### Parallel `align bootstrap` iterations (deterministic rayon map)
 
-`atman_core::network_differential::edge_pairwise_differential` builds
-the full per-edge × per-cohort-pair `Vec<EdgePairwiseRow>` in memory
-before the caller in `crates/atman/src/commands/network.rs` applies
-`--top-rows` truncation. On the CPTAC pan-cancer paper workload (6701
-shared features × 15 cohort pairs ≈ 336 million rows pre-truncation
-at ~150 bytes per row) this fails to complete on a 128GB machine
-regardless of `--top-rows` value because the algorithm allocates
-before the cap. `--mode edge-summary` is unaffected (its caller's
-`top_rows` truncation is reached after a per-edge bounded-state
-aggregation, not after a full row-vector materialization).
+Parked from the GBM manuscript session (2026-09-06): on the real
+six-cohort run, `--n-boot 200` with `--decomposition nmf` takes 9+
+hours single-threaded (200 iterations × 6 per-resample NMF fits,
+plus the pooled-subject jackknife for BCa acceleration).
 
-Resolution: push truncation into the algorithm via a bounded
-`BinaryHeap` of size `top_rows` keyed by `|z_diff|` descending
-(mirror the pattern used in `figures/fig5_pancancer_diffcoex/render.py`
-in the atman-paper repo for the top-K most-divergent edges over a
-22.4M-row stream). Existing CLI surface and output schema unchanged.
+The iteration loop in `crates/atman-core/src/align_bootstrap.rs`
+(`for iter in 0..params.n_boot`) is already independent per
+iteration: each iteration builds its own `Xoshiro256pp` from
+`derive_sub_seed(params.seed, iter)` and derives the per-cohort fit
+seeds from that sub-seed, so no RNG state crosses iterations. The
+only shared state is the per-PE-archetype `BootstrapAcc` (sums plus
+the `n_cohorts` series). The jackknife loop in
+`jackknife_n_cohorts` (per cohort × per dropped subject) has the
+same shape.
+
+Resolution: add `rayon` as a workspace dependency, replace both
+loops with a parallel map over the index that returns each
+iteration's per-archetype match result, then fold into the
+accumulators sequentially in index order. Byte-identical output to
+the serial path (a determinism test alongside
+`crates/atman/tests/determinism_rng_commands.rs` should assert
+this); speedup is roughly core-count×. Expose `--threads` (default:
+all cores) so replay manifests can record it. Optionally split
+`--nmf-tol` into point-estimate and per-resample tolerances — the
+bootstrap aggregates over `n_boot` fits, so a looser per-resample
+tol is defensible — but that changes numerics and needs its own
+justification.
+
+Not for the current paper's run tree: any binary change re-pins and
+breaks the single-commit replay story (everything stays at PIN2).
+Pays off for submission-time public replay and the CSF cross-cohort
+work.
 
 ### Hierarchical / nested alignment
 

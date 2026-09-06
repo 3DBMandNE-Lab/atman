@@ -11,8 +11,9 @@ use atman_core::network::{
     SimilarityMetric,
 };
 use atman_core::network_differential::{
-    edge_pairwise_differential, edge_summary_differential, module_rewiring,
-    signed_pairwise_correlations, CohortCorrelations, CohortData, SignedMetric,
+    edge_pairwise_for_each_top_k, edge_pairwise_row_count, edge_summary_differential,
+    module_rewiring, signed_pairwise_correlations, CohortCorrelations, CohortData,
+    EdgePairwiseRowRef, SignedMetric,
 };
 use atman_core::MeasurementRecord;
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
@@ -23,9 +24,17 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::io::{
-    atomic_write, format_float, hash_labeled_inputs, read_measurements_long, read_samples,
-    sidecar_path_for, write_run_sidecar,
+    atomic_write, atomic_write_with, format_float, hash_labeled_inputs, read_measurements_long,
+    read_samples, sidecar_path_for, write_run_sidecar,
 };
+
+/// Largest edge-pairwise row set the uncapped (`--top-rows 0`) path will
+/// materialise. Above this the command refuses with the candidate count
+/// instead of allocating: 22.4M edges × 15 cohort pairs (the CPTAC
+/// pan-cancer envelope) is ~336M rows and killed v1.0.0 silently on a
+/// 128 GB machine. Capped runs are unaffected — they hold `--top-rows`
+/// compact candidates regardless of input size.
+pub const MAX_UNCAPPED_EDGE_PAIRWISE_ROWS: usize = 100_000_000;
 
 #[derive(ClapArgs, Debug)]
 pub struct Args {
@@ -392,22 +401,20 @@ fn run_differential(args: DifferentialArgs) -> Result<()> {
 
     let n_rows = match args.mode {
         DifferentialMode::EdgePairwise => {
-            let mut rows = edge_pairwise_differential(&cohort_refs);
-            rows.sort_by(|a, b| {
-                b.z_diff
-                    .abs()
-                    .partial_cmp(&a.z_diff.abs())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.feature_a.cmp(&b.feature_a))
-                    .then_with(|| a.feature_b.cmp(&b.feature_b))
-                    .then_with(|| a.cohort_a.cmp(&b.cohort_a))
-                    .then_with(|| a.cohort_b.cmp(&b.cohort_b))
-            });
-            if args.top_rows > 0 && rows.len() > args.top_rows {
-                rows.truncate(args.top_rows);
+            if args.top_rows == 0 {
+                let candidates = edge_pairwise_row_count(&cohort_refs);
+                if candidates > MAX_UNCAPPED_EDGE_PAIRWISE_ROWS {
+                    bail!(
+                        "network differential --mode edge-pairwise: {candidates} candidate rows \
+                         ({} shared features × {} cohort pairs) exceed the uncapped limit of \
+                         {MAX_UNCAPPED_EDGE_PAIRWISE_ROWS} rows. Pass --top-rows N to keep the N \
+                         largest-|z_diff| rows in bounded memory, or use --mode edge-summary.",
+                        shared_features.len(),
+                        cohort_refs.len() * (cohort_refs.len() - 1) / 2,
+                    );
+                }
             }
-            write_edge_pairwise(&args.output, &rows)?;
-            rows.len()
+            write_edge_pairwise_top_k(&args.output, &cohort_refs, args.top_rows)?
         }
         DifferentialMode::EdgeSummary => {
             let mut rows = edge_summary_differential(&cohort_refs, args.min_overlap);
@@ -499,29 +506,48 @@ fn run_differential(args: DifferentialArgs) -> Result<()> {
     Ok(())
 }
 
-fn write_edge_pairwise(
+/// Stream the leading `top_rows` edge-pairwise rows (all rows when 0)
+/// straight from the bounded enumeration into `path`. Returns the number
+/// of rows written. Rows are never materialised with owned labels.
+fn write_edge_pairwise_top_k(
     path: &Path,
-    rows: &[atman_core::network_differential::EdgePairwiseRow],
-) -> Result<()> {
-    let mut buf = String::from(
-        "feature_a\tfeature_b\tcohort_a\tcohort_b\tn_a\tn_b\tcorr_a\tcorr_b\tz_diff\tp_value\n",
-    );
-    for r in rows {
-        buf.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-            r.feature_a,
-            r.feature_b,
-            r.cohort_a,
-            r.cohort_b,
-            r.n_a,
-            r.n_b,
-            format_float(r.corr_a),
-            format_float(r.corr_b),
-            format_float(r.z_diff),
-            format_float(r.p_value),
-        ));
-    }
-    atomic_write(path, buf.as_bytes())
+    cohorts: &[&CohortCorrelations],
+    top_rows: usize,
+) -> Result<usize> {
+    let mut n_rows = 0usize;
+    let mut io_err: Option<std::io::Error> = None;
+    atomic_write_with(path, |w| {
+        w.write_all(
+            b"feature_a\tfeature_b\tcohort_a\tcohort_b\tn_a\tn_b\tcorr_a\tcorr_b\tz_diff\tp_value\n",
+        )?;
+        edge_pairwise_for_each_top_k(cohorts, top_rows, |r: EdgePairwiseRowRef<'_>| {
+            if io_err.is_some() {
+                return;
+            }
+            let line = format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                r.feature_a,
+                r.feature_b,
+                r.cohort_a,
+                r.cohort_b,
+                r.n_a,
+                r.n_b,
+                format_float(r.corr_a),
+                format_float(r.corr_b),
+                format_float(r.z_diff),
+                format_float(r.p_value),
+            );
+            match w.write_all(line.as_bytes()) {
+                Ok(()) => n_rows += 1,
+                Err(e) => io_err = Some(e),
+            }
+        });
+        match io_err.take() {
+            Some(e) => Err(e).with_context(|| format!("writing {path:?}")),
+            None => Ok(()),
+        }
+    })?;
+    Ok(n_rows)
 }
 
 fn write_edge_summary(

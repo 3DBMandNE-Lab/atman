@@ -109,6 +109,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now records the *resolved* `--transform-clamp` (6.0 when `--transform
   exp2-clip` is used without an explicit clamp) instead of the raw,
   possibly-null CLI value.
+- **`atman network differential --mode edge-pairwise` no longer dies
+  silently on large inputs.** The full per-edge × per-cohort-pair row
+  vector (four owned labels per row, doubling on growth, then a second
+  full copy as the output buffer) was allocated *before* `--top-rows`
+  truncation; on the CPTAC pan-cancer workload (22.4M shared edges × 15
+  cohort pairs ≈ 336M rows) both the uncapped and the `--top-rows 100000`
+  runs exited with no output and no error on a 128 GB machine. The
+  enumeration now streams through a bounded binary heap of compact
+  index-based candidates (`atman_core::network_differential::
+  edge_pairwise_top_k` / `edge_pairwise_for_each_top_k`), so a capped run
+  holds `--top-rows` candidates regardless of input size, and rows are
+  written straight to the tempfile instead of assembled in memory. Output
+  is byte-identical to the previous sort-then-truncate path (verified
+  against the 1.1.0+ binary on a three-cohort fixture at every cap; the
+  canonical order is now `edge_pairwise_order` in core and pinned by a
+  randomized equivalence test including exact `|z_diff|` ties). The
+  uncapped path (`--top-rows 0`) counts candidates first and refuses
+  above 100M rows with the count and a pointer to `--top-rows`, replacing
+  the silent exit with a stated limit. An ignored integration test
+  reproduces the CPTAC envelope (6 cohorts × 6,700 features).
 
 ## [1.1.0] — 2026-05-30
 
