@@ -283,6 +283,45 @@ struct ManifestRow {
     /// Hash over the `<output>.run.json` sidecars that exist next to the
     /// declared outputs after the stage ran (empty when there are none).
     sidecar_hash: String,
+    /// Declared outputs that exist but carry no data row.
+    ///
+    /// Existence and non-emptiness are different audits, and a check
+    /// that conflates them gives false assurance about exactly the
+    /// stages worth inspecting: a header-only table is consumed
+    /// downstream as a run of absences rather than as a missing input.
+    n_empty_outputs: usize,
+}
+
+/// Whether a declared output exists but carries no data.
+///
+/// Two cases: zero bytes, or a `.tsv` holding nothing but its header.
+///
+/// The header rule is deliberately narrow — a single line containing a
+/// tab. Every atman writer emits a tab-separated header and then rows,
+/// so a one-line `.tsv` with a tab is a table with no rows; a one-line
+/// file *without* a tab is more likely a legitimate single-value
+/// output, and flagging it would fail a stage that did its job. Erring
+/// toward not flagging is the right direction for a check that can fail
+/// a pipeline.
+fn output_is_empty(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        // Missing is a different finding, reported separately.
+        return false;
+    };
+    if meta.len() == 0 {
+        return true;
+    }
+    if path.extension().and_then(|e| e.to_str()) != Some("tsv") {
+        return false;
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    match (lines.next(), lines.next()) {
+        (Some(header), None) => header.contains('\t'),
+        _ => false,
+    }
 }
 
 fn execute_stage(
@@ -329,6 +368,34 @@ fn execute_stage(
         );
         exit_code = 2;
     }
+    // Existence was checked above; content is a separate question.
+    let empty: Vec<&String> = stage
+        .outputs
+        .iter()
+        .filter(|p| {
+            let full = cwd.join(p);
+            full.exists() && output_is_empty(&full)
+        })
+        .collect();
+    if !empty.is_empty() {
+        eprintln!(
+            "run: stage {} produced {} declared output(s) with no data rows: {}. A header-only \
+             table is not a missing file and will be consumed downstream as a run of absences \
+             rather than as an absent input.",
+            stage.id,
+            empty.len(),
+            empty
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        if strict_outputs && exit_code == 0 {
+            exit_code = 2;
+        }
+    }
+    let n_empty_outputs = empty.len();
+
     let sidecars: Vec<String> = stage
         .outputs
         .iter()
@@ -355,6 +422,7 @@ fn execute_stage(
         ),
         started_at_unix_s: started_at,
         sidecar_hash,
+        n_empty_outputs,
     })
 }
 
@@ -428,11 +496,11 @@ fn check_manifest_consistency(
 
 fn write_manifest(path: &Path, rows: &[ManifestRow]) -> Result<()> {
     let mut out = String::from(
-        "plan_name\tplan_commit\tplan_hash\tstage_id\tcommand\tinput_hash\toutput_hash\truntime_s\texit_code\tatman_version\tsystem\tstarted_at_unix_s\tsidecar_hash\n",
+        "plan_name\tplan_commit\tplan_hash\tstage_id\tcommand\tinput_hash\toutput_hash\truntime_s\texit_code\tatman_version\tsystem\tstarted_at_unix_s\tsidecar_hash\tn_empty_outputs\n",
     );
     for row in rows {
         out.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             row.plan_name,
             row.plan_commit,
             row.plan_hash,
@@ -446,6 +514,7 @@ fn write_manifest(path: &Path, rows: &[ManifestRow]) -> Result<()> {
             row.system,
             row.started_at_unix_s,
             row.sidecar_hash,
+            row.n_empty_outputs,
         ));
     }
     atomic_write(path, out.as_bytes())

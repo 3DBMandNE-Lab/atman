@@ -147,6 +147,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`atman run --strict-outputs` checked that declared outputs exist, not
+  that they contain anything.** A stage emitting a header-only table was
+  recorded with `exit_code 0` and its empty output flowed downstream,
+  where almost every aggregation reads an empty unit as a run of
+  negative observations rather than as a missing input. Existence,
+  non-emptiness and non-degeneracy are three different audits, and only
+  the first was being run. Empty declared outputs are now detected
+  (zero bytes, or a `.tsv` holding only its tab-separated header), warned
+  about by name, counted in the new `n_empty_outputs` manifest column,
+  and — under `--strict-outputs`, which is on by default — fail the
+  stage. `--strict-outputs false` keeps the old permissive behaviour.
+  The header rule is deliberately narrow: a one-line file without a tab
+  is treated as a legitimate single-value output, since erring toward
+  not flagging is the right direction for a check that can fail a
+  pipeline.
+  **Manifest schema change**: `plan_manifest.tsv` gains
+  `n_empty_outputs` as its final column. Readers keying on column name
+  are unaffected; anything parsing positionally should be checked.
+  Prompted by the karna manuscript session, whose own coverage audit
+  reported a layer at "100%" by counting files rather than rows, while
+  279 of 886 units in it were empty — the check intended to catch this
+  class reproducing the class one level up.
 - **Bootstrap replicates could score an incomputable distance as a
   maximal one.** In `concordance --output-tree-linkage` and `axes tree`,
   a pair whose distance could not be computed fell back to

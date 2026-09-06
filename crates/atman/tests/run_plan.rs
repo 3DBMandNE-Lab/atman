@@ -54,7 +54,7 @@ stages:
     let manifest_path = output_dir.join("plan_manifest.tsv");
     let manifest = std::fs::read_to_string(&manifest_path).unwrap();
     assert!(manifest.starts_with(
-        "plan_name\tplan_commit\tplan_hash\tstage_id\tcommand\tinput_hash\toutput_hash\truntime_s\texit_code\tatman_version\tsystem\tstarted_at_unix_s\tsidecar_hash\n"
+        "plan_name\tplan_commit\tplan_hash\tstage_id\tcommand\tinput_hash\toutput_hash\truntime_s\texit_code\tatman_version\tsystem\tstarted_at_unix_s\tsidecar_hash\tn_empty_outputs\n"
     ));
     let rows: Vec<Vec<&str>> = manifest
         .lines()
@@ -360,6 +360,95 @@ stages:
     assert!(
         r.status.success(),
         "stderr:\n{}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+}
+
+/// Existence and non-emptiness are different audits, and conflating
+/// them gives false assurance about exactly the stages worth inspecting.
+///
+/// The shape was contributed by the karna manuscript session: their
+/// coverage check reported a layer at "100%" by counting files rather
+/// than rows, while 279 of 886 units in it were empty. `--strict-outputs`
+/// had the same gap — it filtered declared outputs on `.exists()`, so a
+/// stage emitting a header-only table was recorded as successful and its
+/// empty output flowed downstream as a run of absences.
+#[test]
+fn strict_outputs_rejects_a_header_only_table() {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = tmp.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let plan = tmp.path().join("plan.yaml");
+    std::fs::write(
+        &plan,
+        r#"
+name: empties
+stages:
+  - id: header_only
+    command: printf 'gene_symbol\teffect\n' > empty.tsv
+    outputs: [empty.tsv]
+"#,
+    )
+    .unwrap();
+    let output_dir = tmp.path().join("manifest");
+    let r = run_atman(&[
+        "run",
+        "--plan",
+        plan.to_str().unwrap(),
+        "--input-dir",
+        work.to_str().unwrap(),
+        "--output-dir",
+        output_dir.to_str().unwrap(),
+    ]);
+    assert!(
+        !r.status.success(),
+        "a declared output with no data rows must not pass strict-outputs"
+    );
+    let stderr = String::from_utf8_lossy(&r.stderr);
+    assert!(
+        stderr.contains("no data rows") && stderr.contains("empty.tsv"),
+        "the warning must name the file and the reason; got:\n{stderr}"
+    );
+    let manifest = std::fs::read_to_string(output_dir.join("plan_manifest.tsv")).unwrap();
+    let last = manifest.lines().last().unwrap();
+    assert!(
+        last.ends_with("\t1"),
+        "n_empty_outputs should be 1 for this stage; got: {last}"
+    );
+}
+
+/// A one-line file that is not a tab-separated header is a legitimate
+/// single-value output, not an empty table. The check must not fail it.
+#[test]
+fn strict_outputs_accepts_a_single_value_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = tmp.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let plan = tmp.path().join("plan.yaml");
+    std::fs::write(
+        &plan,
+        r#"
+name: single
+stages:
+  - id: one_value
+    command: printf '42\n' > value.tsv
+    outputs: [value.tsv]
+"#,
+    )
+    .unwrap();
+    let output_dir = tmp.path().join("manifest");
+    let r = run_atman(&[
+        "run",
+        "--plan",
+        plan.to_str().unwrap(),
+        "--input-dir",
+        work.to_str().unwrap(),
+        "--output-dir",
+        output_dir.to_str().unwrap(),
+    ]);
+    assert!(
+        r.status.success(),
+        "a single-value output is not an empty table:\n{}",
         String::from_utf8_lossy(&r.stderr)
     );
 }
