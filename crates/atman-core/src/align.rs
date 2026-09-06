@@ -41,6 +41,15 @@ impl AlignMetric {
         match s.trim().to_ascii_lowercase().as_str() {
             "jaccard" => Some(AlignMetric::Jaccard),
             "cosine" => Some(AlignMetric::Cosine),
+            // Both spellings are accepted. NOTE for anyone auditing a run
+            // tree: the CLI records the spelling the user passed,
+            // verbatim, rather than a canonical form. That is the right
+            // default — the sidecar states what was requested — but it
+            // means a grep for one spelling can miss runs that used the
+            // other. If this is ever changed, record BOTH the requested
+            // and the canonical value rather than normalising, since
+            // normalising would silently alter how existing sidecars
+            // compare against new ones.
             "cosine-centered" | "cosine-centred" => Some(AlignMetric::CosineCentered),
             "spearman" => Some(AlignMetric::Spearman),
             _ => None,
