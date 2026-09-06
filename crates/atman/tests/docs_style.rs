@@ -20,9 +20,9 @@ use std::path::{Path, PathBuf};
 
 /// `(path, max share of long sentences in percent, max semicolons)`.
 const BUDGETS: &[(&str, usize, usize)] = &[
-    ("README.md", 4, 1),
-    ("docs/reference.md", 14, 72),
-    ("docs/recipes.md", 17, 15),
+    ("README.md", 4, 0),
+    ("docs/reference.md", 8, 0),
+    ("docs/recipes.md", 17, 14),
     ("docs/tutorial.md", 2, 8),
     ("docs/style.md", 1, 0),
 ];
@@ -72,6 +72,45 @@ fn prose_of(markdown: &str) -> String {
         out.push(' ');
     }
     out
+}
+
+/// Semicolons that are punctuation, not syntax.
+///
+/// A semicolon inside a code span or a quoted CLI value is something the
+/// reader must type: a `;`-separated flag value, a quoted argument, a
+/// MaxQuant protein-group identifier. Counting those would penalise
+/// documenting them accurately, which is the opposite of the rule's
+/// purpose.
+fn prose_semicolons(markdown: &str) -> usize {
+    let mut count = 0usize;
+    let mut in_fence = false;
+    for line in markdown.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        // State resets every line. A markdown code span does not cross a
+        // line break, and carrying the state onward means one unbalanced
+        // backtick silently changes the count for the whole rest of the
+        // file.
+        let mut in_code = false;
+        let mut in_quote = false;
+        for c in line.chars() {
+            match c {
+                '`' => in_code = !in_code,
+                // Double quotes only. An apostrophe in a possessive
+                // would otherwise desynchronise the rest of the line.
+                '"' => in_quote = !in_quote,
+                ';' if !in_code && !in_quote => count += 1,
+                _ => {}
+            }
+        }
+    }
+    count
 }
 
 fn sentences(prose: &str) -> Vec<String> {
@@ -128,7 +167,7 @@ fn documentation_readability_does_not_regress() {
             .filter(|s| s.split_whitespace().count() > LONG_SENTENCE_WORDS)
             .collect();
         let long_pct = 100 * long.len() / sents.len();
-        let semicolons = prose.matches(';').count();
+        let semicolons = prose_semicolons(&text);
         report.push(format!(
             "  {rel}: {}/{} long ({long_pct}%, budget {max_long_pct}%), {semicolons} semicolons \
              (budget {max_semicolons})",

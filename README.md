@@ -18,15 +18,15 @@ on published fixtures:
 | Test path | R reference | Fixture | Agreement |
 |---|---|---|---|
 | `de --test limma --peptide-metadata` (DEqMS trend) | `DEqMS::spectraCounteBayes` | CPTAC Study 6 UPS1 spike-in | median Δ = **0.000 log₂** (three-decimal match) |
-| `de --test msqrob` | `msqrob2::msqrob(~condition)` | CPTAC Study 6 UPS1 | **100% sign agreement** on all 11 signal proteins; 9/9 UPS1 spike-ins recover expected direction ([details](docs/reference.md#msqrob2-parity-note)) |
+| `de --test msqrob` | `msqrob2::msqrob(~condition)` | CPTAC Study 6 UPS1 | **100% sign agreement** on all 11 signal proteins. 9/9 UPS1 spike-ins recover expected direction ([details](docs/reference.md#msqrob2-parity-note)) |
 | `de --test limma` (parametric eBayes) | `limma::eBayes` | 100-feature × 20-sample regression | Δ < **1e-4** on `t`, `p_value`, `df_total`, `s2_post` |
 | `de --post-hoc sidak --test ols` | `lm()` + `pairwise.t.test` | Planted 3-level fixture | max Δ < **1e-6** on `estimate`, `posthoc_p`, `posthoc_adj_p` |
 | `decompose variance --omnibus-factor` (Type III F) | `car::Anova(type = 3)` | Planted variance fixture | max Δ p < **1e-6** |
 | `enrich gsea` (weighted KS, fgseaSimple formulation) | `fgsea::fgseaSimple` | Planted ranked-list fixture (top / bottom / scattered sets) | max ES Δ < **1e-12** ([details](docs/reference.md#fgsea-parity-note)) |
 | `score signatures --method singscore` (centered TotalScore) | `singscore::simpleScore` | Planted 4-sample × 30-gene fixture (up / down / scattered sets) | max score Δ < **1e-12** on all 12 (set × sample) rows |
-| Olink Explore NPX reproduction | Dube et al. 2023 published tables | Dube heat-stress cohort | filtered NPX: **byte-exact**; log2-FC: Δ = 1.05e-15 |
+| Olink Explore NPX reproduction | Dube et al. 2023 published tables | Dube heat-stress cohort | filtered NPX **byte-exact**, log2-FC Δ = 1.05e-15 |
 
-Parity assertions run on every `cargo test --workspace --release`; CI
+Parity assertions run on every `cargo test --workspace --release`. CI
 fails if any drifts. See [docs/reference.md](docs/reference.md) for
 validation details, reference scripts, and the msqrob2 estimator note.
 

@@ -10,7 +10,7 @@ provenance, and scope. For getting started, see the
 ### msqrob2 parity note
 
 Atman's `--test msqrob` and msqrob2 in the canonical QFeatures vignette
-workflow are not the same estimator; the 0.118 log₂ median difference
+workflow are not the same estimator. The 0.118 log₂ median difference
 reflects the method choice rather than a numerical gap:
 
 - **msqrob2 here (aggregate-then-fit).** Peptides are summarised to one
@@ -22,7 +22,7 @@ reflects the method choice rather than a numerical gap:
   fixed effects, REML 1D profile over `τ = σ²_peptide / σ²_res`, with
   empirical-Bayes variance shrinkage across all fitted proteins.
 
-The substantive claims are sign agreement and spike-in recovery; the
+The substantive claims are sign agreement and spike-in recovery. The
 median-Δ is reported for transparency. The aggregate-then-fit path can
 be reproduced inside atman by first summarising peptides to proteins
 with `atman score modules --method median` and running
@@ -42,14 +42,15 @@ ranked gene list and the set membership mask.
   (`top_loaded`, `bottom_loaded`, `scattered`).
 - **Permutation p-value and NES.** Both quantities depend on the
   permutation null draws. Atman uses the deterministic `Xoshiro256pp`
-  PRNG seeded via `--seed`; fgsea uses R's Mersenne Twister. The
-  per-set p-value and NES are therefore reproducible across atman
-  re-runs at the same seed but are not byte-equal to fgsea. For paper
+  PRNG seeded via `--seed`. The fgsea package uses R's Mersenne
+  Twister. The per-set p-value and NES are therefore reproducible
+  across atman re-runs at the same seed, but are not byte-equal to
+  fgsea. For paper
   reporting, cite atman's seed and `n-permutations` so reviewers can
   re-derive the exact p-values from the published artifact.
 - **NES sign and significance bucket.** ES sign matches fgsea exactly
   (deterministic), so the direction of enrichment is always
-  consistent. Significance buckets agree on the planted fixture; on
+  consistent. Significance buckets agree on the planted fixture. On
   noisier real-world inputs the rank-order of marginal sets may
   differ at the third decimal due to permutation noise — increase
   `--n-permutations` if a tight rank-order needs to be reported.
@@ -93,7 +94,7 @@ robustness across random initializations.
 - `--k-max <INT>` — maximum k for the automatic sweep (≤ 50, > `--k-min`). Required when `--k-selection` is not `fixed` (no default)
 - `--beta-loss <STR>` — loss function: `frobenius` (default, squared error) or `kullback-leibler` (alias `kl`)
 - `--init <STR>` — initialization: `nndsvda` (default, deterministic) or `random`
-- `--solver <STR>` — update algorithm: `mu` (default; the only supported value — multiplicative updates)
+- `--solver <STR>` — update algorithm: `mu`. This is the default and the only supported value (multiplicative updates)
 - `--max-iter <INT>` — iteration limit (default 400)
 - `--tol <FLOAT>` — convergence tolerance on the per-iteration change in Frobenius error (default 1e-6)
 - `--seed <INT>` — PRNG seed, used only when `--init random` (default 42)
@@ -102,8 +103,8 @@ robustness across random initializations.
 - `--min-stable-seed-fraction <FLOAT>` — fraction of seeds a program must survive in to pass multi-seed filtering (default 0.9)
 - `--stability-metric <STR>` — reproducibility metric: `jaccard-top20` only (Jaccard overlap of the top-`--stability-top-n` loadings)
 - `--stability-top-n <INT>` — top *n* loadings used by the stability metric (default 20)
-- `--max-missing-fraction <FLOAT>` — drop assays whose missing-sample fraction exceeds this value (default 0.0, strict complete-case; mirrors `decompose ica`). The sidecar records the resolved value plus `n_assays_retained`/`n_assays_dropped_missingness`
-- `--transform <STR>` — pre-decomposition transform: `none` (default; NMF requires non-negative input and rejects negative values loudly), `exp2-clip` (`2^clamp(x, -c, +c)` — restores a non-negative ratio scale from log2-ratio input while winsorizing extreme tails), or `shift-min` (`x - min(X)` over the whole matrix — a sensitivity alternative to `exp2-clip`)
+- `--max-missing-fraction <FLOAT>` — drop assays whose missing-sample fraction exceeds this value (default 0.0, strict complete-case, mirroring `decompose ica`). The sidecar records the resolved value plus `n_assays_retained`/`n_assays_dropped_missingness`
+- `--transform <STR>` — pre-decomposition transform: `none` (the default: NMF requires non-negative input and rejects negative values loudly), `exp2-clip` (`2^clamp(x, -c, +c)` — restores a non-negative ratio scale from log2-ratio input while winsorizing extreme tails), or `shift-min` (`x - min(X)` over the whole matrix — a sensitivity alternative to `exp2-clip`)
 - `--transform-clamp <FLOAT>` — clamp radius `c` for `--transform exp2-clip` (default 6.0 when omitted). Only valid together with `--transform exp2-clip` — a hard error otherwise
 - `--output-loadings <PATH>` — protein weights per component (required)
 - `--output-activations <PATH>` — per-sample component activations (optional)
@@ -112,7 +113,7 @@ robustness across random initializations.
 
 **Output formats:**
 - `loadings.tsv`: `program\tassay_id\tgene_symbol\tloading` (long format, one row per assay per program)
-- `activations.tsv`: `sample_id\tprogram\tactivation`; long format compatible with `--adjust-for`
+- `activations.tsv`: `sample_id\tprogram\tactivation`. Long format, compatible with `--adjust-for`
 - `stability.tsv`: `program\tstable_seed_fraction\tn_seeds_present`
 - `k_sweep.tsv`: `k\tcophenetic\tmean_rss\tmean_kl\tselected`
 
@@ -139,8 +140,9 @@ covariates from an external TSV and composes them into the design matrix
 alongside condition and `samples.tsv` columns.
 
 **Format detection:** `--adjust-for` auto-detects two formats:
-- **Wide:** sample_id column plus covariate columns; one row per sample
-- **Long:** sample_id, program, activation columns; multiple rows per sample (auto-pivoted to wide)
+- **Wide:** sample_id column plus covariate columns. One row per sample
+- **Long:** sample_id, program, activation columns. Multiple rows per
+  sample, auto-pivoted to wide
 
 NMF activation outputs use long format and are consumed directly. Both formats
 can be combined: if both `--adjust-for <EXTERNAL_TSV>` and `--covariates
@@ -156,7 +158,7 @@ age,sex,batch` are passed, the design matrix is `~ condition +
   the design (no HC3 robust SE — that would require a new dependency)
 - `paired-t` — routes to a paired-difference ANCOVA: per-subject
   `d = abundance_b − abundance_a` regressed via OLS on the per-subject
-  covariate differences (`d ~ 1 + Δcov_1 + ...`); the intercept is the
+  covariate differences (`d ~ 1 + Δcov_1 + ...`). The intercept is the
   adjusted mean paired difference
 
 (see tests K6/K7 in `crates/atman/tests/de_adjust_for.rs`, which parity-check
@@ -168,12 +170,12 @@ both routings against R references)
 ### atman de — sample selection and effect-size flags
 
 - `--include-controls` — samples flagged `is_control=1` join a group when
-  their condition is named in `--groups`. Off by default; the sidecar
+  their condition is named in `--groups`. Off by default. The sidecar
   records the flag.
 - `--condition-col COL` — use another samples.tsv column as the condition
   label (e.g. `diagnosis_group`).
 - `--subset 'col!=value'` (repeatable, `;`-separated) — keep only samples
-  whose raw samples.tsv values satisfy every predicate; a missing value fails
+  whose raw samples.tsv values satisfy every predicate. A missing value fails
   `==` and passes `!=`.
 - `--collapse-others LABEL` — every condition not named in `--groups` becomes
   `LABEL` (which must be one side of a comparison), so
@@ -181,40 +183,40 @@ both routings against R references)
   contrasts one level against all others.
 - `--max-missing-fraction F` — drop a protein from a comparison when more
   than `F` of that comparison's samples lack a value (default 1.0 = keep
-  all); counts land in the sidecar's `missingness_filter`.
+  all). Counts land in the sidecar's `missingness_filter`.
 - `--test ols` now reports `effect_size` = pooled-SD Cohen d over the fitted
   subjects (`effect_size_method = cohen_d`) with its large-sample CI in
   `ci_low`/`ci_high`, and `de_results.tsv` carries `n_a`/`n_b` (observed
-  subjects per group; also filled for `welch-t`).
+  subjects per group, also filled for `welch-t`).
 - `--require-cols col[,col]` (repeatable) — keep only samples whose
-  samples.tsv row has a non-empty value in every listed column;
+  samples.tsv row has a non-empty value in every listed column.
   `--require-numeric col[,col]` additionally requires a finite number (so
   placeholders such as `not measured` drop out), which makes a
   relative-scale run fit the same subjects as a `scale absolute` run
   (`n_require_cols_dropped` / `n_require_numeric_dropped` in the sidecar).
 - `--collapse-genes none|mean|max-observed` — how protein groups (assays)
-  that share a gene symbol become one value per sample: `none` (default)
-  keeps the lexically first assay id; `mean` averages the assays observed in
-  that sample; `max-observed` keeps the assay observed in the most samples.
+  that share a gene symbol become one value per sample. `none` (default)
+  keeps the lexically first assay id. `mean` averages the assays observed in
+  that sample. `max-observed` keeps the assay observed in the most samples.
   The missingness filter runs on the collapsed gene. The sidecar's
   `gene_symbol_collapse` block records `rule`, `n_assays`,
   `n_genes_with_multiple_assays`, `n_extra_assays`, and
   `n_genes_after_collapse` (before the per-comparison missingness filter,
-  whose retained counts are in `missingness_filter`); `residuals` adds
-  `n_rows_after_collapse` and `score weighted` adds
+  whose retained counts are in `missingness_filter`). `residuals` adds
+  `n_rows_after_collapse`, and `score weighted` adds
   `n_genes_shared_after_filter`. Applies to paired-t, welch-t, ols, and
   mixed. (`align programs` is last-wins for a
   duplicated label within a program: the final loadings row for that label
   overwrites earlier ones.)
 - `--design` accepts covariate expressions: `~ condition + z(age) + sex +
   log10(QAlb) + log10(leukocyte_count + 1)`; `z()` standardizes over the
-  fitted samples (the condition coefficient and p are invariant to it; the
-  covariate row in `de_covariates.tsv` is then per SD).
+  fitted samples. The condition coefficient and p are invariant to it, and the
+  covariate row in `de_covariates.tsv` is then per SD.
 - Continuous contrasts: `--design '~ log10(QAlb) + z(age) + sex' --contrast
   'log10(QAlb)'` without `--groups` fits every sample (complete case per
   protein) and reports the named coefficient: `comparison` = the term,
-  `mean_diff` = beta, `t`, `p_value`, `bh_q` over the proteins; `mean_a`,
-  `mean_b`, `effect_size` are empty. The `--contrast` text must match the
+  `mean_diff` = beta, `t`, `p_value`, `bh_q` over the proteins. `mean_a`,
+  `mean_b`, and `effect_size` are empty. The `--contrast` text must match the
   `--design` term exactly.
 
 ### atman residuals — variance and canonical outputs
@@ -224,36 +226,36 @@ both routings against R references)
 can regress them out. `--design` accepts covariate expressions.
 `--max-missing-fraction F` drops proteins observed in fewer than `1−F` of the
 design samples. `--output-variance` writes per-protein `n, ss_model,
-ss_total, r2`; `--output-variance-summary` writes `design, n_samples,
+ss_total, r2`. `--output-variance-summary` writes `design, n_samples,
 n_proteins, frac_variance (Σss_model/Σss_total), median_r2, q75_r2,
 frac_r2_gt_0_25`. `--output-canonical-dir DIR` writes a canonical directory
 whose `measurements.tsv` carries the residual as abundance (observed cells
 only, same unit label as the input) with `samples.tsv`/`proteins.tsv`
 copied, so `atman de` or `atman score weighted` run directly on the
 residual matrix. `--collapse-genes none|mean|max-observed` reduces assays
-that share a gene symbol as in `de`; `none` keeps every assay as its own
-row, the other rules emit one row per gene whose `assay_id` is the
-representative assay (also in the canonical output).
+that share a gene symbol as in `de`. `none` keeps every assay as its own
+row. The other rules emit one row per gene whose `assay_id` is the
+representative assay, also in the canonical output.
 
 ### atman concordance
 
-`--manifest` (`label, path, effect_col[, feature_col, q_col, stage]`;
+`--manifest` (`label, path, effect_col[, feature_col, q_col, stage]`, where
 `feature_col` defaults to `gene_symbol` and is resolved per table, so a
 loading vector keyed by `protein` joins a DE table keyed by `gene_symbol`),
 `--pairs a:b,...` (default all label pairs within each stage), `--top-n`,
 `--q-threshold`, `--n-bootstrap`, `--seed`, `--ci`, `--output`,
 `--output-delta`. Rows: `a, b, stage, n_features, rho, p, ci_lo, ci_hi,
-n_hits_both, sign_concordance, jaccard_top_n`; a pair present in several
+n_hits_both, sign_concordance, jaccard_top_n`. A pair present in several
 stages is evaluated on the features shared by every stage, and
 `--output-delta` reports `delta_rho` (later stage minus earlier) with a CI
-from the same feature resamples. Features are not independent units; the
+from the same feature resamples. Features are not independent units, so the
 intervals are descriptive. `--output-tree-linkage` (with optional
 `--output-tree-support`, `--output-tree-newick`, and `--tree-stage` when
 the manifest has several stages) builds the average-linkage tree of the
 stage's tables on `1 − Spearman` over pairwise-shared features, with
 support from feature-bootstrap replicates (resampling the union of features
-and re-evaluating each pair on the drawn features both tables carry); same
-file conventions as `axes tree`.
+and re-evaluating each pair on the drawn features both tables carry). The
+file conventions match `axes tree`.
 
 ### atman score weighted
 
@@ -265,11 +267,11 @@ n_shared, n_used, score`), and optionally `--groups A-B --output-summary
 PATH` (`signature, comparison, n_shared_proteins, n_case, n_control,
 cohen_d, d_ci_lo, d_ci_hi, welch_p, auc`; groups are matched on the
 condition label regardless of `is_control`). Proteins are z-scored within
-the scored cohort; `score = Σ w·z / Σ|w|` over the proteins the subject has.
+the scored cohort. `score = Σ w·z / Σ|w|` over the proteins the subject has.
 `--collapse-genes none|mean|max-observed` reduces assays sharing a gene
 symbol as in `de` (default `none` = lexically first assay).
 `--summary-only` (with `--groups` and `--output-summary`) skips the
-per-sample table; the sidecar then attaches to the summary file.
+per-sample table. The sidecar then attaches to the summary file.
 
 ### atman scale absolute
 
@@ -278,11 +280,11 @@ For every sample with a positive total-protein value, each log2 abundance
 becomes `a − log2(Σ_assays 2^a) + log2(total_protein)`, the sum running over
 that sample's measured assays, so the sample's linear sum equals its total
 protein. Samples without a total-protein value are dropped from the output
-measurements (counted in the sidecar); `samples.tsv` and `proteins.tsv` are
-copied verbatim and the unit label is unchanged. Used for Reiber-style
+measurements, and the sidecar counts them. `samples.tsv` and `proteins.tsv`
+are copied verbatim, and the unit label is unchanged. Used for Reiber-style
 per-protein exponents: `atman de --design "~ log2(QAlb) + z(age) + sex"
 --contrast "log2(QAlb)"` on the rescaled directory gives the absolute-scale
-slope; the same call on the input directory gives the relative-scale slope.
+slope. The same call on the input directory gives the relative-scale slope.
 
 ### atman enrich ora --query-tsv
 
@@ -291,7 +293,7 @@ slope; the same call on the input directory gives the relative-scale slope.
 each distinct value its own family), a hand-made gene list. `--query-tsv`
 requires `--universe` (the measured background: a `gene_symbol` column or
 one gene per line). The output gains a trailing `query` column (`all`, the
-`--comparison`, or the query label); the sidecar hashes the query, set, and
+`--comparison`, or the query label). The sidecar hashes the query, set, and
 universe files, so an exported HPA/GO set is pinned by content.
 
 ### atman bench decompose --tools atman.<method>
@@ -339,7 +341,7 @@ every jackknife replicate.
 - `--nmf-tol <FLOAT>` — NMF convergence tolerance (default 1e-5). Only used
   with `--decomposition nmf`.
 - `--threads <INT>` — worker threads for the bootstrap iterations and the
-  jackknife replicates (default 0 = one per available core; `1` is serial).
+  jackknife replicates (default 0 = one per available core, `1` is serial).
   Output bytes do not depend on this value: every iteration draws from its
   own `SplitMix64(seed, iter)` sub-seed and the accumulators are folded in
   iteration order. Recorded in the sidecar.
@@ -349,8 +351,8 @@ every jackknife replicate.
   per-resample matrix (point estimate, each bootstrap resample, each
   jackknife replicate) rather than cached once. Ignored for `ica`.
 - `--transform-clamp <FLOAT>` — clamp radius `c` for `--transform exp2-clip`
-  (default 6.0 when omitted); only valid together with `--transform
-  exp2-clip` — a hard error otherwise.
+  (default 6.0 when omitted). Only valid together with `--transform
+  exp2-clip`. Anything else is a hard error.
 
 Non-finite (`NaN`/±∞) loadings from either decomposition are rejected loudly,
 naming the cohort and call site (point estimate / bootstrap iteration /
@@ -363,10 +365,11 @@ possibly-null CLI value.
 
 **`align project --transform`:** gains the NMF input transforms alongside the
 existing compositional ones. Valid values: `none`/`clr`/`alr`/`ratio-anchor`
-(compositional transforms; `ilr` is parsed but rejected in `align project` —
-it reorders coordinates so atlas labels would no longer line up with the
-transformed cohort columns) and `exp2-clip`/`shift-min` (the same NMF input
-transforms as `decompose nmf`, shared via `atman_core::nmf::apply_transform`).
+(compositional transforms, except that `ilr` is parsed and then rejected
+in `align project`, because it reorders coordinates and atlas labels
+would no longer line up with the transformed cohort columns) and
+`exp2-clip`/`shift-min` (the same NMF input transforms as
+`decompose nmf`, shared via `atman_core::nmf::apply_transform`).
 `--transform-clamp` follows the same rule as `decompose nmf` (only valid with
 `exp2-clip`, default 6.0 when omitted). `shift-min` always recomputes its
 shift on the cohort being projected — it does not reuse the atlas's
@@ -391,11 +394,11 @@ in the script header:
 
 Reference TSVs committed in the repo were generated under
 R 4.3.x + Bioconductor 3.18. Pinning to an exact environment via
-`renv.lock` or a Dockerfile is a later pass; in the meantime the
+`renv.lock` or a Dockerfile is a later pass. In the meantime the
 committed reference TSVs are what the parity tests diff against, so
 drift on the R side cannot affect CI.
 
-The parity assertions run on every `cargo test --workspace --release`;
+The parity assertions run on every `cargo test --workspace --release`.
 CI fails if any drifts.
 
 ### Reproducibility check
@@ -615,7 +618,7 @@ upstream pipeline) is responsible:
    (default 0.5). Either impute upstream (e.g. Perseus-style min-shifted),
    filter proteins to an acceptable observation rate, or pass
    `--allow-censored` after confirming the chosen test is appropriate.
-   `decompose ica` exposes `--impute mean|none`; the other analysis
+   `decompose ica` exposes `--impute mean|none`. The other analysis
    commands do not.
 3. **Protein-group ambiguity.** `proteins.tsv` is one `assay_id` per row.
    MaxQuant `P1;P2;P3` protein-group rows and similar ambiguous identifiers
@@ -662,7 +665,7 @@ following fields:
 | `reinvoke` | string | Best-effort paste-and-run reconstruction of the CLI invocation. |
 | `args` | object | Fully-resolved argument dict, defaults included, kebab-case keys matching the CLI flag names. |
 | `atman_version` | string | `CARGO_PKG_VERSION` at build time. |
-| `atman_git_sha` | string | Git SHA at build time (set via `build.rs`; empty when built outside a git checkout). |
+| `atman_git_sha` | string | Git SHA at build time, set via `build.rs`. Empty when built outside a git checkout. |
 | `build_env` | object | Build-time `rustc` version, `Cargo.lock` hash, profile, and target triple. |
 | `cwd_at_start` | string | Working directory at invocation start. |
 | `os_arch` | string | Build-time Rust target triple (e.g. `aarch64-apple-darwin`). |
@@ -670,7 +673,7 @@ following fields:
 | `output_files` | object | `{<output_path>: "sha256:<hex>"}` for every artifact written, excluding the sidecar itself. |
 | `started_at` | string | ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`) at the start of the invocation. |
 | `finished_at` | string | Same, at end of invocation. |
-| `exit_code` | integer | `0` on success. Sidecar is only written on success, so the field is uniformly `0`; retained so batch auditors can filter this field without branching on its presence. |
+| `exit_code` | integer | `0` on success. Sidecar is only written on success, so the field is uniformly `0`. It is retained so batch auditors can filter this field without branching on its presence. |
 
 Commands that write a sidecar: `ingest-matrix`, `validate` (when
 `--report` is set), `report qc`, `decompose ica`, `decompose unmix`,
@@ -707,7 +710,7 @@ from the master `--seed` recorded in the sidecar:
 
 Some arguments carry a selection rule rather than a concrete value
 (e.g. `decompose ica --k cumulative-variance=0.80` picks `k` at
-runtime from the spectrum; `decompose unmix --k auto` sweeps and
+runtime from the spectrum, and `decompose unmix --k auto` sweeps and
 picks the elbow). The sidecar records both the **rule** in `args`
 and the **resolved value** (e.g. `k_resolved`) so reviewers can
 see the runtime decision without re-reading output files.
@@ -738,8 +741,8 @@ is bumped (or `--allow-drift` is passed). Full schema and example in
 [recipes.md](recipes.md).
 
 Plans may declare `vars:` (name → string), substituted as `${name}` in
-every stage's `command`, `inputs`, and `outputs`; an undefined name is an
-error and a bare `$` is left to the shell. `--dry-run` validates the plan
+every stage's `command`, `inputs`, and `outputs`. An undefined name is an
+error, and a bare `$` is left to the shell. `--dry-run` validates the plan
 and lists the resolved stages without executing: every input must exist
 under `--input-dir` or be declared as an output of an earlier stage.
 After each stage, any `<output>.run.json` sidecar found next to a declared
@@ -766,19 +769,19 @@ All other commands read only local files.
 Atman deliberately does not cover:
 
 - **Single-cell proteomics.** No cell-level quantification, no
-  SCP-specific normalization; the data model is sample × protein.
+  SCP-specific normalization. The data model is sample × protein.
 - **Bayesian DE / posteriors.** All variance shrinkage is
   empirical-Bayes (limma-style `fit_f_dist`), not hierarchical
   posterior sampling. No MCMC.
 - **Network inference.** `atman network influence` scores hub
-  centrality on a given adjacency; it does not learn the adjacency.
+  centrality on a given adjacency. It does not learn the adjacency.
   Graphical-lasso / causal-discovery are out of scope.
 - **MS raw file handling.** Ingest starts from peptide-level or
   protein-level matrices (MaxQuant `peptides.txt`, DIA-NN report,
   Spectronaut report, SomaScan RFU, Olink NPX). Upstream feature
   extraction (MaxQuant / FragPipe / DIA-NN) is assumed.
 - **VSN, ComBat-style batch correction, plate bridging.** Explicit
-  adapter responsibilities above; belongs in the adapter or
+  adapter responsibilities above. This belongs in the adapter or the
   upstream pipeline.
 - **Survival analysis, Cox regression, Kaplan-Meier.** Outside the
   DE-focused scope.
@@ -793,10 +796,11 @@ TSV plus `<output>.run.json`.
 
 Covariate expressions (used by `--designs`, `--anchors`, `--median-cols`):
 identifiers, numbers, `+ - * /`, parentheses, `log10()`, `log2()`, `ln()`,
-and `z()` (standardize over the rows entering the fit; outermost only).
-Columns whose trimmed non-empty values all parse as numbers are numeric;
-other columns are categorical, one-hot with the alphabetically first level as
-reference (`sex` F/M ⇒ one `sexM` column).
+and `z()`, which standardizes over the rows entering the fit and is
+accepted at the outermost level only. Columns whose trimmed non-empty
+values all parse as numbers are numeric. Other columns are categorical,
+one-hot with the alphabetically first level as reference (`sex` F/M ⇒
+one `sexM` column).
 
 #### atman axes build
 
@@ -812,42 +816,44 @@ per `--within` group. Output: input columns, then per axis `<axis>_raw`,
 #### atman axes contrast
 
 `--scores`, `--cohort-dirs`, `--covariates-tsv` (repeatable), `--manifest`
-(`label, cohort, case, control, family[, condition_col, subset]`;
+(`label, cohort, case, control, family[, condition_col, subset]`, where
 `case`/`control` accept `a|b` lists, `control=*` = all other levels within the
 subset), `--score-cols`, `--designs "~ case; ~ case + z(age) + sex"`,
 `--n-bootstrap`, `--seed`, `--ci` (default 0.95), `--output`,
 `--output-covariates`, `--output-bootstrap`. One row per contrast × score ×
-design. Unadjusted columns (`n_case … auc`) use every subject with a score;
+design. Unadjusted columns (`n_case … auc`) use every subject with a score.
 `n_fit` onward use the complete-case rows of the design. `q` is BH over rows
-sharing (family, design); `welch_q` likewise over `welch_p`. Bootstrap:
+sharing (family, design), and `welch_q` likewise over `welch_p`. Bootstrap:
 subjects resampled within case and control separately, design rebuilt per
-resample (so `z()` is re-standardized), percentile interval at `--ci`; one
-SplitMix64 stream per contrast seeded by `derive_sub_seed(seed, contrast_index)`.
-Multi-level categorical covariates are one-hot encoded; `--omnibus-factor
+resample (so `z()` is re-standardized), percentile interval at `--ci`. There
+is one SplitMix64 stream per contrast, seeded by
+`derive_sub_seed(seed, contrast_index)`.
+Multi-level categorical covariates are one-hot encoded. `--omnibus-factor
 COL` (repeatable) adds `omnibus_f` rows to `--output-covariates` with the
 joint F-test of that factor's columns (`f, df_num, df_den, p`). A bootstrap
 replicate whose resample leaves a categorical term with one level (or whose
-fit is singular) is skipped and counted in `boot_n_skipped`; `boot_n` is
+fit is singular) is skipped and counted in `boot_n_skipped`. `boot_n` is
 the number of replicates that contributed.
 
 #### atman axes groups
 
-`--cohort`, `--group-by COL`, `--groups a,b,...` (order; default sorted
-observed values), `--score-cols`, `--median-cols "age,QIgG/QAlb"`,
+`--cohort`, `--group-by COL`, `--groups a,b,...` (order, defaulting to
+sorted observed values), `--score-cols`, `--median-cols "age,QIgG/QAlb"`,
 `--reference GROUP`, `--ci`, `--output` (`group, n, <expr>_median…,
 <score>_mean, <score>_ci_lo, <score>_ci_hi`; t-based CI, n ≥ 3),
 `--output-tests` (`kind, score, reference, group, n_ref, n_group, statistic,
-p`: `kruskal` rows carry H and its chi-square p; `reference_vs_group` rows
-carry pooled-SD Cohen d of reference minus group and the Welch p).
+p`). `kruskal` rows carry H and its chi-square p. `reference_vs_group` rows
+carry pooled-SD Cohen d of reference minus group, and the Welch p.
 
 #### atman axes anchor
 
 `--cohorts`, `--score-cols`, `--anchors "log10(QAlb),log10(QIgG/QAlb),age"`,
 `--scope all|controls|cases|condition=X` (repeatable), `--partial EXPR`,
 `--n-bootstrap`, `--seed`, `--ci`, `--min-n` (default 10), `--output`
-(`cohort, scope, given, score, anchor, n, rho, ci_lo, ci_hi, p`). Spearman on
-pairwise-complete subjects; p by the t approximation; CI by subject
-bootstrap (one stream per output row, `derive_sub_seed(seed, row_index)`).
+(`cohort, scope, given, score, anchor, n, rho, ci_lo, ci_hi, p`).
+Spearman runs on pairwise-complete subjects. `p` comes from the t
+approximation. The CI comes from a subject bootstrap, one stream per
+output row, `derive_sub_seed(seed, row_index)`.
 `--partial` adds `<scope>_partial` rows: Pearson correlation of the rank
 residuals of score and anchor on the ranks of the given expression, no CI.
 
@@ -859,15 +865,15 @@ every subject in the table before centroids), `--n-bootstrap`, `--seed`,
 `--ci`, `--output` (`a, b, space, cosine, ci_lo, ci_hi, norm_a, norm_b`),
 `--output-vectors` (`label, space, score, displacement, n_case, n_control`).
 Displacement = case centroid − control centroid within the contrast's cohort,
-column-wise over subjects with a value; the bootstrap resamples case and
-control subjects of both contrasts independently (one stream per pair).
+column-wise over subjects with a value. The bootstrap resamples case and
+control subjects of both contrasts independently, one stream per pair.
 
 #### atman axes loco
 
-`--score-cols axis1_raw,...` (raw columns; z recomputed), `--groups
+`--score-cols axis1_raw,...` (raw columns, with z recomputed), `--groups
 "Controls=healthy|NoLeak|control|CU|nonMS;AD=AD;..."`, `--output` (`score,
 group, dropped_cohort, n_remaining, full_z_mean, loo_z_mean, delta`). Cohorts
-are dropped in order of first appearance; a group absent from the remaining
+are dropped in order of first appearance. A group absent from the remaining
 subjects yields no row.
 
 #### atman axes icc
@@ -876,21 +882,21 @@ subjects yields no row.
 `--cohorts`, `--score-cols`, `--output` (`cohort, score, n_subjects,
 n_samples, k_mean, k0, n_singletons_excluded, icc1, between_sd, within_sd`).
 One-way random-effects ICC(1): `icc1 = (MSB − MSW) / (MSB + (k0 − 1) MSW)`
-with the unbalanced `k0 = (N − Σk_i²/N)/(n − 1)`; `between_sd =
-sqrt(max(0, (MSB − MSW)/k0))`, `within_sd = sqrt(MSW)`. Subjects with a
+with the unbalanced `k0 = (N − Σk_i²/N)/(n − 1)`. Then `between_sd =
+sqrt(max(0, (MSB − MSW)/k0))` and `within_sd = sqrt(MSW)`. Subjects with a
 single scored sample are excluded and counted.
 
 #### atman axes tree
 
 `--scores`, `--manifest` (each contrast a leaf), `--score-cols`, `--leaf
 displacement|centroid` (case − control with `1 − cosine`, or the case-group
-centroid with Euclidean distance; `--distance` overrides), `--standardize
-global|none`, `--n-bootstrap` (default 1000), `--seed`, `--quote-labels`,
+centroid with Euclidean distance, unless `--distance` overrides),
+`--standardize global|none`, `--n-bootstrap` (default 1000), `--seed`, `--quote-labels`,
 `--output-linkage` (`left, right, distance, n`, scipy convention: leaves
 `0..n`, merge `i` is node `n+i`, height = merge distance, `left < right`),
 `--output-support` (`node` = sorted leaf labels joined by ` | `, `n_leaves`,
 `support`, `node_id`, `height`, `n_boot`), `--output-newick` (branch length
-= parent height − child height, six decimals; internal labels =
+= parent height − child height, six decimals, and internal labels are
 integer-percent support). Support is the fraction of subject-bootstrap
 trees (resampling within each contrast's case and control groups) that
 contain the reference clade.

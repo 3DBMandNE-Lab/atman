@@ -76,16 +76,19 @@ file, and never raise one.
 
 | File | Long sentences | Semicolons |
 |---|---|---|
-| `README.md` | 4% | 1 |
-| `docs/reference.md` | 14% | 72 |
-| `docs/recipes.md` | 17% | 15 |
+| `README.md` | 4% | 0 |
+| `docs/reference.md` | 8% | 0 |
+| `docs/recipes.md` | 17% | 14 |
 | `docs/tutorial.md` | 2% | 8 |
 | `docs/style.md` | 0% | 0 |
 
-The reference document is the worst of the five and its remaining
-semicolons are the clearest target. Most sit in prose that describes a
-statistical caveat, where the semicolon joins two independent clauses
-that should be two sentences.
+The counter ignores a semicolon inside a code span or a quoted value. A
+`;`-separated flag value, a quoted CLI argument, and a MaxQuant
+protein-group identifier are all syntax the reader must type. Counting
+them would penalise documenting them accurately.
+
+The reference document and the README now carry no prose semicolon. The
+recipes and the tutorial still do, and they are the next target.
 
 The counter is deliberately crude. It strips fenced code and table rows,
 then splits on sentence-ending punctuation. It cannot see voice, tense,
