@@ -609,9 +609,45 @@ fn bootstrap_iteration(
         .collect())
 }
 
+/// How selective the two tau gates are on the point-estimate program
+/// vectors they operate over.
+///
+/// `align bootstrap` applies `metric` twice: `cosine_tau` groups
+/// bootstrap programs into archetypes, and `match_tau` matches
+/// bootstrap and jackknife archetypes back to the point estimate. Both
+/// run on the same loading vectors, so a gate that admits nearly
+/// everything is deciding recurrence without thresholding — which is
+/// the bootstrap's entire job. Non-negative loadings hit this because
+/// cosine cannot go below zero on them.
+#[derive(Debug, Clone, Copy)]
+pub struct TauDiagnostics {
+    pub n_pairs: usize,
+    pub n_above_cosine_tau: usize,
+    pub n_above_match_tau: usize,
+    pub median_similarity: f64,
+}
+
+/// [`align_bootstrap`] plus the selectivity of its two gates.
+pub fn align_bootstrap_with_diagnostics(
+    cohorts: &[CohortMatrix],
+    params: BootstrapParams,
+) -> Result<(Vec<BootstrapRow>, Option<TauDiagnostics>), String> {
+    let diagnostics = std::cell::RefCell::new(None);
+    let rows = align_bootstrap_inner(cohorts, params, Some(&diagnostics))?;
+    Ok((rows, diagnostics.into_inner()))
+}
+
 pub fn align_bootstrap(
     cohorts: &[CohortMatrix],
     params: BootstrapParams,
+) -> Result<Vec<BootstrapRow>, String> {
+    align_bootstrap_inner(cohorts, params, None)
+}
+
+fn align_bootstrap_inner(
+    cohorts: &[CohortMatrix],
+    params: BootstrapParams,
+    diagnostics: Option<&std::cell::RefCell<Option<TauDiagnostics>>>,
 ) -> Result<Vec<BootstrapRow>, String> {
     if cohorts.len() < 2 {
         return Err("align bootstrap requires at least 2 cohorts".into());
@@ -673,6 +709,37 @@ pub fn align_bootstrap(
         params.cosine_tau,
         params.metric,
     );
+    // Measure what the two gates actually admit on these vectors,
+    // before using either of them to decide anything.
+    if let Some(sink) = diagnostics {
+        let mut sims: Vec<f64> = Vec::new();
+        for i in 0..pe_programs.len() {
+            for j in (i + 1)..pe_programs.len() {
+                if pe_programs[i].cohort == pe_programs[j].cohort {
+                    continue; // within-cohort pairs are never gated
+                }
+                let v = crate::align::similarity(
+                    &pe_programs[i].values,
+                    &pe_programs[j].values,
+                    params.metric,
+                    params.top_n,
+                );
+                if v.is_finite() {
+                    sims.push(v);
+                }
+            }
+        }
+        if !sims.is_empty() {
+            let mut sorted = sims.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            *sink.borrow_mut() = Some(TauDiagnostics {
+                n_pairs: sims.len(),
+                n_above_cosine_tau: sims.iter().filter(|v| **v >= params.cosine_tau).count(),
+                n_above_match_tau: sims.iter().filter(|v| **v >= params.match_tau).count(),
+                median_similarity: sorted[sorted.len() / 2],
+            });
+        }
+    }
     let pe_archetypes = group_archetypes(&pe_programs, &pe_labels);
     if pe_archetypes.is_empty() {
         return Ok(Vec::new());

@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use atman_core::align::{build_archetypes, summarize_archetypes, AlignMetric, AlignedProgram};
 use atman_core::align_bootstrap::{
-    align_bootstrap, BootstrapParams, BootstrapRow, CohortMatrix, Decomposition,
+    align_bootstrap_with_diagnostics, BootstrapParams, BootstrapRow, CohortMatrix, Decomposition,
 };
 use atman_core::align_project::{project, Atlas, ProjectionMethod};
 use atman_core::compositional::{apply_transform, Transform};
@@ -259,8 +259,11 @@ pub struct BootstrapArgs {
     /// Similarity metric used both to group bootstrap programs into
     /// archetypes and to match bootstrap/jackknife archetypes back
     /// to the point estimate. `cosine` (default) is fastest and
-    /// sign-invariant; `jaccard` uses top-`--top-n` loading sets;
-    /// `spearman` uses absolute rank correlation.
+    /// sign-invariant; `cosine-centered` mean-centres each loading
+    /// vector first and is what you want for non-negative loadings
+    /// (NMF), where plain cosine has a positivity floor that makes a
+    /// shared threshold inert; `jaccard` uses top-`--top-n` loading
+    /// sets; `spearman` uses absolute rank correlation.
     #[arg(long, default_value = "cosine")]
     metric: String,
 
@@ -500,8 +503,41 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         ci_alpha: args.ci_alpha,
         threads: args.threads,
     };
-    let rows: Vec<BootstrapRow> =
-        align_bootstrap(&matrices, params).map_err(|e| anyhow::anyhow!(e))?;
+    let (rows, tau_diag): (Vec<BootstrapRow>, _) =
+        align_bootstrap_with_diagnostics(&matrices, params).map_err(|e| anyhow::anyhow!(e))?;
+    // The metric gates twice here: --cosine-tau groups bootstrap
+    // programs and --match-tau matches them back to the point estimate.
+    // A gate that admits nearly everything is deciding recurrence
+    // without thresholding, which is the whole job of the bootstrap.
+    if let Some(d) = tau_diag {
+        let frac_group = d.n_above_cosine_tau as f64 / d.n_pairs as f64;
+        let frac_match = d.n_above_match_tau as f64 / d.n_pairs as f64;
+        eprintln!(
+            "align bootstrap: tau selectivity over {} cross-cohort program pairs: \
+             {:.1}% at or above --cosine-tau {}, {:.1}% at or above --match-tau {}; \
+             median similarity {:.3}",
+            d.n_pairs,
+            100.0 * frac_group,
+            args.cosine_tau,
+            100.0 * frac_match,
+            args.match_tau,
+            d.median_similarity,
+        );
+        for (name, value, frac) in [
+            ("--cosine-tau", args.cosine_tau, frac_group),
+            ("--match-tau", args.match_tau, frac_match),
+        ] {
+            if frac > 0.90 {
+                eprintln!(
+                    "align bootstrap: warning: {name} {value} admits {:.1}% of cross-cohort \
+                     pairs, so it is not thresholding and recurrence is being decided without \
+                     it. Non-negative loadings hit this because cosine cannot go below zero on \
+                     them; --metric cosine-centered removes that floor.",
+                    100.0 * frac,
+                );
+            }
+        }
+    }
 
     if let Some(parent) = args.output.parent() {
         std::fs::create_dir_all(parent)

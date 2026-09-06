@@ -25,9 +25,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   thresholding and the structure is being decided by reciprocal-best
   matching alone. The choice of metric is recorded in the sidecar, since
   a reader cannot otherwise tell which similarity was computed.
-  Note what is *not* claimed: whether centring changes the resulting
-  archetype structure is untested here. The measurements above are
-  pairwise similarities with no grouping algorithm in them.
+  `align bootstrap` gets the same treatment, and needed it more: it
+  applies the metric twice internally (`--cosine-tau` to group bootstrap
+  programs into archetypes, `--match-tau` to match them back to the
+  point estimate), both on the same loading vectors, so on non-negative
+  loadings the bootstrap was deciding how often an archetype recurs
+  through gates that admitted essentially everything. Both gates now
+  report their admitted fraction and warn above 90%, and
+  `cosine-centered` is documented in `--metric` there — it was already
+  accepted by the parser but absent from the help text, so it could not
+  be found.
+  On what centring does to the result, now measured atman-to-atman with
+  the metric as the only variable: almost nothing. NMF goes from 31
+  archetypes to 29 with the same 3 multi-cohort and same single
+  six-cohort archetype; ICA goes from 214 to 213 with 15 multi-cohort
+  becoming 13. So the threshold was inert and the comparison was
+  specified wrongly, and correcting it does not overturn the finding —
+  the structure was never threshold-determined, reciprocal-best matching
+  was doing the work. Both halves are worth stating: the comparison is
+  now at comparable selectivity, and the result is insensitive to the
+  choice.
 - **`align project` now reports loading-weighted coverage per archetype**
   (`projection_archetype_coverage.tsv`, plus a stderr warning below 50%
   mass or fewer than 10 of the top 20 defining proteins). The existing
