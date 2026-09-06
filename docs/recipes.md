@@ -687,6 +687,36 @@ Outputs: `endmembers.tsv` (rank-ordered proteins per endmember),
 `abundances.tsv` (per-subject fractions, rows sum to 1),
 `unmix_diagnostics.tsv`, `marker_enrichment.tsv`.
 
+**Sweep `--max-missing-fraction` before you report an endmember.**
+VCA endmembers are *actual samples* sitting at simplex vertices, not
+synthetic loading vectors, so admitting more sparsely-measured
+(mean-imputed) proteins can move every vertex. Measured on two
+unrelated cohorts on 2026-09-06:
+
+| Cohort | n | Threshold change | Proteins admitted | Vertex subjects retained |
+|---|---|---|---|---|
+| CSF, Olink/MaxQuant | 26 | 0.3 → 0.4 | 561 → 623 | 0 of 4 |
+| CPTAC GBM, TMT | 110 | 0.0 → 0.3 | 9,363 → 10,464 | 1 of 4 |
+| CPTAC GBM, TMT | 110 | 0.3 → 0.4 | 10,464 → 10,653 | 0 of 4 |
+
+Sample size does not rescue it: a 110-subject tumour cohort behaves
+like a 26-subject CSF one. Nor does `--k auto` anchor it — the elbow
+rule selected different `k` on matrices differing only in
+normalization.
+
+Practical consequences:
+
+- Name `--k` and `--max-missing-fraction` explicitly; do not lean on
+  `--k auto` for a result you intend to report.
+- Re-run across a few thresholds. If the vertex set turns over, say so:
+  "endmember identity is not stable to the missingness admission
+  threshold" is a legitimate finding about the method, not a failed run.
+- Do not name a particular subject as *the* endmember for a biological
+  compartment without that sweep behind you.
+- This is specific to sample-selecting extraction (VCA, N-FINDR).
+  `decompose nmf` and `decompose ica` return synthetic loading vectors
+  and do not share this failure mode.
+
 ### Variance partition: attributing variation to covariates
 
 Before running DE, check how much protein-level variance is explained

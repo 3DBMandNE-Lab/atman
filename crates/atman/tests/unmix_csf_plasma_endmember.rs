@@ -44,13 +44,27 @@
 //!   the best score by 0.07, while the endmember *sample set* turns over
 //!   completely.
 //!
-//! So the honest reading is that VCA's vertex selection on this cohort
-//! (26 subjects, ~26% missing) is sensitive to which sparsely-measured
-//! proteins are admitted and mean-imputed. This test pins one
-//! configuration and checks that the expected biology appears there; it
-//! is a regression guard on `decompose unmix`, not evidence that the
-//! plasma pole is recoverable under any reasonable preprocessing. Do not
-//! cite it as the latter.
+//! **This is a property of the method, not of this cohort.** The atman
+//! methods-paper session reproduced it independently on CPTAC GBM — 110
+//! subjects, TMT rather than Olink/MaxQuant, bulk tumour rather than
+//! CSF, run against the PIN2 binary rather than this one. Varying only
+//! `--max-missing-fraction` at fixed `k = 4`: threshold 0.0 admits 9,363
+//! proteins, 0.3 admits 10,464 and retains one of four vertex subjects,
+//! 0.4 admits 10,653 and retains none. Evidence at
+//! `atman-paper/runs/determinism/plan2_unmix_stability_check.txt`.
+//!
+//! Two cohorts, two platforms, two binaries, four times the sample size,
+//! same failure mode. Sample size does not rescue it. The mechanism is
+//! that VCA endmembers are actual samples at simplex vertices, so
+//! admitting more sparsely-measured, mean-imputed proteins can move
+//! every vertex.
+//!
+//! This test therefore pins one configuration and checks that the
+//! expected biology appears there. It is a regression guard on
+//! `decompose unmix`, not evidence that the plasma pole is recoverable
+//! under any reasonable preprocessing. Do not cite it as the latter.
+//! `docs/recipes.md` carries the user-facing guidance: sweep the
+//! threshold before reporting an endmember.
 //!
 //! # Running it
 //!

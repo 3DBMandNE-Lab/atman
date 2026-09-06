@@ -8,6 +8,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Documented instability of `decompose unmix` endmember selection.**
+  VCA endmembers are actual samples at simplex vertices, so admitting
+  more sparsely-measured (mean-imputed) proteins can replace every
+  vertex. Measured on two unrelated cohorts: a 26-subject CSF cohort
+  loses all four vertex subjects between `--max-missing-fraction` 0.3
+  and 0.4, and a 110-subject CPTAC GBM cohort retains one of four
+  between 0.0 and 0.3 and none between 0.3 and 0.4. Sample size does not
+  rescue it and `--k auto` is not a stable anchor. `docs/recipes.md` now
+  tells users to sweep the threshold before reporting an endmember, and
+  notes that `decompose nmf` / `decompose ica` return synthetic loading
+  vectors and do not share the failure mode. No code change: the
+  behaviour is inherent to sample-selecting extraction.
 - **Real-data sanity test for `decompose unmix`** on the CSF CrossDisease
   SIH cohort (`crates/atman/tests/unmix_csf_plasma_endmember.rs`):
   albumin-ratio normalization should collapse the bipolar
