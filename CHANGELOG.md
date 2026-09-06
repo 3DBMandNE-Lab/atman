@@ -8,6 +8,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`atman harmonize fit` / `atman harmonize apply`**: cross-cohort
+  harmonisation with a fit-then-apply contract, for benchmarking
+  harmonisation methods by held-out transfer. `fit` reads the training
+  cohorts and writes a model; `apply` reads that model and one cohort
+  and nothing else, so a held-out evaluation cannot leak by
+  construction rather than by discipline, and applying a model to one of
+  its own training cohorts is refused. The model carries the shared
+  feature axis, the disease direction learned in that method's
+  representation, the training cohort labels, and a SHA-256 of their
+  inputs — labels alone would let a replay reuse a label over different
+  data.
+  Four methods: `zscore` (the null harmonisation), `rank`, `quantile`
+  (reference profile learned on training cohorts), and
+  `reference-protein` (per-sample division by the geometric mean of a
+  low-variance reference set selected on training cohorts only, with
+  `--reference-k`). `HarmonizeMethod::is_fitted` distinguishes the two
+  stateless methods, because a stateless comparator matching a fitted
+  one means the fitted state was not what carried the signal.
+  `--permute-labels` shuffles case/control within each training cohort
+  before learning the direction, giving a negative-control arm that
+  travels the identical apply path. Every method scores something on a
+  held-out cohort, so a benchmark whose entries all beat zero measures
+  nothing. Note that ONE permuted fit is one draw from the null, not the
+  null, and the flag's help says so: on a 60-feature fixture a single
+  draw produced −4.45 against a real effect of +11.90. Use several
+  seeds.
 - **`decompose ica --degeneracy-floor`** (default 0.1) stops the MNAR
   joint loop when the imputed cells come within that fraction of their
   first-iteration RMS distance to their own rank-`k` reconstruction. The

@@ -25,6 +25,8 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Convert a wide proteomics matrix plus metadata into canonical Atman TSVs.
+    /// Cross-cohort harmonisation with a fit-then-apply contract.
+    Harmonize(commands::harmonize::Args),
     IngestMatrix(Box<commands::ingest_matrix::Args>),
     /// Apply QC rule (`mask-warn-fail`: mark dropped_by_qc when qc_sample or qc_assay ≠ Pass).
     Qc(commands::qc::Args),
@@ -97,6 +99,7 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Harmonize(a) => commands::harmonize::run(a),
         Command::IngestMatrix(args) => commands::ingest_matrix::run(*args),
         Command::Qc(args) => commands::qc::run(args),
         Command::Matrix(args) => commands::matrix::run(args),
