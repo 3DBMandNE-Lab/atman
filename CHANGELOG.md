@@ -8,6 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`atman align bootstrap --threads N`** — the bootstrap iterations and
+  the pooled-subject jackknife replicates now run as a rayon parallel map
+  (default: one thread per core; `--threads 1` restores serial execution).
+  Every iteration already drew from its own `derive_sub_seed(seed, iter)`
+  stream, and the accumulators are now folded in iteration order, so the
+  output is byte-identical for any thread count (verified against the
+  pre-change binary on ICA and NMF fixtures; pinned by a core
+  thread-invariance test and CLI byte-identity tests for both
+  decompositions). The first error is reported by lowest iteration index,
+  as before. The flag is recorded in the sidecar. `rayon` becomes a
+  workspace dependency, used only here.
 - **`atman axes`** command group for subject-level score tables:
   `build` (representative archetype columns → axes, within-cohort
   orthogonalization, global z), `contrast` (Cohen d with CI, Welch, AUC,

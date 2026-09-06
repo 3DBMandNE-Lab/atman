@@ -338,6 +338,11 @@ every jackknife replicate.
   per cohort (default 500). Only used with `--decomposition nmf`.
 - `--nmf-tol <FLOAT>` — NMF convergence tolerance (default 1e-5). Only used
   with `--decomposition nmf`.
+- `--threads <INT>` — worker threads for the bootstrap iterations and the
+  jackknife replicates (default 0 = one per available core; `1` is serial).
+  Output bytes do not depend on this value: every iteration draws from its
+  own `SplitMix64(seed, iter)` sub-seed and the accumulators are folded in
+  iteration order. Recorded in the sidecar.
 - `--transform <STR>` — pre-decomposition transform for `--decomposition
   nmf`: `none` (default; requires non-negative input, rejected loudly
   otherwise), `exp2-clip`, or `shift-min`. Re-applied fresh to every

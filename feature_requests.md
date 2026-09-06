@@ -11,41 +11,6 @@ Add new proposals as sections below. Remove entries once they land
 
 ## Open
 
-### Parallel `align bootstrap` iterations (deterministic rayon map)
-
-Parked from the GBM manuscript session (2026-09-06): on the real
-six-cohort run, `--n-boot 200` with `--decomposition nmf` takes 9+
-hours single-threaded (200 iterations × 6 per-resample NMF fits,
-plus the pooled-subject jackknife for BCa acceleration).
-
-The iteration loop in `crates/atman-core/src/align_bootstrap.rs`
-(`for iter in 0..params.n_boot`) is already independent per
-iteration: each iteration builds its own `Xoshiro256pp` from
-`derive_sub_seed(params.seed, iter)` and derives the per-cohort fit
-seeds from that sub-seed, so no RNG state crosses iterations. The
-only shared state is the per-PE-archetype `BootstrapAcc` (sums plus
-the `n_cohorts` series). The jackknife loop in
-`jackknife_n_cohorts` (per cohort × per dropped subject) has the
-same shape.
-
-Resolution: add `rayon` as a workspace dependency, replace both
-loops with a parallel map over the index that returns each
-iteration's per-archetype match result, then fold into the
-accumulators sequentially in index order. Byte-identical output to
-the serial path (a determinism test alongside
-`crates/atman/tests/determinism_rng_commands.rs` should assert
-this); speedup is roughly core-count×. Expose `--threads` (default:
-all cores) so replay manifests can record it. Optionally split
-`--nmf-tol` into point-estimate and per-resample tolerances — the
-bootstrap aggregates over `n_boot` fits, so a looser per-resample
-tol is defensible — but that changes numerics and needs its own
-justification.
-
-Not for the current paper's run tree: any binary change re-pins and
-breaks the single-commit replay story (everything stays at PIN2).
-Pays off for submission-time public replay and the CSF cross-cohort
-work.
-
 ### Hierarchical / nested alignment
 
 Site → cohort → cross-cohort alignment for consortium data where a

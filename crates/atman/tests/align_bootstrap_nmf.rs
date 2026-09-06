@@ -580,3 +580,61 @@ fn align_bootstrap_rejects_unknown_decomposition() {
     let stderr = String::from_utf8_lossy(&status.stderr);
     assert!(stderr.contains("decomposition"), "unexpected: {stderr}");
 }
+
+/// The NMF branch goes through the same parallel bootstrap/jackknife
+/// loops; `--threads` must leave its bytes untouched too.
+#[test]
+fn align_bootstrap_nmf_is_byte_identical_across_thread_counts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("cohort_a");
+    let b = tmp.path().join("cohort_b");
+    write_nonneg_cohort(&a, "A", 11);
+    write_nonneg_cohort(&b, "B", 22);
+    let cohorts = format!("{},{}", a.display(), b.display());
+    let run = |threads: &str, out: &Path| {
+        let r = run_atman(&[
+            "align",
+            "bootstrap",
+            "--cohorts",
+            &cohorts,
+            "--labels",
+            "A,B",
+            "--decomposition",
+            "nmf",
+            "--init",
+            "nndsvda",
+            "--k",
+            "2",
+            "--n-boot",
+            "12",
+            "--seed",
+            "5",
+            "--cosine-tau",
+            "0.1",
+            "--match-tau",
+            "0.1",
+            "--min-subjects",
+            "8",
+            "--threads",
+            threads,
+            "--output",
+            out.to_str().unwrap(),
+        ]);
+        assert!(
+            r.status.success(),
+            "align bootstrap nmf (threads={threads}) failed:\n{}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+    };
+    let out1 = tmp.path().join("t1.tsv");
+    let out3 = tmp.path().join("t3.tsv");
+    run("1", &out1);
+    run("3", &out3);
+    let bytes1 = std::fs::read(&out1).unwrap();
+    let bytes3 = std::fs::read(&out3).unwrap();
+    assert!(!bytes1.is_empty());
+    assert_eq!(
+        bytes1, bytes3,
+        "nmf bootstrap output must be byte-identical across --threads"
+    );
+}

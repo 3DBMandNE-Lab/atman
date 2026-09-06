@@ -13,6 +13,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+rayon = { workspace = true }
 serde = { workspace = true }
 statrs = { workspace = true }
 

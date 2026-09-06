@@ -34,6 +34,7 @@ use crate::align::{build_archetypes, similarity, AlignMetric, AlignedProgram};
 use crate::ica::{canonicalize_ica, fast_ica, CanonicalIca, Xoshiro256pp};
 use crate::nmf::{apply_transform, nmf, BetaLoss, Init, NmfConfig, Transform as NmfTransform};
 use crate::rng::derive_sub_seed;
+use rayon::prelude::*;
 use statrs::distribution::{ContinuousCDF, Normal};
 
 #[derive(Debug, Clone)]
@@ -98,6 +99,11 @@ pub struct BootstrapParams {
     /// `n_cohorts` and the BCa CI use `alpha/2` and `1 - alpha/2`
     /// quantiles. `0.05` ⇒ 95% CI; must lie in `(0, 1)`.
     pub ci_alpha: f64,
+    /// Worker threads for the bootstrap and jackknife loops; `0` means
+    /// one per available core. Output does not depend on this value:
+    /// every iteration draws from its own `derive_sub_seed(seed, iter)`
+    /// stream and results are folded in iteration order.
+    pub threads: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -473,55 +479,134 @@ fn jackknife_n_cohorts(
     params: &BootstrapParams,
     universe: &[String],
     pe_archetypes: &[(usize, Vec<String>, Vec<f64>)],
+    pool: &rayon::ThreadPool,
 ) -> Result<Vec<Vec<f64>>, String> {
+    // Replicates in the serial order (cohort-major, dropped subject
+    // minor). Cohorts at or below min_subjects are skipped: leave-one-out
+    // would take them below the published minimum, and contributing
+    // zero replicates from such a cohort is honest — its acceleration
+    // contribution was going to be unreliable anyway.
+    let replicates: Vec<(usize, usize)> = cohorts
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.data.len() > params.min_subjects)
+        .flat_map(|(ci, c)| (0..c.data.len()).map(move |drop_idx| (ci, drop_idx)))
+        .collect();
+    let per_replicate: Vec<Result<Vec<f64>, String>> = pool.install(|| {
+        replicates
+            .par_iter()
+            .map(|&(ci, drop_idx)| {
+                jackknife_replicate(cohorts, params, universe, pe_archetypes, ci, drop_idx)
+            })
+            .collect()
+    });
     let mut jack: Vec<Vec<f64>> = pe_archetypes.iter().map(|_| Vec::new()).collect();
-    for (ci, cohort) in cohorts.iter().enumerate() {
-        // Skip cohorts below min_subjects + 1 (leave-one-out would
-        // take the cohort below the published minimum). Contributing
-        // zero jackknife replicates from such a cohort is honest —
-        // its effective acceleration contribution was going to be
-        // unreliable anyway.
-        if cohort.data.len() <= params.min_subjects {
-            continue;
-        }
-        for drop_idx in 0..cohort.data.len() {
-            let reduced: Vec<CohortMatrix> = cohorts
-                .iter()
-                .enumerate()
-                .map(|(cj, c)| {
-                    let data = if cj == ci {
-                        c.data
-                            .iter()
-                            .enumerate()
-                            .filter(|&(k, _)| k != drop_idx)
-                            .map(|(_, r)| r.clone())
-                            .collect()
-                    } else {
-                        c.data.clone()
-                    };
-                    CohortMatrix {
-                        label: c.label.clone(),
-                        data,
-                        protein_labels: c.protein_labels.clone(),
-                    }
-                })
-                .collect();
-            let counts = point_estimate_match_counts(
-                &reduced,
-                params,
-                universe,
-                pe_archetypes,
-                &format!(
-                    "jackknife drop cohort {:?} subject #{drop_idx}",
-                    cohort.label
-                ),
-            )?;
-            for (ai, n) in counts.iter().enumerate() {
-                jack[ai].push(*n);
-            }
+    for outcome in per_replicate {
+        for (ai, n) in outcome?.iter().enumerate() {
+            jack[ai].push(*n);
         }
     }
     Ok(jack)
+}
+
+/// One leave-one-subject-out replicate: drop subject `drop_idx` from
+/// cohort `ci`, refit every cohort, and return the per-PE-archetype
+/// matched cohort counts.
+fn jackknife_replicate(
+    cohorts: &[CohortMatrix],
+    params: &BootstrapParams,
+    universe: &[String],
+    pe_archetypes: &[(usize, Vec<String>, Vec<f64>)],
+    ci: usize,
+    drop_idx: usize,
+) -> Result<Vec<f64>, String> {
+    let reduced: Vec<CohortMatrix> = cohorts
+        .iter()
+        .enumerate()
+        .map(|(cj, c)| {
+            let data = if cj == ci {
+                c.data
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, _)| k != drop_idx)
+                    .map(|(_, r)| r.clone())
+                    .collect()
+            } else {
+                c.data.clone()
+            };
+            CohortMatrix {
+                label: c.label.clone(),
+                data,
+                protein_labels: c.protein_labels.clone(),
+            }
+        })
+        .collect();
+    point_estimate_match_counts(
+        &reduced,
+        params,
+        universe,
+        pe_archetypes,
+        &format!(
+            "jackknife drop cohort {:?} subject #{drop_idx}",
+            cohorts[ci].label
+        ),
+    )
+}
+
+/// One bootstrap iteration: resample every cohort from the iteration's
+/// own sub-seed stream, refit, align, group, and match each point-
+/// estimate archetype. Returns, per PE archetype, `Some(n_cohorts)` of
+/// the matched bootstrap archetype or `None` on a miss.
+fn bootstrap_iteration(
+    cohorts: &[CohortMatrix],
+    params: &BootstrapParams,
+    universe: &[String],
+    pe_archetypes: &[(usize, Vec<String>, Vec<f64>)],
+    iter: usize,
+) -> Result<Vec<Option<usize>>, String> {
+    let sub_seed = derive_sub_seed(params.seed, iter);
+    let mut rng = Xoshiro256pp::new(sub_seed);
+    // Resample every cohort using the same rng stream so iterations
+    // stay tied to a single sub-seed.
+    let bs_loadings: Vec<(String, Vec<Vec<f64>>)> = cohorts
+        .iter()
+        .enumerate()
+        .map(|(ci, c)| {
+            let resampled = resample_rows(&c.data, &mut rng);
+            let cohort_seed = sub_seed.wrapping_add(0x1_0000_0000 + ci as u64);
+            fit_loadings(
+                &resampled,
+                params.k,
+                cohort_seed,
+                &params.decomposition,
+                &format!("cohort {:?} (bootstrap iter {iter})", c.label),
+            )
+            .map(|l| (c.label.clone(), l))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let (bs_programs, bs_labels) = align_program_loadings(
+        &bs_loadings,
+        universe,
+        params.top_n,
+        params.cosine_tau,
+        params.metric,
+    );
+    let bs_archetypes = group_archetypes(&bs_programs, &bs_labels);
+
+    // Match every PE archetype to at most one bootstrap archetype
+    // by max cosine between representative loadings.
+    Ok(pe_archetypes
+        .iter()
+        .map(|(_, _, pe_rep)| {
+            match_pe_archetype(
+                pe_rep,
+                &bs_archetypes,
+                params.match_tau,
+                params.metric,
+                params.top_n,
+            )
+        })
+        .collect())
 }
 
 pub fn align_bootstrap(
@@ -601,46 +686,29 @@ pub fn align_bootstrap(
         .map(|_| BootstrapAcc::new(params.n_boot))
         .collect();
 
-    for iter in 0..params.n_boot {
-        let sub_seed = derive_sub_seed(params.seed, iter);
-        let mut rng = Xoshiro256pp::new(sub_seed);
-        // Resample every cohort using the same rng stream so iterations
-        // stay tied to a single sub-seed.
-        let bs_loadings: Vec<(String, Vec<Vec<f64>>)> = cohorts
-            .iter()
-            .enumerate()
-            .map(|(ci, c)| {
-                let resampled = resample_rows(&c.data, &mut rng);
-                let cohort_seed = sub_seed.wrapping_add(0x1_0000_0000 + ci as u64);
-                fit_loadings(
-                    &resampled,
-                    params.k,
-                    cohort_seed,
-                    &params.decomposition,
-                    &format!("cohort {:?} (bootstrap iter {iter})", c.label),
-                )
-                .map(|l| (c.label.clone(), l))
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        let (bs_programs, bs_labels) = align_program_loadings(
-            &bs_loadings,
-            universe,
-            params.top_n,
-            params.cosine_tau,
-            params.metric,
-        );
-        let bs_archetypes = group_archetypes(&bs_programs, &bs_labels);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(params.threads)
+        .build()
+        .map_err(|e| {
+            format!(
+                "align bootstrap: building thread pool ({} threads): {e}",
+                params.threads
+            )
+        })?;
 
-        // Match every PE archetype to at most one bootstrap archetype
-        // by max cosine between representative loadings.
-        for (ai, (_, _, pe_rep)) in pe_archetypes.iter().enumerate() {
-            match match_pe_archetype(
-                pe_rep,
-                &bs_archetypes,
-                params.match_tau,
-                params.metric,
-                params.top_n,
-            ) {
+    // Iterations are independent given their sub-seeds, so they run as a
+    // parallel map; the fold below walks the results in iteration order,
+    // which keeps every accumulator (and the first reported error)
+    // identical to the serial loop for any thread count.
+    let per_iter: Vec<Result<Vec<Option<usize>>, String>> = pool.install(|| {
+        (0..params.n_boot)
+            .into_par_iter()
+            .map(|iter| bootstrap_iteration(cohorts, &params, universe, &pe_archetypes, iter))
+            .collect()
+    });
+    for outcome in per_iter {
+        for (ai, matched) in outcome?.into_iter().enumerate() {
+            match matched {
                 Some(n) => acc[ai].observe(n, n_total_cohorts),
                 None => acc[ai].observe_miss(),
             }
@@ -648,7 +716,7 @@ pub fn align_bootstrap(
     }
 
     // Subject-level jackknife for BCa acceleration.
-    let jack = jackknife_n_cohorts(cohorts, &params, universe, &pe_archetypes)?;
+    let jack = jackknife_n_cohorts(cohorts, &params, universe, &pe_archetypes, &pool)?;
 
     Ok(pe_archetypes
         .iter()
@@ -794,6 +862,7 @@ mod tests {
             min_subjects: 5,
             metric: AlignMetric::Cosine,
             ci_alpha: 0.05,
+            threads: 1,
         };
         let err = align_bootstrap(&[a], p).unwrap_err();
         assert!(err.contains("at least 2 cohorts"));
@@ -817,6 +886,7 @@ mod tests {
             min_subjects: 5,
             metric: AlignMetric::Cosine,
             ci_alpha: 0.05,
+            threads: 1,
         };
         let err = align_bootstrap(&[a, b], p).unwrap_err();
         assert!(err.contains("min-subjects"), "unexpected: {err}");
@@ -841,6 +911,7 @@ mod tests {
             min_subjects: 5,
             metric: AlignMetric::Cosine,
             ci_alpha: 0.05,
+            threads: 1,
         };
         let err = align_bootstrap(&[a, b], p).unwrap_err();
         assert!(err.contains("mismatch"), "unexpected: {err}");
@@ -864,6 +935,7 @@ mod tests {
             min_subjects: 5,
             metric: AlignMetric::Cosine,
             ci_alpha: 0.05,
+            threads: 1,
         };
         let rows = align_bootstrap(&[a, b], p).unwrap();
         for r in &rows {
@@ -876,6 +948,43 @@ mod tests {
             assert!(r.bca_upper_n_cohorts.is_finite());
             assert!(r.bca_lower_n_cohorts <= r.bca_upper_n_cohorts);
         }
+    }
+
+    /// The bootstrap and jackknife loops are embarrassingly parallel
+    /// (one sub-seed per iteration). Whatever the thread count, the
+    /// fold must happen in iteration order so the rows are identical.
+    #[test]
+    fn align_bootstrap_rows_are_identical_across_thread_counts() {
+        let cohorts = [
+            toy_cohort("A", 24, 12, 1),
+            toy_cohort("B", 22, 12, 2),
+            toy_cohort("C", 26, 12, 3),
+        ];
+        let mk = |threads: usize| BootstrapParams {
+            k: 2,
+            n_boot: 12,
+            seed: 20260906,
+            top_n: 5,
+            cosine_tau: 0.0,
+            match_tau: 0.0,
+            decomposition: Decomposition::Ica {
+                max_iter: 40,
+                tol: 1e-2,
+            },
+            min_subjects: 5,
+            metric: AlignMetric::Cosine,
+            ci_alpha: 0.05,
+            threads,
+        };
+        let serial = align_bootstrap(&cohorts, mk(1)).unwrap();
+        assert!(!serial.is_empty(), "toy cohorts should yield archetypes");
+        let three = align_bootstrap(&cohorts, mk(3)).unwrap();
+        let all_cores = align_bootstrap(&cohorts, mk(0)).unwrap();
+        assert_eq!(serial, three, "threads=3 must reproduce threads=1 exactly");
+        assert_eq!(
+            serial, all_cores,
+            "threads=0 (all cores) must reproduce threads=1 exactly"
+        );
     }
 
     #[test]
@@ -940,6 +1049,7 @@ mod tests {
             min_subjects: 5,
             metric: AlignMetric::Cosine,
             ci_alpha: 0.05,
+            threads: 1,
         };
         let cos_rows = align_bootstrap(&[a.clone(), b.clone()], base).unwrap();
         let mut jac = base;
@@ -977,6 +1087,7 @@ mod tests {
             min_subjects: 5,
             metric: AlignMetric::Cosine,
             ci_alpha: 0.05,
+            threads: 1,
         };
         let x = align_bootstrap(&[a.clone(), b.clone()], p).unwrap();
         let y = align_bootstrap(&[a, b], p).unwrap();

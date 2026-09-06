@@ -845,3 +845,75 @@ fn robust_paired_is_byte_deterministic() {
         "robust-paired sidecar",
     );
 }
+
+/// `--threads` must not change a single output byte: the per-iteration
+/// sub-seeds are fixed and the fold is in iteration order, so 1 thread,
+/// 4 threads, and the all-cores default produce identical TSVs.
+#[test]
+fn align_bootstrap_threads_flag_is_byte_identical_across_thread_counts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("cohort_a");
+    let b = tmp.path().join("cohort_b");
+    let c = tmp.path().join("cohort_c");
+    write_align_cohort(&a, "A", true, false, 11);
+    write_align_cohort(&b, "B", false, true, 22);
+    write_align_cohort(&c, "C", true, true, 33);
+    let cohorts = format!("{},{},{}", a.display(), b.display(), c.display());
+    let run = |threads: Option<&str>, out: &Path| {
+        let mut args = vec![
+            "align",
+            "bootstrap",
+            "--cohorts",
+            &cohorts,
+            "--labels",
+            "A,B,C",
+            "--k",
+            "3",
+            "--n-boot",
+            "40",
+            "--seed",
+            "7",
+            "--cosine-tau",
+            "0.1",
+            "--match-tau",
+            "0.1",
+            "--min-subjects",
+            "10",
+            "--max-iter",
+            "80",
+            "--tol",
+            "1e-3",
+            "--output",
+            out.to_str().unwrap(),
+        ];
+        if let Some(t) = threads {
+            args.push("--threads");
+            args.push(t);
+        }
+        let r = run_atman(&args);
+        assert!(
+            r.status.success(),
+            "align bootstrap (threads={threads:?}) failed:\n{}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+    };
+    // Same filename in per-run directories: the sidecar helper compares
+    // (filename, sha) pairs.
+    let out1 = tmp.path().join("t1").join("summary.tsv");
+    let out4 = tmp.path().join("t4").join("summary.tsv");
+    let out_default = tmp.path().join("tdefault").join("summary.tsv");
+    run(Some("1"), &out1);
+    run(Some("4"), &out4);
+    run(None, &out_default);
+    assert_byte_identical(&out1, &out4, "align bootstrap --threads 1 vs 4");
+    assert_byte_identical(
+        &out1,
+        &out_default,
+        "align bootstrap --threads 1 vs default",
+    );
+    assert_sidecar_shas_match(
+        &sidecar_for(&out1),
+        &sidecar_for(&out4),
+        "align bootstrap sidecar --threads 1 vs 4",
+    );
+}

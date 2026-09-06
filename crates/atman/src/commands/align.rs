@@ -299,6 +299,14 @@ pub struct BootstrapArgs {
     #[arg(long, default_value_t = 1e-5)]
     nmf_tol: f64,
 
+    /// Worker threads for the bootstrap and jackknife loops. `0`
+    /// (default) uses one thread per available core. Output bytes do
+    /// not depend on this value — every iteration has its own sub-seed
+    /// and results are folded in iteration order — so it is safe to
+    /// vary between a pinned run and its replay; the sidecar records it.
+    #[arg(long, default_value_t = 0)]
+    threads: usize,
+
     /// Pre-decomposition transform for `--decomposition nmf`: `none`
     /// (default; requires non-negative input — rejected loudly
     /// otherwise), `exp2-clip`, or `shift-min`. Re-applied fresh to
@@ -387,13 +395,18 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
     let matrices = intersect_cohorts(matrices)?;
 
     eprintln!(
-        "align bootstrap: cohorts={} k={} n_boot={} cosine_tau={} match_tau={} seed={}",
+        "align bootstrap: cohorts={} k={} n_boot={} cosine_tau={} match_tau={} seed={} threads={}",
         matrices.len(),
         args.k,
         args.n_boot,
         args.cosine_tau,
         args.match_tau,
-        args.seed
+        args.seed,
+        if args.threads == 0 {
+            "all".to_string()
+        } else {
+            args.threads.to_string()
+        }
     );
 
     let metric = match args.metric.as_str() {
@@ -476,6 +489,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         min_subjects: args.min_subjects,
         metric,
         ci_alpha: args.ci_alpha,
+        threads: args.threads,
     };
     let rows: Vec<BootstrapRow> =
         align_bootstrap(&matrices, params).map_err(|e| anyhow::anyhow!(e))?;
@@ -529,6 +543,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
             "init": args.init,
             "nmf-max-iter": args.nmf_max_iter,
             "nmf-tol": args.nmf_tol,
+            "threads": args.threads,
             "transform": args.transform,
             // Resolved effective clamp (6.0 default when --transform
             // exp2-clip is used without an explicit --transform-clamp),
