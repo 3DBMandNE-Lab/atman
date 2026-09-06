@@ -142,6 +142,7 @@ pub(super) fn run_null(args: NullArgs) -> Result<()> {
         max_joint_iter: 5,
         joint_tol: 1e-6,
         degeneracy_floor: 0.1,
+        weighted_whitening: false,
     };
     let matrix = load_matrix(&adapter)?;
     if args.k > matrix.samples.len() || args.k > matrix.assays.len() {

@@ -538,6 +538,7 @@ fn run_atman_native_mnar_ica(
         // Guard off: this harness benchmarks the loop itself, and a
         // stopping rule would measure the guard instead.
         degeneracy_floor: 0.0,
+        weighted_whitening: false,
     };
     let start = Instant::now();
     let result = fast_ica_mnar(abundance, &config);

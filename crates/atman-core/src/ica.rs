@@ -105,6 +105,94 @@ pub struct Whitening {
 }
 
 /// Standard PCA-based whitening for `n x p` matrix `x` to `k` components.
+/// Reliability-weighted whitening: the same decomposition as
+/// [`pca_whiten`], with each cell's contribution to the mean and the
+/// covariance scaled by `cell_weights[i][j]`.
+///
+/// This is where a per-cell detection model belongs. Weighting a
+/// FastICA contrast function per cell has no clean interpretation,
+/// because the contrast acts on the projection `w·x` and a single cell
+/// has no separate identity there — which is why the previous attempt
+/// collapsed per-cell weights to a per-sample scalar and downweighted
+/// whole low-abundance samples, losing heavy-tailed source recovery.
+/// The covariance is different: it is a sum over cells, so a cell that
+/// is probably a non-detection can contribute less to the second-order
+/// structure without any sample being discarded.
+///
+/// Weighted moments:
+/// `mu_a = Σ_i w_ia x_ia / Σ_i w_ia`, and
+/// `C_ab = Σ_i w_ia w_ib (x_ia − mu_a)(x_ib − mu_b) / Σ_i w_ia w_ib`.
+///
+/// Uniform weights reproduce [`pca_whiten`] up to floating point.
+pub fn pca_whiten_weighted(x: &[Vec<f64>], k: usize, cell_weights: &[Vec<f64>]) -> Whitening {
+    let n = x.len();
+    assert!(n > 1 && k > 0);
+    let p = x[0].len();
+    assert!(x.iter().all(|r| r.len() == p));
+    assert!(
+        cell_weights.len() == n && cell_weights.iter().all(|r| r.len() == p),
+        "cell_weights must be n x p"
+    );
+
+    // Weighted column means.
+    let mut mean = vec![0.0_f64; p];
+    for j in 0..p {
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for i in 0..n {
+            let w = cell_weights[i][j].max(0.0);
+            num += w * x[i][j];
+            den += w;
+        }
+        mean[j] = if den > 0.0 { num / den } else { 0.0 };
+    }
+    let xc: Vec<Vec<f64>> = x
+        .iter()
+        .map(|row| row.iter().enumerate().map(|(j, v)| v - mean[j]).collect())
+        .collect();
+
+    // Weighted covariance in feature space. Always p x p here: the
+    // sample-space Gram shortcut does not carry per-cell weights,
+    // because a weighted inner product between two SAMPLES is not the
+    // same object as the weighted covariance between two FEATURES.
+    let mut cov = vec![vec![0.0_f64; p]; p];
+    for a in 0..p {
+        for b in a..p {
+            let mut num = 0.0;
+            let mut sum_w = 0.0;
+            let mut sum_w2 = 0.0;
+            for i in 0..n {
+                let w = cell_weights[i][a].max(0.0) * cell_weights[i][b].max(0.0);
+                num += w * xc[i][a] * xc[i][b];
+                sum_w += w;
+                sum_w2 += w * w;
+            }
+            // Unbiased denominator for reliability weights:
+            // `Σw − Σw²/Σw`, which is exactly `n − 1` when every weight
+            // is 1. Using `Σw` instead would make uniform weights
+            // disagree with `pca_whiten` by `n/(n−1)`, and any
+            // comparison between the two paths would then be measuring
+            // that instead of the weighting.
+            let den = if sum_w > 0.0 {
+                sum_w - sum_w2 / sum_w
+            } else {
+                0.0
+            };
+            let v = if den > 0.0 { num / den } else { 0.0 };
+            cov[a][b] = v;
+            cov[b][a] = v;
+        }
+    }
+    let (vals, vecs) = jacobi_eigen(&cov);
+    let mut whitening_pxk = vec![vec![0.0_f64; k]; p];
+    for (i, row) in whitening_pxk.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = vecs[i][j];
+        }
+    }
+    finish_whitening(xc, mean, vals, whitening_pxk, k, p)
+}
+
 pub fn pca_whiten(x: &[Vec<f64>], k: usize) -> Whitening {
     let n = x.len();
     assert!(n > 1 && k > 0);
@@ -185,6 +273,22 @@ pub fn pca_whiten(x: &[Vec<f64>], k: usize) -> Whitening {
         (vals, vecs_p)
     };
 
+    finish_whitening(xc, mean, eigs, whitening_pxk, k, p)
+}
+
+/// Shared tail of the whitening constructions: build the whitening and
+/// unwhitening matrices from the eigenpairs and project the centred
+/// data. Split out so the plain and reliability-weighted paths cannot
+/// drift apart.
+fn finish_whitening(
+    xc: Vec<Vec<f64>>,
+    mean: Vec<f64>,
+    eigs: Vec<f64>,
+    whitening_pxk: Vec<Vec<f64>>,
+    k: usize,
+    p: usize,
+) -> Whitening {
+    let n = xc.len();
     let top_eigs: Vec<f64> = eigs.iter().take(k).copied().collect();
     // whitening = diag(1/sqrt(lambda)) * V^T  (k x p)
     let mut whitening = vec![vec![0.0_f64; p]; k];
@@ -266,6 +370,36 @@ pub fn fast_ica(x: &[Vec<f64>], k: usize, seed: u64, max_iter: usize, tol: f64) 
 /// (i.e., incorporating per-cell missingness into the sphering step) is a
 /// deferred feature — under the mild missingness regime of Phase G the gain
 /// is negligible relative to the weighted fixed-point iteration.
+/// FastICA with reliability-weighted whitening.
+///
+/// `cell_weights` is `n x p` and scales each cell's contribution to the
+/// whitening moments. The fixed-point iteration itself runs unweighted
+/// on the whitened data, which is the point: a per-cell weight has a
+/// clean meaning in a covariance and none in a contrast function.
+///
+/// Pass an empty slice to fall back to [`fast_ica`].
+pub fn fast_ica_whitening_weighted(
+    x: &[Vec<f64>],
+    k: usize,
+    seed: u64,
+    max_iter: usize,
+    tol: f64,
+    cell_weights: &[Vec<f64>],
+) -> IcaResult {
+    if cell_weights.is_empty() {
+        return fast_ica(x, k, seed, max_iter, tol);
+    }
+    let n = x.len();
+    fast_ica_from_whitening_weighted(
+        pca_whiten_weighted(x, k, cell_weights),
+        k,
+        seed,
+        max_iter,
+        tol,
+        &vec![1.0_f64; n],
+    )
+}
+
 pub fn fast_ica_weighted(
     x: &[Vec<f64>],
     k: usize,
@@ -303,10 +437,28 @@ pub fn fast_ica_weighted(
     } else {
         vec![1.0_f64; n]
     };
-    let total_weight: f64 = sample_weights.iter().sum();
 
     let w = pca_whiten(x, k);
+    fast_ica_from_whitening_weighted(w, k, seed, max_iter, tol, &sample_weights)
+}
 
+/// FastICA fixed point on an already-whitened matrix.
+///
+/// Split out so the plain path, the sample-weighted path and the
+/// reliability-weighted-whitening path share one iteration and cannot
+/// drift. `sample_weights` weights the CONTRAST; per-cell reliability
+/// belongs in the whitening that produced `w`, not here.
+fn fast_ica_from_whitening_weighted(
+    w: Whitening,
+    k: usize,
+    seed: u64,
+    max_iter: usize,
+    tol: f64,
+    sample_weights: &[f64],
+) -> IcaResult {
+    let n = w.whitened.len();
+    let p = w.mean.len();
+    let total_weight: f64 = sample_weights.iter().sum();
     let mut rng = Xoshiro256pp::new(seed);
     let mut weights = vec![vec![0.0_f64; k]; k];
     for row in weights.iter_mut() {
@@ -692,5 +844,71 @@ mod tests {
             sxy += dx * dy;
         }
         (sxy / (sxx.sqrt() * syy.sqrt())).abs()
+    }
+}
+
+#[cfg(test)]
+mod weighted_whitening_tests {
+    use super::*;
+
+    /// Uniform weights must reproduce the unweighted whitening. If they
+    /// do not, the weighted path is computing a different object and any
+    /// comparison against plain ICA is confounded by that rather than by
+    /// the weighting.
+    #[test]
+    fn uniform_weights_reproduce_plain_whitening() {
+        let mut rng = Xoshiro256pp::new(11);
+        let n = 40;
+        let p = 12;
+        let x: Vec<Vec<f64>> = (0..n)
+            .map(|_| (0..p).map(|_| rng.next_normal()).collect())
+            .collect();
+        let ones = vec![vec![1.0_f64; p]; n];
+        let plain = pca_whiten(&x, 3);
+        let weighted = pca_whiten_weighted(&x, 3, &ones);
+        for (a, b) in plain.mean.iter().zip(weighted.mean.iter()) {
+            assert!((a - b).abs() < 1e-9, "means differ: {a} vs {b}");
+        }
+        for (ra, rb) in plain.whitened.iter().zip(weighted.whitened.iter()) {
+            for (a, b) in ra.iter().zip(rb.iter()) {
+                assert!(
+                    (a.abs() - b.abs()).abs() < 1e-6,
+                    "whitened coordinates differ: {a} vs {b}"
+                );
+            }
+        }
+    }
+
+    /// A zero-weighted cell must not influence the moments. This is the
+    /// property that makes the weighting mean anything: an undetected
+    /// cell whose imputed value is arbitrary should not steer the
+    /// covariance.
+    #[test]
+    fn zero_weighted_cells_do_not_move_the_moments() {
+        let mut rng = Xoshiro256pp::new(7);
+        let n = 30;
+        let p = 8;
+        let mut x: Vec<Vec<f64>> = (0..n)
+            .map(|_| (0..p).map(|_| rng.next_normal()).collect())
+            .collect();
+        let mut weights = vec![vec![1.0_f64; p]; n];
+        // Corrupt some cells and zero their weight.
+        for i in 0..n {
+            if i % 5 == 0 {
+                x[i][3] = 1e6;
+                weights[i][3] = 0.0;
+            }
+        }
+        let w = pca_whiten_weighted(&x, 2, &weights);
+        assert!(
+            w.mean[3].abs() < 5.0,
+            "a zero-weighted outlier still moved the mean: {}",
+            w.mean[3]
+        );
+        assert!(
+            w.eigenvalues.iter().all(|v| v.is_finite() && *v < 1e6),
+            "a zero-weighted outlier still dominates the spectrum: {:?}",
+            w.eigenvalues
+        );
     }
 }

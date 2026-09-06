@@ -146,6 +146,18 @@ pub struct IcaArgs {
     #[arg(long, default_value_t = 0.1)]
     pub(super) degeneracy_floor: f64,
 
+    /// Use the detection model to weight the whitening instead of
+    /// discarding it. Only with `--missingness-model
+    /// abundance-conditional`.
+    ///
+    /// Off by default and deliberately so: the previously shipped path
+    /// fitted a detection curve and never used it, and this is the first
+    /// route by which it reaches the estimator. Validate it on ground
+    /// truth for your data before trusting it — a decomposition that
+    /// looks different is not one that is better.
+    #[arg(long, default_value_t = false)]
+    pub(super) weighted_whitening: bool,
+
     /// Gene symbol (matched against `samples` metadata `gene_symbol`)
     /// used as the reference for `--transform alr` or
     /// `--transform ratio-anchor`. Ignored for other transforms.
@@ -267,6 +279,7 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
             max_joint_iter: args.max_joint_iter,
             joint_tol: args.joint_tol,
             degeneracy_floor: args.degeneracy_floor,
+            weighted_whitening: args.weighted_whitening,
         };
         let mnar_result = fast_ica_mnar(raw, &mnar_config);
         eprintln!(
@@ -339,6 +352,7 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
                     max_joint_iter: args.max_joint_iter,
                     joint_tol: args.joint_tol,
                     degeneracy_floor: args.degeneracy_floor,
+                    weighted_whitening: args.weighted_whitening,
                 },
             )
             .ica

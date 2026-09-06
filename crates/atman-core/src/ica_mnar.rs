@@ -255,6 +255,24 @@ pub struct MnarIcaConfig {
     ///
     /// `0.0` disables the guard and restores the previous behaviour.
     pub degeneracy_floor: f64,
+    /// Use the detection model to weight the WHITENING rather than
+    /// discarding it.
+    ///
+    /// The previous attempt passed per-cell weights to a function that
+    /// averaged them into a per-sample scalar, so whole low-abundance
+    /// samples were downweighted and heavy-tailed source recovery
+    /// suffered. That was a real negative result about per-SAMPLE
+    /// weighting and was never a test of per-cell weighting, which had
+    /// no path to the estimator.
+    ///
+    /// Here each cell's contribution to the whitening moments is scaled:
+    /// an observed cell counts fully, and an undetected cell counts by
+    /// `1 − P(detected)` at its imputed value — so an imputation the
+    /// detection model says should have been observed is treated as
+    /// unreliable, while one consistent with genuine non-detection is
+    /// trusted. The contrast function stays unweighted, because a
+    /// per-cell weight has no meaning there.
+    pub weighted_whitening: bool,
 }
 
 impl Default for MnarIcaConfig {
@@ -267,6 +285,7 @@ impl Default for MnarIcaConfig {
             max_joint_iter: 5,
             joint_tol: 1e-6,
             degeneracy_floor: 0.1,
+            weighted_whitening: false,
         }
     }
 }
@@ -398,8 +417,40 @@ pub struct MnarIcaResult {
 /// recovery on the Phase-F fixture.  Per-cell detection-probability weighting
 /// is retained as a named helper (`compute_cell_weights_with_mask`, `detection_probability`)
 /// for future work on detection-model-aware whitening.
+/// Per-cell reliability weights from the detection model.
+///
+/// Observed cells count fully. An undetected cell counts by
+/// `1 − P(detected | imputed value)`: if the curve says a cell at that
+/// abundance should almost certainly have been detected, its imputed
+/// value contradicts the model and is downweighted; if non-detection is
+/// expected there, the imputation is trusted. Floored so no cell is
+/// removed outright.
+fn detection_cell_weights(
+    imputed: &[Vec<f64>],
+    detected: &[Vec<bool>],
+    curve: &DetectionCurve,
+) -> Vec<Vec<f64>> {
+    let log_ab = log_abundance_for_fit(imputed);
+    imputed
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            (0..row.len())
+                .map(|j| {
+                    if detected[i][j] {
+                        1.0
+                    } else {
+                        let p = detection_probability(curve, log_ab[i][j]);
+                        (1.0 - p).clamp(0.05, 1.0)
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
 pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaResult {
-    use crate::ica::fast_ica_weighted;
+    use crate::ica::{fast_ica_weighted, fast_ica_whitening_weighted};
 
     let n = abundance.len();
     let p = if n > 0 { abundance[0].len() } else { 0 };
@@ -433,14 +484,26 @@ pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaR
     // systematic loss of recovery accuracy for the tail — i.e. the weighted
     // ICA can be *worse* than uniform-weight ICA.  Joint iteration with uniform
     // weights and ICA-reconstruction re-imputation avoids this bias.
-    let mut ica_result = fast_ica_weighted(
-        &imputed,
-        config.k,
-        config.seed,
-        config.max_iter,
-        config.tol,
-        &[], // uniform weights → identical to plain fast_ica
-    );
+    let mut ica_result = if config.weighted_whitening {
+        let w = detection_cell_weights(&imputed, &detected, &curve);
+        fast_ica_whitening_weighted(
+            &imputed,
+            config.k,
+            config.seed,
+            config.max_iter,
+            config.tol,
+            &w,
+        )
+    } else {
+        fast_ica_weighted(
+            &imputed,
+            config.k,
+            config.seed,
+            config.max_iter,
+            config.tol,
+            &[], // uniform weights → identical to plain fast_ica
+        )
+    };
 
     let mut joint_iterations = 1;
     let mut joint_converged = false;
@@ -492,15 +555,28 @@ pub fn fast_ica_mnar(abundance: &[Vec<f64>], config: &MnarIcaConfig) -> MnarIcaR
         let (lab2_flat, det2_flat) = flatten_for_fit(&log_ab_mat2, &detected);
         curve = fit_detection_curve(&lab2_flat, &det2_flat);
 
-        // Re-run ICA with uniform weights on the re-imputed matrix.
-        ica_result = fast_ica_weighted(
-            &reimputed,
-            config.k,
-            config.seed,
-            config.max_iter,
-            config.tol,
-            &[], // uniform weights
-        );
+        // Re-run ICA on the re-imputed matrix, carrying the refreshed
+        // detection weights when weighted whitening is enabled.
+        ica_result = if config.weighted_whitening {
+            let w = detection_cell_weights(&reimputed, &detected, &curve);
+            fast_ica_whitening_weighted(
+                &reimputed,
+                config.k,
+                config.seed,
+                config.max_iter,
+                config.tol,
+                &w,
+            )
+        } else {
+            fast_ica_weighted(
+                &reimputed,
+                config.k,
+                config.seed,
+                config.max_iter,
+                config.tol,
+                &[], // uniform weights
+            )
+        };
         joint_iterations += 1;
 
         let delta = (curve.beta0 - prev_beta0)
@@ -906,6 +982,7 @@ mod degeneracy_floor_tests {
             // test is about the other two exits.
             joint_tol: 1e-300,
             degeneracy_floor,
+            weighted_whitening: false,
         }
     }
 

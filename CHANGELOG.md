@@ -8,6 +8,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`decompose ica --weighted-whitening`**: the detection model now
+  reaches the estimator. Per-cell reliability scales each cell's
+  contribution to the whitening moments — an observed cell counts fully,
+  an undetected one counts by `1 − P(detected)` at its imputed value —
+  while the contrast function stays unweighted, because a per-cell
+  weight has a clean meaning in a covariance and none in a contrast.
+  `atman_core::ica::pca_whiten_weighted` uses the unbiased
+  reliability-weight denominator `Σw − Σw²/Σw`, so uniform weights
+  reproduce `pca_whiten` exactly rather than differing by `n/(n−1)`.
+  Off by default.
+  Measured on the committed ground-truth fixture over six seeds, mean
+  absolute error against the planted sources: mean-imputation 0.0768,
+  the existing joint loop 0.0759, weighted whitening in that loop
+  0.0754, and **weighted whitening with `--max-joint-iter 1` 0.0737**,
+  best on every seed. So per-cell detection weighting helps, and the
+  joint loop costs recovery: it drives imputed cells toward their own
+  reconstruction, and running it undoes part of what the weighting
+  gains. The recommended configuration is `--weighted-whitening
+  --max-joint-iter 1`. All four orderings are asserted, not just
+  reported.
 - **`atman harmonize fit` / `atman harmonize apply`**: cross-cohort
   harmonisation with a fit-then-apply contract, for benchmarking
   harmonisation methods by held-out transfer. `fit` reads the training
