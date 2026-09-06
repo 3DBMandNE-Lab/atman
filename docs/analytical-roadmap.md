@@ -894,6 +894,41 @@ Atman now covers the standalone release surface targeted by this roadmap:
 - The core CLI does not require Python, notebooks, services, or external
   workflow infrastructure.
 
+## Unscheduled: alternative decompositions
+
+Method-transfer ideas, parked here rather than in `feature_requests.md`
+because nobody has requested them. They were proposed on 2026-04-20 while
+adjacent decomposition work was underway, and the 2026-09-06 survey of
+every manuscript session found no project that wants one. They are not
+queued; they are a menu to reach for if a future project needs an
+alternative to the FastICA + ICASSO path the current work commits to.
+
+Anything built from here starts by re-asking whether a project needs it,
+and then goes through the normal spec route, not straight to code.
+
+### PMF (positive matrix factorization) with per-cell uncertainty weighting
+
+Port from atmospheric source apportionment (Paatero & Tapper 1994).
+Sibling to `atman decompose unmix`: where VCA+FCLS finds geometric
+endmembers, PMF finds non-negative factors while natively weighting each
+cell by its reciprocal analytical uncertainty. Would suit DIA-MS inputs
+that ship per-protein-per-sample CV or detection-limit flags. Plausible
+surface: `atman decompose pmf --uncertainty measurements_cv.tsv`.
+
+### MCR-ALS (multivariate curve resolution — alternating least squares)
+
+From chemometrics. Sibling to `atman decompose unmix`: NMF with
+chemistry-aware constraints (non-negativity, unimodality, closure) on the
+protein-by-sample matrix. Plausible surface: `atman decompose mcr`.
+
+### Longitudinal tensor decomposition
+
+Samples × proteins × timepoints, where random-subject variance becomes
+the signal rather than the nuisance. Would sit on top of the existing
+`decompose variance` surface. Note the practical obstacle: the only
+longitudinal arm in any current project is 12 subjects × 3 timepoints,
+which the existing one-way ICC already covers.
+
 ## Dependency notes
 
 ### `statrs` (0.17) — symbol-usage audit
