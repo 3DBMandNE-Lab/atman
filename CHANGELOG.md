@@ -8,6 +8,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`align programs --metric cosine-centered`, and a tau-selectivity
+  report.** Plain cosine has a positivity floor on non-negative loadings:
+  two NMF programs cannot score below zero and in practice sit high just
+  from sharing that baseline. Measured across six CPTAC cohorts on a
+  shared 4,375-gene universe, the median cross-cohort cosine was +0.813
+  for NMF against −0.004 for ICA, so `--tau 0.30` admitted 99.9% of NMF
+  pairs and 7.7% of ICA pairs. The same threshold was selective for one
+  method and inert for the other, which makes a method comparison at a
+  shared tau meaningless, and it also makes a tau sweep look robust when
+  it is merely saturated. `cosine-centered` mean-centres each loading
+  vector first, removing the floor rather than compensating for it
+  (centred NMF median −0.002, 9.4% above 0.30, against ICA's 7.7%).
+  `align programs` now also reports what fraction of cross-cohort pairs
+  the supplied tau admits, and warns above 90% that the threshold is not
+  thresholding and the structure is being decided by reciprocal-best
+  matching alone. The choice of metric is recorded in the sidecar, since
+  a reader cannot otherwise tell which similarity was computed.
+  Note what is *not* claimed: whether centring changes the resulting
+  archetype structure is untested here. The measurements above are
+  pairwise similarities with no grouping algorithm in them.
 - **`align project` now reports loading-weighted coverage per archetype**
   (`projection_archetype_coverage.tsv`, plus a stderr warning below 50%
   mass or fewer than 10 of the top 20 defining proteins). The existing

@@ -16,6 +16,23 @@ pub use crate::stats::jaccard_top_n;
 pub enum AlignMetric {
     Jaccard,
     Cosine,
+    /// Cosine after mean-centring each loading vector.
+    ///
+    /// Plain cosine has a positivity floor on non-negative loadings: two
+    /// NMF programs cannot have a negative cosine, and in practice they
+    /// sit high simply from sharing that baseline. Measured across six
+    /// CPTAC cohorts on a shared 4,375-gene universe, the median
+    /// cross-cohort cosine was +0.813 for NMF against −0.004 for ICA, so
+    /// a `--tau 0.30` gate admitted 99.9% of NMF pairs and 7.7% of ICA
+    /// pairs. The same threshold was selective for one method and inert
+    /// for the other, which makes a method comparison at a shared tau
+    /// meaningless.
+    ///
+    /// Centring removes the floor rather than compensating for it: the
+    /// centred NMF median is −0.002 with 9.4% above 0.30, against ICA's
+    /// 7.7%. Raising tau for NMF instead would keep the floor and demand
+    /// extreme similarity on top of it.
+    CosineCentered,
     Spearman,
 }
 
@@ -24,6 +41,7 @@ impl AlignMetric {
         match s.trim().to_ascii_lowercase().as_str() {
             "jaccard" => Some(AlignMetric::Jaccard),
             "cosine" => Some(AlignMetric::Cosine),
+            "cosine-centered" | "cosine-centred" => Some(AlignMetric::CosineCentered),
             "spearman" => Some(AlignMetric::Spearman),
             _ => None,
         }
@@ -33,6 +51,7 @@ impl AlignMetric {
         match self {
             AlignMetric::Jaccard => "jaccard",
             AlignMetric::Cosine => "cosine",
+            AlignMetric::CosineCentered => "cosine-centered",
             AlignMetric::Spearman => "spearman",
         }
     }
@@ -59,6 +78,18 @@ pub fn similarity(a: &[f64], b: &[f64], metric: AlignMetric, top_n: usize) -> f6
     match metric {
         AlignMetric::Jaccard => stats::jaccard_top_n(a, b, top_n),
         AlignMetric::Cosine => stats::cosine(a, b).map(f64::abs).unwrap_or(f64::NAN),
+        AlignMetric::CosineCentered => {
+            let centre = |v: &[f64]| -> Vec<f64> {
+                if v.is_empty() {
+                    return Vec::new();
+                }
+                let mean = v.iter().sum::<f64>() / v.len() as f64;
+                v.iter().map(|x| x - mean).collect()
+            };
+            stats::cosine(&centre(a), &centre(b))
+                .map(f64::abs)
+                .unwrap_or(f64::NAN)
+        }
         AlignMetric::Spearman => stats::spearman(a, b).map(f64::abs).unwrap_or(f64::NAN),
     }
 }
@@ -172,6 +203,50 @@ pub fn archetypes_union_find(n: usize, edges: &[(usize, usize)]) -> Vec<usize> {
         }
     }
     (0..n).map(|i| find(&mut parent, i)).collect()
+}
+
+/// How selective a `tau` actually is on this data, over every
+/// cross-cohort program pair.
+///
+/// A threshold that admits nearly every candidate is not thresholding;
+/// the structure is then decided entirely by reciprocal-best matching
+/// and the gate is a no-op. That is invisible in the output, and it
+/// makes a sweep over `tau` look robust when it is merely saturated.
+///
+/// Returns `(n_pairs, n_above_tau, median_similarity)`.
+pub fn tau_selectivity(
+    programs: &[AlignedProgram],
+    metric: AlignMetric,
+    top_n: usize,
+    tau: f64,
+) -> (usize, usize, f64) {
+    let mut by_cohort: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (idx, p) in programs.iter().enumerate() {
+        by_cohort.entry(p.cohort.clone()).or_default().push(idx);
+    }
+    let cohorts: Vec<&String> = by_cohort.keys().collect();
+    let mut sims: Vec<f64> = Vec::new();
+    for i in 0..cohorts.len() {
+        for j in (i + 1)..cohorts.len() {
+            for &ia in &by_cohort[cohorts[i]] {
+                for &ib in &by_cohort[cohorts[j]] {
+                    let v = similarity(&programs[ia].values, &programs[ib].values, metric, top_n);
+                    if v.is_finite() {
+                        sims.push(v);
+                    }
+                }
+            }
+        }
+    }
+    let n_above = sims.iter().filter(|v| **v >= tau).count();
+    let median = if sims.is_empty() {
+        f64::NAN
+    } else {
+        let mut sorted = sims.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        sorted[sorted.len() / 2]
+    };
+    (sims.len(), n_above, median)
 }
 
 /// Given a set of programs across cohorts already aligned to a shared label
@@ -368,5 +443,96 @@ mod tests {
         assert_eq!(summary.n_multi_cohort, 1);
         assert_eq!(summary.n_universal, 1);
         assert!((summary.category_recovery - 1.0).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+mod centered_cosine_tests {
+    use super::*;
+
+    fn prog(cohort: &str, name: &str, values: Vec<f64>) -> AlignedProgram {
+        AlignedProgram {
+            cohort: cohort.to_string(),
+            program: name.to_string(),
+            values,
+            category: None,
+        }
+    }
+
+    /// Plain cosine cannot go below zero on non-negative vectors, so two
+    /// unrelated non-negative programs still score high and a shared tau
+    /// stops thresholding. Centring removes the floor.
+    #[test]
+    fn centered_cosine_removes_the_non_negative_positivity_floor() {
+        // Two non-negative vectors with disjoint "signal" on a shared
+        // positive baseline: unrelated, but both strictly positive.
+        let a: Vec<f64> = (0..200)
+            .map(|i| 1.0 + if i < 20 { 3.0 } else { 0.0 })
+            .collect();
+        let b: Vec<f64> = (0..200)
+            .map(|i| 1.0 + if (100..120).contains(&i) { 3.0 } else { 0.0 })
+            .collect();
+
+        let raw = similarity(&a, &b, AlignMetric::Cosine, 20);
+        let centered = similarity(&a, &b, AlignMetric::CosineCentered, 20);
+        assert!(
+            raw > 0.5,
+            "plain cosine should sit high on the shared baseline, got {raw}"
+        );
+        assert!(
+            centered < raw - 0.3,
+            "centring should remove the baseline: raw {raw}, centered {centered}"
+        );
+    }
+
+    /// Centring must not flatten genuine agreement.
+    #[test]
+    fn centered_cosine_keeps_real_similarity_high() {
+        let a: Vec<f64> = (0..200)
+            .map(|i| 1.0 + if i < 20 { 3.0 } else { 0.0 })
+            .collect();
+        let b: Vec<f64> = (0..200)
+            .map(|i| 1.0 + if i < 20 { 2.7 } else { 0.05 })
+            .collect();
+        let centered = similarity(&a, &b, AlignMetric::CosineCentered, 20);
+        assert!(
+            centered > 0.9,
+            "programs sharing their signal should stay similar after centring, got {centered}"
+        );
+    }
+
+    /// The saturation measurement reports what a tau actually admits.
+    #[test]
+    fn tau_selectivity_detects_an_inert_threshold() {
+        let base = |offset: usize| -> Vec<f64> {
+            (0..200)
+                .map(|i| {
+                    1.0 + if (offset..offset + 20).contains(&i) {
+                        3.0
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        };
+        let programs = vec![
+            prog("c1", "p1", base(0)),
+            prog("c1", "p2", base(40)),
+            prog("c2", "p1", base(80)),
+            prog("c2", "p2", base(120)),
+        ];
+        let (n_pairs, n_above_raw, median_raw) =
+            tau_selectivity(&programs, AlignMetric::Cosine, 20, 0.30);
+        assert_eq!(n_pairs, 4, "two cohorts of two programs give four pairs");
+        assert_eq!(
+            n_above_raw, 4,
+            "plain cosine admits every pair here, which is the inert case: median {median_raw}"
+        );
+        let (_, n_above_centered, _) =
+            tau_selectivity(&programs, AlignMetric::CosineCentered, 20, 0.30);
+        assert!(
+            n_above_centered < n_above_raw,
+            "centring should make the same tau selective again"
+        );
     }
 }

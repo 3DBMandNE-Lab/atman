@@ -168,6 +168,13 @@ pub struct ProgramsArgs {
 pub enum SingleMetric {
     Jaccard,
     Cosine,
+    /// Cosine after mean-centring each loading vector. Use this when
+    /// comparing non-negative loadings (NMF) against signed ones (ICA):
+    /// plain cosine has a positivity floor on non-negative vectors, so
+    /// one shared threshold is selective for signed loadings and inert
+    /// for non-negative ones.
+    #[value(name = "cosine-centered", alias = "cosine-centred")]
+    CosineCentered,
     Spearman,
 }
 
@@ -176,6 +183,7 @@ impl From<SingleMetric> for AlignMetric {
         match m {
             SingleMetric::Jaccard => AlignMetric::Jaccard,
             SingleMetric::Cosine => AlignMetric::Cosine,
+            SingleMetric::CosineCentered => AlignMetric::CosineCentered,
             SingleMetric::Spearman => AlignMetric::Spearman,
         }
     }
@@ -411,6 +419,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
 
     let metric = match args.metric.as_str() {
         "cosine" => AlignMetric::Cosine,
+        "cosine-centered" | "cosine-centred" => AlignMetric::CosineCentered,
         "jaccard" => AlignMetric::Jaccard,
         "spearman" => AlignMetric::Spearman,
         other => bail!("--metric {other:?}; expected cosine, jaccard, or spearman"),
@@ -841,6 +850,34 @@ fn run_programs(args: ProgramsArgs) -> Result<()> {
             .output
             .as_ref()
             .context("single-mode requires --output")?;
+        // A tau that admits nearly every candidate pair is not
+        // thresholding anything: the structure is then decided entirely
+        // by reciprocal-best matching, and a sweep over tau looks robust
+        // when it is only saturated. Non-negative loadings (NMF) hit
+        // this because cosine has a positivity floor on them.
+        let (n_pairs, n_above, median_sim) =
+            atman_core::align::tau_selectivity(&programs, args.metric.into(), args.top_n, args.tau);
+        if n_pairs > 0 {
+            let frac = n_above as f64 / n_pairs as f64;
+            eprintln!(
+                "align programs: tau selectivity: {n_above}/{n_pairs} cross-cohort pairs \
+                 ({:.1}%) are at or above --tau {}; median similarity {:.3}",
+                100.0 * frac,
+                args.tau,
+                median_sim,
+            );
+            if frac > 0.90 {
+                eprintln!(
+                    "align programs: warning: --tau {} admits {:.1}% of cross-cohort pairs, so it \
+                     is not thresholding — the archetype structure is determined by \
+                     reciprocal-best matching alone and a sweep over tau will look robust \
+                     because it is saturated. Non-negative loadings hit this because cosine \
+                     cannot go below zero on them; --metric cosine-centered removes that floor.",
+                    args.tau,
+                    100.0 * frac,
+                );
+            }
+        }
         let labels = build_archetypes(
             &programs,
             args.metric.into(),
@@ -880,6 +917,7 @@ fn run_programs(args: ProgramsArgs) -> Result<()> {
     let metric = match args.metric {
         SingleMetric::Jaccard => "jaccard",
         SingleMetric::Cosine => "cosine",
+        SingleMetric::CosineCentered => "cosine-centered",
         SingleMetric::Spearman => "spearman",
     };
     let decomposition_method = sniff_decomposition_method(&paths);
