@@ -355,6 +355,18 @@ pub(super) fn run_unmix(args: UnmixArgs) -> Result<()> {
         args.abundance,
         args.transform,
     );
+    if result.n_abundance_not_converged > 0 {
+        eprintln!(
+            "decompose unmix: warning: {} of {} per-subject abundance solves hit \
+             --fcls-max-iter={} without reaching --fcls-tol={:.1e}. Those abundance vectors are \
+             where the projected-gradient loop stopped, not the constrained least-squares \
+             solution. Raise --fcls-max-iter or relax --fcls-tol.",
+            result.n_abundance_not_converged,
+            subject_ids.len(),
+            args.fcls_max_iter,
+            args.fcls_tol,
+        );
+    }
 
     let finished_at = SystemTime::now();
     let inputs_sha256 = hash_canonical_inputs(
@@ -406,6 +418,12 @@ pub(super) fn run_unmix(args: UnmixArgs) -> Result<()> {
             // `k_resolution_source` is `cli`.
             let mut extras = serde_json::Map::new();
             extras.insert("k_resolved".into(), serde_json::json!(effective_k));
+            // Per-subject abundance solves that ran out of iterations.
+            // Zero for `--abundance ucls`, which is closed-form.
+            extras.insert(
+                "abundance_n_not_converged".into(),
+                serde_json::json!(result.n_abundance_not_converged),
+            );
             extras.insert(
                 "k_selection_bound_hit".into(),
                 serde_json::json!(k_selection_bound_hit(

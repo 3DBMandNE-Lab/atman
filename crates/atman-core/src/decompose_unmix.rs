@@ -567,7 +567,29 @@ pub fn ucls(e: &[Vec<f64>], x: &[f64]) -> Result<Vec<f64>, String> {
 
 /// Fully Constrained Least Squares via projected gradient on the
 /// probability simplex. Iterates until `max_iter` or `|Δα| < tol`.
+/// As [`fcls`], but also reports whether the projected-gradient loop
+/// converged before `max_iter`. Plain [`fcls`] discards that, which
+/// makes an abundance vector that ran out of iterations
+/// indistinguishable from a solved one.
+pub fn fcls_with_convergence(
+    e: &[Vec<f64>],
+    x: &[f64],
+    max_iter: usize,
+    tol: f64,
+) -> Result<(Vec<f64>, bool), String> {
+    fcls_inner(e, x, max_iter, tol)
+}
+
 pub fn fcls(e: &[Vec<f64>], x: &[f64], max_iter: usize, tol: f64) -> Result<Vec<f64>, String> {
+    fcls_inner(e, x, max_iter, tol).map(|(alpha, _)| alpha)
+}
+
+fn fcls_inner(
+    e: &[Vec<f64>],
+    x: &[f64],
+    max_iter: usize,
+    tol: f64,
+) -> Result<(Vec<f64>, bool), String> {
     let k = e.len();
     if k == 0 {
         return Err("FCLS: empty endmember matrix".into());
@@ -598,6 +620,7 @@ pub fn fcls(e: &[Vec<f64>], x: &[f64], max_iter: usize, tol: f64) -> Result<Vec<
     let step = 1.0 / lip;
 
     let mut alpha = vec![1.0 / k as f64; k];
+    let mut converged = false;
     for _ in 0..max_iter {
         // grad = 2 (EᵀE α − Eᵀx).
         let grad: Vec<f64> = ata
@@ -618,10 +641,11 @@ pub fn fcls(e: &[Vec<f64>], x: &[f64], max_iter: usize, tol: f64) -> Result<Vec<
             .sum();
         alpha = new_alpha;
         if delta < tol {
+            converged = true;
             break;
         }
     }
-    Ok(alpha)
+    Ok((alpha, converged))
 }
 
 fn cholesky_lower(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
@@ -799,6 +823,9 @@ pub struct UnmixResult {
     pub endmember_sample_indices: Vec<usize>,
     /// `[endmember][feature]`.
     pub endmember_loadings: Vec<Vec<f64>>,
+    /// How many per-sample abundance solves hit `fcls_max_iter`
+    /// without converging. Always 0 for `ucls`, which is closed-form.
+    pub n_abundance_not_converged: usize,
     /// `[sample][endmember]` — abundances per sample.
     pub abundances: Vec<Vec<f64>>,
     /// Per-sample reconstruction residual norm.
@@ -908,14 +935,21 @@ pub fn unmix(data: &[Vec<f64>], k: usize, cfg: UnmixConfig) -> Result<UnmixResul
     let n = data.len();
     let mut abundances = Vec::with_capacity(n);
     let mut residuals = Vec::with_capacity(n);
+    let mut n_abundance_not_converged = 0usize;
     for x in data {
         let alpha = match cfg.abundance_method {
-            AbundanceMethod::Fcls => fcls(
-                &vca_result.endmember_loadings,
-                x,
-                cfg.fcls_max_iter,
-                cfg.fcls_tol,
-            )?,
+            AbundanceMethod::Fcls => {
+                let (alpha, ok) = fcls_with_convergence(
+                    &vca_result.endmember_loadings,
+                    x,
+                    cfg.fcls_max_iter,
+                    cfg.fcls_tol,
+                )?;
+                if !ok {
+                    n_abundance_not_converged += 1;
+                }
+                alpha
+            }
             AbundanceMethod::Ucls => ucls(&vca_result.endmember_loadings, x)?,
         };
         // Reconstruction residual ||x - Eα||.
@@ -937,6 +971,7 @@ pub fn unmix(data: &[Vec<f64>], k: usize, cfg: UnmixConfig) -> Result<UnmixResul
         endmember_loadings: vca_result.endmember_loadings,
         abundances,
         residual_norms: residuals,
+        n_abundance_not_converged,
     })
 }
 

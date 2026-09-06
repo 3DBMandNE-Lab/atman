@@ -137,6 +137,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Iterative solvers that ran out of iterations said nothing.** Found
+  by auditing for the pattern behind the three defects above, rather
+  than from a failing run. `decompose ica` computed `n_iterations` and
+  `final_tol` on every fit and no caller ever read them, so a FastICA
+  run that stopped at `--max-iter` produced loadings indistinguishable
+  from a converged decomposition — in stderr, in the sidecar, and in the
+  output file. It now warns naming the final tolerance and the requested
+  one, and records `ica_converged`, `ica_n_iterations`, `ica_final_tol`
+  and `ica_n_seeds_not_converged` (the last covering the alternative
+  seeds behind the stability ranking, which were equally silent).
+  `decompose unmix` had no convergence tracking at all in its FCLS
+  abundance solver; it now counts per-subject solves that hit
+  `--fcls-max-iter`, warns, and records `abundance_n_not_converged`.
+  `decompose nmf` and the missingness-aware ICA path already reported
+  convergence and are unchanged.
 - **`modules discover --soft-power auto` fell back to β = 1, producing a
   degenerate result that looked well-formed.** When no power satisfies
   the scale-free criterion the sweep returned the β with the *largest*

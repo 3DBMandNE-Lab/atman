@@ -268,6 +268,34 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
         alt_runs.push((seed, result));
     }
 
+    // Convergence reporting. `IcaResult` has always carried
+    // `n_iterations` and `final_tol`; nothing read them, so a fit that
+    // stopped at the iteration cap was indistinguishable from a
+    // converged one in both stderr and the sidecar. Same failure class
+    // as a selection rule silently hitting its bound.
+    let ref_converged = ref_run.final_tol < args.tol;
+    let alt_not_converged = alt_runs
+        .iter()
+        .filter(|(_, r)| r.final_tol >= args.tol)
+        .count();
+    let seeds_not_converged = alt_not_converged + usize::from(!ref_converged);
+    if !ref_converged {
+        eprintln!(
+            "decompose ica: warning: the reference fit did not converge — stopped at \
+             --max-iter={} with final tolerance {:.3e}, above the requested --tol={:.3e}. The \
+             loadings are the state of the solver when it ran out of iterations, not a \
+             converged decomposition. Raise --max-iter or relax --tol.",
+            args.max_iter, ref_run.final_tol, args.tol,
+        );
+    }
+    if alt_not_converged > 0 {
+        eprintln!(
+            "decompose ica: warning: {alt_not_converged} of {} alternative seeds did not \
+             converge; the seed-stability ranking is computed over unconverged fits.",
+            alt_runs.len(),
+        );
+    }
+
     let reference = canonicalize(&ref_run);
     let cohort = args
         .cohort
@@ -377,6 +405,19 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
                 args.k_selection.clone()
             };
             extras.insert("k_resolution_source".into(), serde_json::json!(source));
+            // Whether the solver converged, and the evidence for it.
+            // `n_iterations` equal to `--max-iter` with `final_tol`
+            // above `--tol` is a fit that ran out of iterations.
+            extras.insert("ica_converged".into(), serde_json::json!(ref_converged));
+            extras.insert(
+                "ica_n_iterations".into(),
+                serde_json::json!(ref_run.n_iterations),
+            );
+            extras.insert("ica_final_tol".into(), serde_json::json!(ref_run.final_tol));
+            extras.insert(
+                "ica_n_seeds_not_converged".into(),
+                serde_json::json!(seeds_not_converged),
+            );
             // Whether the rule ran into its own search bound. `k_max`
             // means the criterion was never satisfied inside the sweep
             // and `k_resolved` is a truncation, not a selection.
