@@ -1709,6 +1709,12 @@ fn run_project(args: ProjectArgs) -> Result<()> {
     write_projected_activations(&activations_path, &result)?;
     let qc_path = args.output_dir.join("projection_qc.tsv");
     write_projection_qc(&qc_path, &result)?;
+    // Loading-weighted coverage, written beside the per-sample QC.
+    let arch_cov_path = qc_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("projection_archetype_coverage.tsv");
+    write_archetype_coverage(&arch_cov_path, &result)?;
     eprintln!(
         "align project: wrote {} subjects × {} archetypes; avg coverage = {:.3}",
         result.subject_ids.len(),
@@ -1719,6 +1725,23 @@ fn run_project(args: ProjectArgs) -> Result<()> {
             result.qc.iter().map(|q| q.coverage_fraction).sum::<f64>() / result.qc.len() as f64
         }
     );
+    // Unweighted coverage stays high when every low-loading protein is
+    // present and every defining one is absent. Flag the archetypes
+    // whose own mass did not survive the join.
+    for c in &result.archetype_coverage {
+        if c.weighted_coverage < 0.5 || c.top20_present < 10 {
+            eprintln!(
+                "align project: warning: archetype {} has {:.1}% of its loading mass present in \
+                 this cohort and {} of its top-20 defining proteins; the largest absent loading \
+                 is {:.0}% of its maximum. The projected score is computed from what remains and \
+                 may not be the same quantity the archetype names.",
+                c.archetype_id,
+                100.0 * c.weighted_coverage,
+                c.top20_present,
+                100.0 * c.largest_absent_loading_share,
+            );
+        }
+    }
 
     let finished_at = SystemTime::now();
     let mut labeled: Vec<(String, PathBuf)> = Vec::new();
@@ -1789,6 +1812,28 @@ fn write_projected_activations(
             buf.push_str(&format!("{v:.6}"));
         }
         buf.push('\n');
+    }
+    atomic_write(path, buf.as_bytes())
+}
+
+/// Per-archetype loading-weighted coverage.
+///
+/// The per-sample `coverage_fraction` counts atlas proteins and weights
+/// them equally, so it cannot distinguish a cohort missing a hundred
+/// irrelevant proteins from one missing the handful that define an
+/// archetype. This table answers the second question.
+fn write_archetype_coverage(
+    path: &Path,
+    result: &atman_core::align_project::ProjectionResult,
+) -> Result<()> {
+    let mut buf = String::from(
+        "archetype_id\tweighted_coverage\ttop20_present\tlargest_absent_loading_share\n",
+    );
+    for c in &result.archetype_coverage {
+        buf.push_str(&format!(
+            "{}\t{:.6}\t{}\t{:.6}\n",
+            c.archetype_id, c.weighted_coverage, c.top20_present, c.largest_absent_loading_share,
+        ));
     }
     atomic_write(path, buf.as_bytes())
 }

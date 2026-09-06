@@ -8,6 +8,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`align project` now reports loading-weighted coverage per archetype**
+  (`projection_archetype_coverage.tsv`, plus a stderr warning below 50%
+  mass or fewer than 10 of the top 20 defining proteins). The existing
+  per-sample `coverage_fraction` counts atlas proteins and weights them
+  equally, so it stays high when hundreds of low-loading proteins are
+  present and every defining one is absent — and absent proteins are
+  filled with zero before the solve, so a missing defining feature
+  actively contributes to the fit rather than merely going unused. Found
+  in the wild: an archetype characterised as blood contamination was
+  projected into a cohort where no haemoglobin is measured at all, and
+  nothing in the output distinguished that from a faithful transfer.
+  The new columns are weighted coverage, how many of the top 20
+  loadings survive, and the largest absent loading as a share of the
+  archetype's maximum.
 - **MNAR joint trace now records the state, not only the readout.**
   `mnar_joint_trace.tsv` gains `imputation_delta` (largest change in an
   imputed cell against the previous round) and `reconstruction_gap`

@@ -41,6 +41,36 @@ pub enum ProjectionMethod {
     Ridge(f64),
 }
 
+/// Per-archetype coverage of the atlas in the target cohort, weighted
+/// by what each archetype is actually made of.
+///
+/// `coverage_fraction` on [`SubjectQc`] counts atlas proteins present
+/// and treats every protein alike, so it stays high when hundreds of
+/// low-loading proteins are present and every top-loading protein is
+/// absent. That is not a hypothetical: an archetype defined by
+/// haemoglobins can be projected into a cohort where no haemoglobin is
+/// measured at all, and the unweighted number reports near-full
+/// coverage while the score is computed entirely from the residue and
+/// is not the same quantity.
+///
+/// Absent proteins are filled with 0 before the solve, so a missing
+/// defining feature does not merely go unused — it contributes a zero
+/// to the fit.
+#[derive(Debug, Clone)]
+pub struct ArchetypeCoverage {
+    pub archetype_id: String,
+    /// Share of the archetype's total `|loading|` mass that is present
+    /// in at least one subject of the target cohort.
+    pub weighted_coverage: f64,
+    /// Of the archetype's 20 largest-`|loading|` proteins, how many are
+    /// present at all in the target cohort.
+    pub top20_present: usize,
+    /// Largest single `|loading|` among the archetype's absent proteins,
+    /// as a share of its maximum loading. Near 1.0 means the single most
+    /// defining protein is missing.
+    pub largest_absent_loading_share: f64,
+}
+
 #[derive(Debug, Clone)]
 pub struct SubjectQc {
     pub subject_id: String,
@@ -57,6 +87,8 @@ pub struct ProjectionResult {
     /// `[subject][archetype]`.
     pub activations: Vec<Vec<f64>>,
     pub qc: Vec<SubjectQc>,
+    /// Loading-weighted coverage, one row per archetype.
+    pub archetype_coverage: Vec<ArchetypeCoverage>,
     /// Proteins that were in the atlas but missing from the incoming
     /// cohort (filled with 0 for the projection solve); emitted for
     /// the sidecar so the user can see what was imputed.
@@ -273,12 +305,71 @@ pub fn project(
         });
     }
 
+    // Loading-weighted coverage per archetype. Presence is judged at
+    // cohort level: a protein counts as present if any subject has a
+    // finite value for it, which is the generous reading and still
+    // catches a defining feature that is absent outright.
+    let present_in_cohort: Vec<bool> = atlas_to_cohort
+        .iter()
+        .enumerate()
+        .map(|(pi, mapped)| match mapped {
+            Some(j) => (0..n_subjects).any(|si| abundance[si][*j].is_finite()) && pi < p_atlas,
+            None => false,
+        })
+        .collect();
+    let archetype_coverage: Vec<ArchetypeCoverage> = atlas
+        .archetype_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| {
+            let loadings: Vec<f64> = (0..p_atlas).map(|pi| a_mat[pi][i]).collect();
+            let total: f64 = loadings.iter().map(|v| v.abs()).sum();
+            let present: f64 = loadings
+                .iter()
+                .enumerate()
+                .filter(|(pi, _)| present_in_cohort[*pi])
+                .map(|(_, v)| v.abs())
+                .sum();
+            let max_loading = loadings.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+            let largest_absent = loadings
+                .iter()
+                .enumerate()
+                .filter(|(pi, _)| !present_in_cohort[*pi])
+                .map(|(_, v)| v.abs())
+                .fold(0.0_f64, f64::max);
+            let mut ranked: Vec<usize> = (0..p_atlas).collect();
+            ranked.sort_by(|a, b| {
+                loadings[*b]
+                    .abs()
+                    .partial_cmp(&loadings[*a].abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.cmp(b))
+            });
+            let top20_present = ranked
+                .iter()
+                .take(20)
+                .filter(|pi| present_in_cohort[**pi])
+                .count();
+            ArchetypeCoverage {
+                archetype_id: id.clone(),
+                weighted_coverage: if total > 0.0 { present / total } else { 0.0 },
+                top20_present,
+                largest_absent_loading_share: if max_loading > 0.0 {
+                    largest_absent / max_loading
+                } else {
+                    0.0
+                },
+            }
+        })
+        .collect();
+
     Ok(ProjectionResult {
         subject_ids: subject_ids.to_vec(),
         archetype_ids: atlas.archetype_ids.clone(),
         activations,
         qc,
         atlas_proteins_missing_in_cohort: missing,
+        archetype_coverage,
     })
 }
 
