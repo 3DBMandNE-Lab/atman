@@ -924,6 +924,35 @@ Atman now covers the standalone release surface targeted by this roadmap:
 - The core CLI does not require Python, notebooks, services, or external
   workflow infrastructure.
 
+## Open question: does a bulk proteome have module structure at all?
+
+Raised 2026-09-06 while fixing `modules discover`'s soft-power fallback.
+On a 93-sample, 9,376-feature CPTAC GBM contrast, **no** soft power in
+1..=20 satisfied the scale-free criterion: R² fell monotonically from
+0.505 at β = 1 to 0.133 at β = 20. The fix changed what atman does when
+that happens (WGCNA's default power by sample count, and a refusal to
+emit an all-grey discovery), but it does not answer the underlying
+question:
+
+> Is the scale-free criterion simply the wrong topology model for a bulk
+> proteome correlation matrix, or does that data genuinely lack module
+> structure?
+
+These are very different conclusions and they call for different tools.
+The discriminating experiment is cheap: run the same data at a
+conventional β (6 for this sample count) and count non-grey modules,
+**with their size distribution** — a handful of tiny modules beside a
+large grey remainder means something different from a genuine partition.
+
+The atman methods-paper session was running exactly that when both
+sessions wrapped on 2026-09-06; the result is expected in
+`atman-paper/runs/determinism/`, alongside their soft-power sweep
+evidence. Pick it up from there before designing anything new here. If
+real modules do emerge at β = 6, the scale-free sweep is the wrong
+criterion for this data type and that is worth stating in the docs. If
+they do not, `modules discover` is the wrong instrument for bulk
+proteomes and no amount of parameter tuning fixes that.
+
 ## Unscheduled: alternative decompositions
 
 Method-transfer ideas, parked here rather than in `feature_requests.md`
