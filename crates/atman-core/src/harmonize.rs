@@ -273,28 +273,57 @@ pub fn fit(
         MethodSpec::ZScore => HarmonizeMethod::ZScore,
         MethodSpec::Rank => HarmonizeMethod::Rank,
         MethodSpec::Quantile => {
-            // Reference profile: the mean sorted observed vector across
-            // all training subjects, on the shared axis.
-            let mut sorted_rows: Vec<Vec<f64>> = Vec::new();
+            // Reference profile at each quantile position, averaged over
+            // training subjects.
+            //
+            // Each subject contributes its OWN observed values,
+            // interpolated onto the common grid, rather than being
+            // required to be observed on every shared feature. That
+            // requirement is close to unsatisfiable on real proteomics:
+            // at 30% missingness essentially no subject is complete, so
+            // the comparator became unavailable on exactly the data it
+            // was needed for. A subject observed on `m` features maps
+            // its sorted values onto the `p` grid positions by linear
+            // interpolation, which is the identity when `m == p`, so a
+            // complete matrix yields the same profile as before.
+            let p = features.len();
+            let mut per_subject: Vec<Vec<f64>> = Vec::new();
             for c in cohorts {
                 let rep = represent(&features, &HarmonizeMethod::ZScore, c);
                 for row in rep {
                     let mut obs: Vec<f64> = row.into_iter().filter(|v| v.is_finite()).collect();
-                    if obs.len() == features.len() {
-                        obs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                        sorted_rows.push(obs);
+                    if obs.len() < 2 {
+                        continue;
                     }
+                    obs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    let m = obs.len();
+                    per_subject.push(
+                        (0..p)
+                            .map(|j| {
+                                let q = if p > 1 {
+                                    j as f64 / (p as f64 - 1.0)
+                                } else {
+                                    0.0
+                                };
+                                let pos = q * (m as f64 - 1.0);
+                                let lo = pos.floor() as usize;
+                                let hi = pos.ceil() as usize;
+                                let frac = pos - lo as f64;
+                                obs[lo] * (1.0 - frac) + obs[hi.min(m - 1)] * frac
+                            })
+                            .collect(),
+                    );
                 }
             }
-            if sorted_rows.is_empty() {
+            if per_subject.is_empty() {
                 return Err(
-                    "harmonize fit: quantile needs at least one training subject observed on \
-                     every shared feature"
+                    "harmonize fit: quantile needs at least one training subject with two or \
+                     more observed shared features"
                         .into(),
                 );
             }
-            let reference: Vec<f64> = (0..features.len())
-                .map(|j| sorted_rows.iter().map(|r| r[j]).sum::<f64>() / sorted_rows.len() as f64)
+            let reference: Vec<f64> = (0..p)
+                .map(|j| per_subject.iter().map(|r| r[j]).sum::<f64>() / per_subject.len() as f64)
                 .collect();
             HarmonizeMethod::Quantile { reference }
         }
@@ -739,6 +768,85 @@ mod tests {
             .unwrap()
             .method
             .is_fitted());
+    }
+
+    /// Quantile must fit when no subject is complete. Requiring a
+    /// subject observed on every shared feature is close to
+    /// unsatisfiable at real proteomic missingness, and it failed on
+    /// exactly the fold the comparator was needed for.
+    #[test]
+    fn quantile_fits_when_no_subject_is_complete() {
+        let mut train = training();
+        // Punch holes so that every subject is missing something, with
+        // no two subjects missing the same set.
+        for (ci, c) in train.iter_mut().enumerate() {
+            for (i, row) in c.values.iter_mut().enumerate() {
+                let start = (i * 7 + ci * 3) % SPEC.p;
+                for k in 0..25 {
+                    row[(start + k) % SPEC.p] = f64::NAN;
+                }
+            }
+        }
+        assert!(
+            train
+                .iter()
+                .all(|c| c.values.iter().all(|r| r.iter().any(|v| !v.is_finite()))),
+            "fixture must leave every subject incomplete"
+        );
+        let model = fit(&train, MethodSpec::Quantile, false, 42)
+            .expect("quantile must fit from incomplete subjects");
+        match &model.method {
+            HarmonizeMethod::Quantile { reference } => {
+                assert_eq!(reference.len(), model.features.len());
+                assert!(
+                    reference.iter().all(|v| v.is_finite()),
+                    "reference profile must be finite"
+                );
+                assert!(
+                    reference.windows(2).all(|w| w[0] <= w[1] + 1e-9),
+                    "a quantile reference profile must be non-decreasing"
+                );
+            }
+            other => panic!("wrong method: {other:?}"),
+        }
+    }
+
+    /// On a complete matrix the interpolation is the identity, so the
+    /// profile must match what the previous complete-rows-only rule
+    /// produced. Otherwise this would silently change existing results.
+    #[test]
+    fn quantile_profile_is_unchanged_on_complete_data() {
+        let train = training();
+        assert!(
+            train
+                .iter()
+                .all(|c| c.values.iter().all(|r| r.iter().all(|v| v.is_finite()))),
+            "this fixture is complete by construction"
+        );
+        let model = fit(&train, MethodSpec::Quantile, false, 42).unwrap();
+        // Recompute the old way: mean of each subject's sorted vector.
+        let mut sorted_rows: Vec<Vec<f64>> = Vec::new();
+        for c in &train {
+            for row in represent(&model.features, &HarmonizeMethod::ZScore, c) {
+                let mut obs: Vec<f64> = row.into_iter().filter(|v| v.is_finite()).collect();
+                if obs.len() == model.features.len() {
+                    obs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    sorted_rows.push(obs);
+                }
+            }
+        }
+        assert!(!sorted_rows.is_empty());
+        let expected: Vec<f64> = (0..model.features.len())
+            .map(|j| sorted_rows.iter().map(|r| r[j]).sum::<f64>() / sorted_rows.len() as f64)
+            .collect();
+        match &model.method {
+            HarmonizeMethod::Quantile { reference } => {
+                for (a, b) in reference.iter().zip(expected.iter()) {
+                    assert!((a - b).abs() < 1e-9, "profile changed: {a} vs {b}");
+                }
+            }
+            other => panic!("wrong method: {other:?}"),
+        }
     }
 
     #[test]

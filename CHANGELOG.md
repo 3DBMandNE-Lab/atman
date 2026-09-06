@@ -297,6 +297,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`harmonize fit --method quantile` no longer requires a complete
+  subject.** It built its reference profile only from training subjects
+  observed on every shared feature, which at real proteomic missingness
+  is close to unsatisfiable — reported failing outright on the fold the
+  comparator was most needed for. Each subject now contributes its own
+  observed values interpolated onto the common quantile grid, so any
+  subject with two or more observations counts. On a complete matrix the
+  interpolation is the identity and the profile is unchanged, which is
+  asserted rather than assumed.
 - **`atman run --strict-outputs` checked that declared outputs exist, not
   that they contain anything.** A stage emitting a header-only table was
   recorded with `exit_code 0` and its empty output flowed downstream,
