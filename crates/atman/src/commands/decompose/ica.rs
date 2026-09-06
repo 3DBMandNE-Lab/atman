@@ -1,3 +1,4 @@
+use super::{k_selection_bound_hit, warn_if_k_selection_hit_bound};
 use anyhow::{bail, Context, Result};
 use atman_core::compositional::{apply_transform, Transform};
 use atman_core::ica::{
@@ -202,6 +203,12 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
     };
 
     let k = resolve_k(&matrix, &args)?;
+    // Effective ceiling the rule actually searched under, for the
+    // sidecar's bound-hit field below.
+    let k_max_effective = args
+        .k_max
+        .min(matrix.samples.len().saturating_sub(1))
+        .max(1);
     if k > matrix.samples.len() || k > matrix.assays.len() {
         bail!(
             "k={k} exceeds min(n_samples={}, n_assays={})",
@@ -370,6 +377,18 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
                 args.k_selection.clone()
             };
             extras.insert("k_resolution_source".into(), serde_json::json!(source));
+            // Whether the rule ran into its own search bound. `k_max`
+            // means the criterion was never satisfied inside the sweep
+            // and `k_resolved` is a truncation, not a selection.
+            extras.insert(
+                "k_selection_bound_hit".into(),
+                serde_json::json!(k_selection_bound_hit(
+                    args.k.is_some(),
+                    k,
+                    args.k_min,
+                    k_max_effective,
+                )),
+            );
             Some(extras)
         },
     )?;
@@ -386,13 +405,22 @@ fn resolve_k(matrix: &AbundanceMatrix, args: &IcaArgs) -> Result<usize> {
     }
     let target = parse_k_selection(&args.k_selection)?;
     let whitening = pca_whiten(&matrix.data, matrix.samples.len().min(matrix.assays.len()));
+    let effective_k_max = args
+        .k_max
+        .min(matrix.samples.len().saturating_sub(1))
+        .max(1);
     let chosen = select_k_cumulative_variance(
         &whitening.full_spectrum,
         target,
         args.k_min,
-        args.k_max
-            .min(matrix.samples.len().saturating_sub(1))
-            .max(1),
+        effective_k_max,
+    );
+    warn_if_k_selection_hit_bound(
+        "decompose ica",
+        &args.k_selection,
+        chosen,
+        args.k_min,
+        effective_k_max,
     );
     Ok(chosen)
 }

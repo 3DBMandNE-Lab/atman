@@ -1555,6 +1555,38 @@ mod tests {
         }
     }
 
+    /// Cross-algorithm agreement, suggested by the atman methods-paper
+    /// session after they observed it on a 110-subject cohort.
+    ///
+    /// SPA and VCA are structurally different searches — greedy
+    /// max-residual with deflation, versus random-direction probing of
+    /// the reduced space. When both land on the same vertices, the
+    /// vertices are a property of the geometry rather than of either
+    /// search. This is a stronger statement than either algorithm's
+    /// self-consistency, and it is what a correct subspace projection
+    /// buys: before that fix the two disagreed, and VCA disagreed with
+    /// itself across seeds.
+    #[test]
+    fn spa_and_vca_select_the_same_vertices() {
+        let data = planted_simplex(60, 1200, 4, 0.05, 31337);
+        let spa_pick = {
+            let mut v = spa(&data, 4).expect("spa").endmember_sample_indices;
+            v.sort();
+            v
+        };
+        for seed in [1u64, 42, 20260420] {
+            let vca_pick = {
+                let mut v = vca(&data, 4, seed).expect("vca").endmember_sample_indices;
+                v.sort();
+                v
+            };
+            assert_eq!(
+                spa_pick, vca_pick,
+                "SPA and VCA (seed {seed}) must agree on the vertex set"
+            );
+        }
+    }
+
     /// SPA has no seed at all, so the only stability question is
     /// whether it recovers the planted vertices. It must, exactly.
     #[test]

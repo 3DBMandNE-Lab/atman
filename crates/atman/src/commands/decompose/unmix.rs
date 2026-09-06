@@ -1,3 +1,4 @@
+use super::{k_selection_bound_hit, warn_if_k_selection_hit_bound};
 use anyhow::{bail, Context, Result};
 use atman_core::compositional::{apply_transform, Transform};
 use atman_core::decompose_unmix::{
@@ -239,6 +240,15 @@ pub(super) fn run_unmix(args: UnmixArgs) -> Result<()> {
             .with_context(|| format!("--k {:?}: expected an integer or `auto`", args.k))?;
         (k, Vec::new())
     };
+    if args.k == "auto" {
+        warn_if_k_selection_hit_bound(
+            "decompose unmix",
+            "auto (elbow)",
+            effective_k,
+            args.k_min,
+            args.k_max,
+        );
+    }
     if subject_ids.len() < effective_k * 2 {
         bail!(
             "k={} requires >= {} samples (k > n/2 is under-determined); got {}",
@@ -396,6 +406,15 @@ pub(super) fn run_unmix(args: UnmixArgs) -> Result<()> {
             // `k_resolution_source` is `cli`.
             let mut extras = serde_json::Map::new();
             extras.insert("k_resolved".into(), serde_json::json!(effective_k));
+            extras.insert(
+                "k_selection_bound_hit".into(),
+                serde_json::json!(k_selection_bound_hit(
+                    args.k != "auto",
+                    effective_k,
+                    args.k_min,
+                    args.k_max,
+                )),
+            );
             let source = if args.k == "auto" {
                 format!(
                     "auto:elbow(k_min={},k_max={},threshold={})",

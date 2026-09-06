@@ -63,3 +63,55 @@ pub fn run(args: Args) -> Result<()> {
 pub(super) fn program_name(index: usize) -> String {
     format!("program_{:02}", index + 1)
 }
+
+/// Name of the search bound an automatic `k`-selection rule landed on,
+/// or `null` when it resolved strictly inside its range.
+///
+/// A rule that returns its own ceiling has not selected anything — it
+/// ran out of room, and the criterion it was asked to satisfy may never
+/// have been met. `k_resolved: 30` with `k_max: 30` is indistinguishable
+/// in a sidecar from a genuine selection that happens to land on 30, so
+/// the distinction is recorded explicitly. Returns `None` for an
+/// explicit `--k`, which is not a selection at all.
+pub(super) fn k_selection_bound_hit(
+    k_was_explicit: bool,
+    k_resolved: usize,
+    k_min: usize,
+    k_max: usize,
+) -> Option<&'static str> {
+    if k_was_explicit || k_max <= k_min {
+        return None;
+    }
+    if k_resolved >= k_max {
+        Some("k_max")
+    } else if k_resolved <= k_min {
+        Some("k_min")
+    } else {
+        None
+    }
+}
+
+/// Warn on stderr when an automatic `k`-selection rule resolved to one
+/// of its own bounds. Silent otherwise.
+pub(super) fn warn_if_k_selection_hit_bound(
+    command: &str,
+    rule: &str,
+    k_resolved: usize,
+    k_min: usize,
+    k_max: usize,
+) {
+    match k_selection_bound_hit(false, k_resolved, k_min, k_max) {
+        Some("k_max") => eprintln!(
+            "{command}: warning: --k-selection {rule} resolved to k={k_resolved}, which is \
+             --k-max. The criterion was not met anywhere in [{k_min}, {k_max}] — this is a \
+             truncation, not a selection. Re-run with a larger --k-max to find the k the rule \
+             actually wants."
+        ),
+        Some("k_min") => eprintln!(
+            "{command}: warning: --k-selection {rule} resolved to k={k_resolved}, which is \
+             --k-min. The rule was already satisfied at the smallest k searched; a smaller \
+             --k-min may be appropriate."
+        ),
+        _ => {}
+    }
+}

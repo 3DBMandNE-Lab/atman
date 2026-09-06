@@ -137,6 +137,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Automatic `k`-selection that lands on its own search bound now says
+  so.** A rule returning `--k-max` has not selected anything: it ran out
+  of room, and the criterion it was asked to satisfy may never have been
+  met. Found in the wild — a six-cohort `decompose ica` run with
+  `--k-selection cumulative-variance=0.80 --k-max 30` resolved to
+  exactly 30 in five of six cohorts, which needed 28 to 56, so those
+  five captured 70-79% variance while the configuration claimed 80%. The
+  sidecar recorded `k_resolved: 30` beside `k-max: 30`, indistinguishable
+  from a genuine selection landing on 30. `decompose ica`, `decompose
+  nmf` and `decompose unmix --k auto` now warn on stderr naming the rule
+  and the bound, and record `k_selection_bound_hit` (`k_max`, `k_min`, or
+  null) in the sidecar. An explicit `--k` records null: it is not a
+  selection.
 - **`decompose unmix` (VCA) picked endmembers almost arbitrarily.** Two
   defects compounded. First, the vertex search ran in the full
   `p`-dimensional feature space instead of the `k`-dimensional signal

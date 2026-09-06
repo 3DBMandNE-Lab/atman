@@ -1,3 +1,4 @@
+use super::{k_selection_bound_hit, warn_if_k_selection_hit_bound};
 use anyhow::{bail, Context, Result};
 use atman_core::nmf::{
     apply_transform, multi_seed_nmf, nmf as nmf_core, select_k as nmf_select_k, BetaLoss, Init,
@@ -391,6 +392,13 @@ pub(super) fn nmf_run(args: NmfArgs) -> Result<()> {
         );
         let sel_result = nmf_select_k(&data, &nmf_cfg_base, &ms_cfg_for_sel, k_min, k_max, k_sel);
         eprintln!("decompose nmf: selected_k={}", sel_result.selected_k,);
+        warn_if_k_selection_hit_bound(
+            "decompose nmf",
+            &args.k_selection,
+            sel_result.selected_k,
+            k_min,
+            k_max,
+        );
         let sk = sel_result.selected_k;
         (sk, Some(sel_result))
     };
@@ -764,6 +772,12 @@ pub(super) fn nmf_run(args: NmfArgs) -> Result<()> {
             "k-selection": args.k_selection,
             "k-min": args.k_min,
             "k-max": args.k_max,
+            "k-selection-bound-hit": k_selection_bound_hit(
+                k_sel == KSelection::Fixed,
+                effective_k,
+                k_min,
+                k_max,
+            ),
             "selected-k": selected_k_val,
             "beta-loss": args.beta_loss,
             "init": args.init,
