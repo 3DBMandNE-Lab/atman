@@ -10,7 +10,9 @@
 //! omits the field cannot disagree with reality.
 
 use anyhow::{bail, Context, Result};
-use atman_core::harmonize::{apply, fit, CohortData, HarmonizeMethod, MethodSpec};
+use atman_core::harmonize::{
+    apply_with, fit, CohortData, DirectionCentering, HarmonizeMethod, MethodSpec,
+};
 use clap::{Args as ClapArgs, Subcommand};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -107,6 +109,24 @@ pub struct ApplyArgs {
 
     #[arg(long)]
     case_value: String,
+
+    /// Subtract the direction's mean over each subject's own used
+    /// features before scoring.
+    ///
+    /// Strongly recommended for every per-sample normalisation, and
+    /// close to mandatory for `reference-protein`. Those methods leave a
+    /// per-subject term in the harmonised value — for reference-protein
+    /// the score literally carries `−anchor × mean(direction)` — so if
+    /// the anchor differs between arms in the held-out cohort, ANY
+    /// direction separates them, including one learned from shuffled
+    /// labels. Measured on real data: a permuted null running +0.542 to
+    /// +0.698 against a real effect of +0.611, i.e. the shuffled arm
+    /// separated cases better than the real one.
+    ///
+    /// Off by default only so that runs made before this existed remain
+    /// reproducible. Turn it on unless you have a reason not to.
+    #[arg(long, default_value_t = false)]
+    center_direction: bool,
 
     /// Output per-subject transfer scores (TSV).
     #[arg(long)]
@@ -388,7 +408,22 @@ fn run_apply(args: ApplyArgs) -> Result<()> {
 
     let (label, dir) = parse_cohort_spec(&args.cohort)?;
     let cohort = load_cohort(&label, &dir, &args.condition_col, &args.case_value)?;
-    let scores = apply(&model, &cohort).map_err(|e| anyhow::anyhow!(e))?;
+    let centering = if args.center_direction {
+        DirectionCentering::PerSubject
+    } else {
+        DirectionCentering::None
+    };
+    let scores = apply_with(&model, &cohort, centering).map_err(|e| anyhow::anyhow!(e))?;
+    if !args.center_direction && model.method.as_str() != "zscore" {
+        eprintln!(
+            "harmonize apply: warning: --center-direction is off and {} is a per-sample \
+             normalisation, which leaves a per-subject term the direction's mean projects onto. \
+             If that term differs between arms in this cohort, a direction learned from shuffled \
+             labels will separate cases too. Run the permuted arm and compare, or pass \
+             --center-direction.",
+            model.method.as_str()
+        );
+    }
 
     let mut buf = String::from("subject_id\ttransfer_score\tis_case\tn_features_used\n");
     for s in &scores {
@@ -433,6 +468,7 @@ fn run_apply(args: ApplyArgs) -> Result<()> {
             // Carried forward so a reader of the scores does not have to
             // open the model to learn they are a negative control.
             "permuted_labels": model.permuted,
+            "center-direction": args.center_direction,
             "fit_cohorts": model.fit_cohorts,
         }),
         &inputs_sha256,

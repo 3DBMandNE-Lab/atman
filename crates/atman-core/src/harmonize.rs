@@ -428,7 +428,40 @@ pub struct TransferScore {
 ///
 /// Takes the model and one cohort. It cannot see the training data, so
 /// there is nothing to leak.
+/// How the transfer score treats a direction's mean component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectionCentering {
+    /// Score with the direction as learned.
+    None,
+    /// Subtract the direction's mean over each subject's own used
+    /// features before scoring.
+    ///
+    /// Every per-sample normalisation leaves a per-sample term in the
+    /// harmonised value, and a direction with a non-zero mean projects
+    /// onto it. For reference-protein normalisation the algebra is
+    /// exact: `x'_ij = x_ij − a_i`, so the score carries
+    /// `−a_i · mean(w)`. If the anchor `a_i` differs between arms in the
+    /// held-out cohort, ANY direction separates them, including one
+    /// learned from shuffled labels. Centring the direction over each
+    /// subject's used set makes that term identically zero.
+    ///
+    /// The cost is honest rather than hidden: a genuine disease effect
+    /// that raises every protein uniformly is indistinguishable from a
+    /// per-sample anchor shift under a per-sample normalisation, so
+    /// centring does not discard recoverable signal, it declines to
+    /// claim unrecoverable signal.
+    PerSubject,
+}
+
 pub fn apply(model: &HarmonizeModel, cohort: &CohortData) -> Result<Vec<TransferScore>, String> {
+    apply_with(model, cohort, DirectionCentering::None)
+}
+
+pub fn apply_with(
+    model: &HarmonizeModel,
+    cohort: &CohortData,
+    centering: DirectionCentering,
+) -> Result<Vec<TransferScore>, String> {
     if cohort.subject_ids.len() != cohort.values.len() {
         return Err("harmonize apply: subject count does not match matrix rows".into());
     }
@@ -444,12 +477,27 @@ pub fn apply(model: &HarmonizeModel, cohort: &CohortData) -> Result<Vec<Transfer
         .iter()
         .enumerate()
         .map(|(i, row)| {
-            let mut dot = 0.0_f64;
+            // Direction mean over THIS subject's used features. Which
+            // features are usable varies by subject under MNAR
+            // dropout, so a globally centred direction would still
+            // leave a residual mean per subject.
             let mut used = 0usize;
+            let mut w_sum = 0.0_f64;
             for (j, v) in row.iter().enumerate() {
                 if v.is_finite() && model.direction[j] != 0.0 {
-                    dot += v * model.direction[j];
+                    w_sum += model.direction[j];
                     used += 1;
+                }
+            }
+            let shift = match centering {
+                DirectionCentering::None => 0.0,
+                DirectionCentering::PerSubject if used > 0 => w_sum / used as f64,
+                DirectionCentering::PerSubject => 0.0,
+            };
+            let mut dot = 0.0_f64;
+            for (j, v) in row.iter().enumerate() {
+                if v.is_finite() && model.direction[j] != 0.0 {
+                    dot += v * (model.direction[j] - shift);
                 }
             }
             TransferScore {
@@ -474,7 +522,7 @@ mod tests {
     /// makes the signal fraction explicit, which turns out to matter:
     /// see [`the_permuted_arm_does_not_separate_the_held_out_cohort`].
     #[derive(Clone, Copy)]
-    struct Spec {
+    pub(crate) struct Spec {
         n: usize,
         p: usize,
         n_signal: usize,
@@ -483,7 +531,7 @@ mod tests {
         effect: f64,
     }
 
-    fn cohort(label: &str, spec: Spec, seed: u64) -> CohortData {
+    pub(crate) fn cohort(label: &str, spec: Spec, seed: u64) -> CohortData {
         let mut rng = SplitMix64::new(seed);
         let mut values = Vec::with_capacity(spec.n);
         let mut is_case = Vec::with_capacity(spec.n);
@@ -518,7 +566,7 @@ mod tests {
     /// that the permuted null ran from −10.7 to +12.0 against a real
     /// effect of +11.9 — the negative control could not separate itself
     /// from the result. The arm was working; the fixture was not.
-    const SPEC: Spec = Spec {
+    pub(crate) const SPEC: Spec = Spec {
         n: 60,
         p: 200,
         n_signal: 10,
@@ -527,7 +575,7 @@ mod tests {
         effect: 1.5,
     };
 
-    fn training() -> Vec<CohortData> {
+    pub(crate) fn training() -> Vec<CohortData> {
         vec![
             cohort("a", SPEC, 1),
             cohort(
@@ -542,7 +590,7 @@ mod tests {
         ]
     }
 
-    fn held_out() -> CohortData {
+    pub(crate) fn held_out() -> CohortData {
         cohort(
             "c",
             Spec {
@@ -554,7 +602,7 @@ mod tests {
         )
     }
 
-    fn separation(scores: &[TransferScore]) -> f64 {
+    pub(crate) fn separation(scores: &[TransferScore]) -> f64 {
         let case: Vec<f64> = scores
             .iter()
             .filter(|s| s.is_case && s.score.is_finite())
@@ -703,5 +751,86 @@ mod tests {
         let disjoint = vec![cohort("a", SPEC, 1), b];
         let err = fit(&disjoint, MethodSpec::ZScore, false, 1).unwrap_err();
         assert!(err.contains("share no features"), "unexpected: {err}");
+    }
+
+    /// Reproduces the artefact the CSF session measured: under
+    /// reference-protein normalisation, a held-out cohort whose anchor
+    /// differs between arms is separated by a direction learned from
+    /// SHUFFLED labels. Centring the direction removes it.
+    ///
+    /// Their worst observed cell was a permuted null running +0.542 to
+    /// +0.698 while the real effect was +0.611 — the shuffled arm
+    /// separated cases better than the real one.
+    #[test]
+    fn per_subject_centering_removes_the_anchor_artefact() {
+        let train = training();
+        // Held-out cohort with NO disease signal anywhere, but whose
+        // REFERENCE proteins differ between arms. A uniform bump would
+        // not do: reference-protein normalisation subtracts exactly
+        // that. The artefact needs the anchor itself to move, which is
+        // what happens when the reference set is not arm-neutral in the
+        // held-out cohort — and nothing in the fit can know that,
+        // because the set was chosen on the training cohorts.
+        let mut held = cohort(
+            "c",
+            Spec {
+                n_signal: 0,
+                offset: 100.0,
+                scale: 7.0,
+                ..SPEC
+            },
+            3,
+        );
+        let refs: Vec<usize> = match &fit(&train, MethodSpec::ReferenceProtein { k: 8 }, false, 1)
+            .unwrap()
+            .method
+        {
+            HarmonizeMethod::ReferenceProtein { reference_features } => reference_features
+                .iter()
+                .filter_map(|f| held.features.iter().position(|g| g == f))
+                .collect(),
+            _ => unreachable!(),
+        };
+        assert!(
+            !refs.is_empty(),
+            "reference features must map into the held-out cohort"
+        );
+        for (i, row) in held.values.iter_mut().enumerate() {
+            if i % 2 == 0 {
+                for j in &refs {
+                    row[*j] += 6.0;
+                }
+            }
+        }
+
+        // A direction learned from shuffled labels: no disease content.
+        let model = fit(&train, MethodSpec::ReferenceProtein { k: 8 }, true, 5).unwrap();
+
+        let uncentred = separation(&apply(&model, &held).unwrap()).abs();
+        let centred =
+            separation(&apply_with(&model, &held, DirectionCentering::PerSubject).unwrap()).abs();
+        assert!(
+            uncentred > 1.0,
+            "fixture should reproduce the artefact; got {uncentred:.3}"
+        );
+        assert!(
+            centred < uncentred / 4.0,
+            "per-subject centring should remove the anchor term: {uncentred:.3} -> {centred:.3}"
+        );
+    }
+
+    /// Centring must not destroy a direction that lives in the
+    /// contrasts between features rather than in their common level.
+    #[test]
+    fn per_subject_centering_keeps_a_real_contrast() {
+        let train = training();
+        let held = held_out();
+        let model = fit(&train, MethodSpec::ZScore, false, 42).unwrap();
+        let centred =
+            separation(&apply_with(&model, &held, DirectionCentering::PerSubject).unwrap()).abs();
+        assert!(
+            centred > 0.5,
+            "a genuine contrast should survive centring; got {centred:.3}"
+        );
     }
 }

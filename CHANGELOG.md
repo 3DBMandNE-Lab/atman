@@ -8,6 +8,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`harmonize apply --center-direction`**, and a warning when it is off
+  for a per-sample method. Every per-sample normalisation leaves a
+  per-subject term in the harmonised value that a direction with a
+  non-zero mean projects onto. For `reference-protein` the algebra is
+  exact — the score carries `−anchor × mean(direction)` — so if the
+  anchor differs between arms in the held-out cohort, ANY direction
+  separates them, including one learned from shuffled labels.
+  Found by the CSF session's permuted arm on real data: holding out one
+  cohort, reference-protein gave a real effect of +0.611 at p = 1.5e-05
+  and AUC 0.70, while its permuted null ran +0.542 to +0.698 with mean
+  AUC 0.73 — the shuffled arm separated cases *better* than the real
+  one, and standardised against its own null the result was z = −0.66.
+  Their measured null means order exactly as the mechanism predicts:
+  reference-protein +0.267, quantile +0.193, rank +0.103, and the one
+  per-protein method, zscore, at −0.103.
+  Centring subtracts the direction's mean over each subject's own used
+  features, which under MNAR dropout differs per subject, so a globally
+  centred direction would still leave a residual. Off by default so
+  earlier runs stay reproducible; the warning names the risk. What it
+  costs is honest rather than hidden: a disease effect raising every
+  protein uniformly is not separable from an anchor shift under a
+  per-sample normalisation, so centring declines to claim unrecoverable
+  signal rather than discarding recoverable signal.
 - **`decompose ica --weighted-whitening`**: the detection model now
   reaches the estimator. Per-cell reliability scales each cell's
   contribution to the whitening moments — an observed cell counts fully,
