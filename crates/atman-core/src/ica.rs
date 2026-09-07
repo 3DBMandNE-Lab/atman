@@ -8,6 +8,7 @@
 //! Everything is pure Rust and deterministic: the built-in Xoshiro256++
 //! PRNG means each `(k, seed)` pair yields a byte-exact decomposition.
 
+use crate::blas::{gemm, syrk, Op};
 use std::cmp::Ordering;
 
 pub use crate::stats::jaccard_top_n;
@@ -242,32 +243,49 @@ pub fn pca_whiten(x: &[Vec<f64>], k: usize) -> Whitening {
         (vals, whitening_pxk)
     } else {
         // Gram matrix X X^T (n x n); convert eigenvectors back to feature space.
-        let mut gram = vec![vec![0.0_f64; n]; n];
-        for i in 0..n {
-            for j in i..n {
-                let acc: f64 = xc[i].iter().zip(xc[j].iter()).map(|(a, b)| a * b).sum();
-                gram[i][j] = acc;
-                gram[j][i] = acc;
-            }
+        //
+        // Both steps here are the whole cost of whitening, and whitening
+        // is the whole cost of ICA -- the FastICA iterations run on the
+        // k-dimensional whitened data and are free by comparison. At
+        // n=110, p=10000 the Gram alone is n^2*p/2 = 60.5M multiply-adds
+        // and the back-projection another p*k*n = 11M, both written as
+        // scalar loops over `Vec<Vec<f64>>`.
+        //
+        // Flattening once and handing them to the BLAS moves them from
+        // ~2.3 GFLOP/s to Accelerate's 68-126 GFLOP/s. The Gram is
+        // symmetric, so it is a `syrk`; the back-projection is X^T U,
+        // a plain transposed GEMM.
+        let mut xcf = vec![0.0_f64; n * p];
+        for (i, row) in xc.iter().enumerate() {
+            xcf[i * p..i * p + p].copy_from_slice(&row[..p]);
         }
+
+        let mut gram_f = vec![0.0_f64; n * n];
+        syrk(n, p, Op::N, &xcf, p, &mut gram_f, n);
         let scale = (n as f64 - 1.0).max(1.0);
-        for row in gram.iter_mut() {
-            for v in row.iter_mut() {
-                *v /= scale;
-            }
+        for v in gram_f.iter_mut() {
+            *v /= scale;
         }
+        let gram: Vec<Vec<f64>> = (0..n).map(|i| gram_f[i * n..i * n + n].to_vec()).collect();
+
         let (vals, vecs_n) = jacobi_eigen(&gram);
+
         // Feature-space eigenvector V = X^T U / sqrt((n-1) * lambda).
+        // `vecs_n` is n x n; only its first k columns are needed, which
+        // a leading dimension of n selects without copying them out.
+        let mut vecs_nf = vec![0.0_f64; n * n];
+        for (t, row) in vecs_n.iter().enumerate().take(n) {
+            vecs_nf[t * n..t * n + n].copy_from_slice(&row[..n]);
+        }
+        let mut vecs_pf = vec![0.0_f64; p * k];
+        gemm(p, k, n, Op::T, &xcf, p, Op::N, &vecs_nf, n, &mut vecs_pf, k);
+
         let mut vecs_p = vec![vec![0.0_f64; k]; p];
         for j in 0..k {
             let lam = vals[j].max(1e-18);
             let denom = (scale * lam).sqrt();
-            for i in 0..p {
-                let mut acc = 0.0_f64;
-                for t in 0..n {
-                    acc += xc[t][i] * vecs_n[t][j];
-                }
-                vecs_p[i][j] = acc / denom;
+            for (i, row) in vecs_p.iter_mut().enumerate().take(p) {
+                row[j] = vecs_pf[i * k + j] / denom;
             }
         }
         (vals, vecs_p)
@@ -306,16 +324,22 @@ fn finish_whitening(
             unwhitening[i][j] = whitening_pxk[i][j] * scale;
         }
     }
-    let mut whitened = vec![vec![0.0_f64; k]; n];
+    // whitened = Xc * whitening^T  (n x k from n x p and k x p).
+    //
+    // n*p*k multiply-adds -- 11M at n=110, p=10000, k=10 -- and shared
+    // by both the plain and the reliability-weighted paths, so it is
+    // worth the two flattening copies to hand it to the BLAS.
+    let mut xcf = vec![0.0_f64; n * p];
     for (i, row) in xc.iter().enumerate() {
-        for j in 0..k {
-            let mut acc = 0.0_f64;
-            for t in 0..p {
-                acc += whitening[j][t] * row[t];
-            }
-            whitened[i][j] = acc;
-        }
+        xcf[i * p..i * p + p].copy_from_slice(&row[..p]);
     }
+    let mut wf = vec![0.0_f64; k * p];
+    for (j, row) in whitening.iter().enumerate().take(k) {
+        wf[j * p..j * p + p].copy_from_slice(&row[..p]);
+    }
+    let mut whf = vec![0.0_f64; n * k];
+    gemm(n, k, p, Op::N, &xcf, p, Op::T, &wf, p, &mut whf, k);
+    let whitened: Vec<Vec<f64>> = (0..n).map(|i| whf[i * k..i * k + k].to_vec()).collect();
     Whitening {
         mean,
         whitening,
