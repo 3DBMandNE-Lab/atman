@@ -74,6 +74,12 @@ fn axes_icc_from_cohort_dir_subject_ids() {
     assert_eq!(row["k_mean"], "2");
     assert_eq!(row["k0"], "2");
     assert_eq!(row["n_singletons_excluded"], "1");
+    // These two tolerances are tighter than six-decimal output can carry:
+    // 7.5/8.5 written at `{:.6}` parses back 5.9e-8 away, which would fail
+    // this assertion. They pass because the `axes` writers use
+    // `io::format_f64` (`{}`, shortest round-trip), not `io::format_float`
+    // (`{:.6}`). If an `axes` column is ever switched to the narrow writer,
+    // this test fails and the fix is the tolerance, NOT the writer.
     assert!((row["icc1"].parse::<f64>().unwrap() - 7.5 / 8.5).abs() < 1e-12);
     assert!((row["within_sd"].parse::<f64>().unwrap() - 0.5f64.sqrt()).abs() < 1e-12);
     assert!(tmp.path().join("icc.tsv.run.json").exists());

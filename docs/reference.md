@@ -440,10 +440,30 @@ Numeric results differ between operating systems. `decompose nmf` and
 scalar kernel on every other target. A blocked kernel accumulates in a
 different order, so the low bits differ.
 
-Measured on a 93 x 9376 cohort, comparing the two ICA paths: the
-loadings agree at the 6 decimals the TSV carries, and the
-full-precision `ica_final_tol` in the sidecar differs by 1.08e-11
-relative. The difference is real and does not reach output precision.
+How large is the difference? Measure it on the full-precision files —
+six-decimal output cannot resolve it, so a comparison there shows zero
+and proves nothing.
+
+Measured across a full re-analysis of a 10,977-protein cohort, comparing
+a scalar-kernel tree against a BLAS-kernel rebuild:
+
+| File and column | n | Exactly equal | Max abs delta | Max relative |
+|---|---|---|---|---|
+| `de_naive` `bh_q` | 10,976 | 3,348 | 7.888e-13 | 4.094e-12 |
+| `de_naive` `mean_diff` | 10,976 | 2,681 | 1.554e-15 | 7.885e-13 |
+| `gsea_naive` `nes` | 50 | 0 | 6.184e-14 | 6.278e-14 |
+
+Not one file is byte-identical, and every enrichment score moves.
+
+The results are unchanged. The differential-abundance gradient those
+q-values define — 4,644 / 1,564 / 1,926 / 0 proteins — is identical
+across the two trees, because 1e-12 is twelve orders below the q < 0.05
+threshold that defines the counts.
+
+"The numbers move, the results do not" is the honest description, and it
+is checkable. "Nothing changes" is not, and a six-decimal comparison
+that appears to support it is a check that cannot resolve what it is
+being cited for.
 
 Two consequences for a reproducibility statement:
 

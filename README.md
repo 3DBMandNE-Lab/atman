@@ -210,9 +210,18 @@ seed, produces the same bytes. Thread count does not change results.
 Numeric results DO differ between operating systems. The NMF and ICA
 kernels use Apple's Accelerate BLAS on macOS and a portable scalar
 kernel everywhere else. A blocked kernel sums in a different order, so
-the last bits differ. Measured on a real cohort, the difference is about
-1e-11 relative and does not reach output precision at the 6 decimals the
-TSVs carry.
+the last bits differ.
+
+The numbers move. The results do not.
+
+Measure it on the full-precision files. Six-decimal output cannot
+resolve the difference. Across a full re-analysis of a real cohort, the
+largest relative change in a q-value was 4.1e-12. Every gene-set
+enrichment score moved.
+
+The gradient those q-values define did not. It was 4,644 / 1,564 /
+1,926 / 0 proteins in both trees. A shift of 1e-12 is twelve orders
+below the q < 0.05 threshold that sets those counts.
 
 Do not compare bytes across operating systems. Compare them on one. The
 run sidecar records `target_triple` and `rustc_version` for this reason,
