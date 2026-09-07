@@ -298,11 +298,33 @@ fn frobenius_error(
     p: usize,
     k: usize,
 ) -> f64 {
+    // One reconstructed row at a time, accumulated over `a` in the OUTER loop.
+    //
+    // The obvious formulation computes `(0..k).map(|a| w[i][a] * h[a][j]).sum()` per (i, j),
+    // which walks `h[a][j]` down a column. With `Vec<Vec<f64>>` every step of that walk is a
+    // pointer chase into a different heap allocation, so each output element costs k cache
+    // misses. This is the hottest loop in the Frobenius path — n·p·k multiply-adds, paid on
+    // EVERY iteration for the convergence check — so its layout dominates the runtime.
+    //
+    // Accumulating into a row buffer makes both `h_a[j]` and `wh_row[j]` contiguous and lets
+    // the inner loop vectorise. The additions over `a` still run in ascending order and the
+    // residual accumulation still walks (i, j) row-major, so the sequence of floating-point
+    // operations is unchanged and the result is bit-identical.
     let mut acc = 0.0_f64;
+    let mut wh_row = vec![0.0_f64; p];
     for i in 0..n {
-        for j in 0..p {
-            let wh_ij: f64 = (0..k).map(|a| w[i][a] * h[a][j]).sum();
-            let r = x[i][j] - wh_ij;
+        wh_row.iter_mut().for_each(|v| *v = 0.0);
+        let w_i = &w[i];
+        for (a, h_a) in h.iter().enumerate().take(k) {
+            let w_ia = w_i[a];
+            for (dst, h_aj) in wh_row.iter_mut().zip(h_a.iter()).take(p) {
+                *dst += w_ia * h_aj;
+            }
+
+        }
+        let x_i = &x[i];
+        for (j, wh) in wh_row.iter().enumerate().take(p) {
+            let r = x_i[j] - wh;
             acc += r * r;
         }
     }
@@ -678,14 +700,23 @@ fn mat_mul(
     cols_b: usize,
     b: &[Vec<f64>],
 ) -> Vec<Vec<f64>> {
+    // i-l-j, not i-j-l. The inner loop must walk `j`, because `b[l][j]` and `out[i][j]` are
+    // then both contiguous; with `j` in the middle the inner loop walks `b[l][j]` down a
+    // column, which on `Vec<Vec<f64>>` is a pointer chase into a different allocation per
+    // element. `mat_mul_at_b` below already has this order, which is why it is not a
+    // bottleneck and this one was.
+    //
+    // The additions into `out[i][j]` still run over `l` in ascending order, exactly as the
+    // scalar accumulator did, so the sequence of floating-point operations is unchanged.
     let mut out = vec![vec![0.0_f64; cols_b]; rows_a];
     for i in 0..rows_a {
-        for j in 0..cols_b {
-            let mut acc = 0.0_f64;
-            for l in 0..shared {
-                acc += a[i][l] * b[l][j];
+        let a_i = &a[i];
+        let out_i = &mut out[i];
+        for (l, b_l) in b.iter().enumerate().take(shared) {
+            let a_il = a_i[l];
+            for (dst, b_lj) in out_i.iter_mut().zip(b_l.iter()).take(cols_b) {
+                *dst += a_il * b_lj;
             }
-            out[i][j] = acc;
         }
     }
     out
@@ -739,15 +770,40 @@ fn mat_mul_a_bt(
     _shared: usize,
     rows_b: usize,
 ) -> Vec<Vec<f64>> {
+    // Transpose B once, then accumulate along `l` into rows_b independent accumulators.
+    //
+    // The natural form is a dot product per (i, j): `acc += a[i][l] * b[j][l]` over `l`.
+    // Both operands are contiguous, so locality is fine — but it is a floating-point
+    // REDUCTION, and the compiler may not vectorise it because doing so would reassociate
+    // the sum. What is left is a serial multiply-add chain whose loop-carried dependency is
+    // several cycles per element, so with `shared` in the thousands this loop is
+    // latency-bound rather than throughput-bound and becomes the hottest call in the
+    // multiplicative-update path once the others are fixed.
+    //
+    // Accumulating into `out[i][0..rows_b]` instead gives rows_b independent dependency
+    // chains, which hides that latency and lets the inner loop vectorise. Each output still
+    // accumulates over `l` in ascending order, exactly as the scalar accumulator did, so the
+    // sequence of floating-point operations per output element is unchanged.
+    //
+    // The transpose costs rows_b × shared writes once per call, against rows_a × rows_b ×
+    // shared multiply-adds for the product itself — negligible at any shape where this
+    // function is hot.
     let shared = a[0].len();
+    let mut bt = vec![vec![0.0_f64; rows_b]; shared];
+    for (j, b_j) in b.iter().enumerate().take(rows_b) {
+        for (l, b_jl) in b_j.iter().enumerate().take(shared) {
+            bt[l][j] = *b_jl;
+        }
+    }
     let mut out = vec![vec![0.0_f64; rows_b]; rows_a];
     for i in 0..rows_a {
-        for j in 0..rows_b {
-            let mut acc = 0.0_f64;
-            for l in 0..shared {
-                acc += a[i][l] * b[j][l];
+        let a_i = &a[i];
+        let out_i = &mut out[i];
+        for (l, bt_l) in bt.iter().enumerate().take(shared) {
+            let a_il = a_i[l];
+            for (dst, bt_lj) in out_i.iter_mut().zip(bt_l.iter()).take(rows_b) {
+                *dst += a_il * bt_lj;
             }
-            out[i][j] = acc;
         }
     }
     out
