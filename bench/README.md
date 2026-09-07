@@ -104,6 +104,43 @@ see that, and it was the whole remaining gap to scikit-learn.
 Time the phase inside the real loop before believing a kernel number.
 Instrumenting the loop found this after two rounds of estimating did not.
 
+### Check that the thing you measured actually ran
+
+Two measurements in this project were invalid because the command under
+test did not do what the timing implied, and in both cases the number
+looked right.
+
+One compared a release binary against itself. Another session had edited
+the source in the same working tree, `cargo build` reported
+`Finished in 0.15s` — no recompilation — and a golden-output comparison
+across that build returned BYTE-IDENTICAL on every file. It was one
+binary compared to itself.
+
+The other timed a command that was failing. `--k-selection fixed=30` is
+not a supported rule, and validation used to happen after the input was
+read, so the run cost 3.5 s on a 123 MB cohort and wrote nothing. Four
+of those at different `--max-iter` produced a flat slope, which was read
+as evidence that FastICA iterations are free. (They are free — confirmed
+later on runs that wrote their output — but the measurement behind the
+claim was of a command that did nothing.)
+
+Both preconditions are one line:
+
+- did the build actually recompile? Look for `Compiling`, not `Finished`.
+- did the run actually write its output? Check the file, or the exit
+  code, or a line count.
+
+**In both cases the wrong answer was the one we were hoping for.** One
+confirmed a fix had worked; the other confirmed a hypothesis formed
+minutes earlier. A check that fails silently is dangerous in proportion
+to how much you want its result, and a silent failure that lands on the
+side you expected will not feel like one.
+
+Validation that runs after the expensive load has this shape generally:
+a failure then costs about what success costs, and becomes timeable. In
+`decompose ica` that flag is now rejected in 0.01 s regardless of input
+size, so a timing containing a failure is obviously wrong.
+
 ### An adapter measures the interpreter, not the tool
 
 `bench/adapters/*.sh` wrap external tools as subprocesses, so an adapter
