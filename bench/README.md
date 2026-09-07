@@ -85,3 +85,51 @@ Python implementation the reference tool provides, stitched to the
 canonical TSV-in / TSV-out contract. We don't ship any here —
 writing one is ~20 lines per tool and stays on the benchmark
 operator's machine.
+
+## Two ways to measure the wrong thing
+
+Both of these produced a published-looking number that was wrong, on this
+project, in 2026-09.
+
+### A microbenchmark measures the kernel, not the kernel as used
+
+`cblas_dgemm` at NMF's shapes (n=110, p=10000, k=10) ran at 0.179 ms and
+0.304 ms in a tight 200-repeat loop. The same calls inside the solve ran
+at 0.743 ms and 0.864 ms — three to four times slower.
+
+Back-to-back calls keep Accelerate's worker threads hot. Calls separated
+by other work pay to wake them again. The isolated benchmark could not
+see that, and it was the whole remaining gap to scikit-learn.
+
+Time the phase inside the real loop before believing a kernel number.
+Instrumenting the loop found this after two rounds of estimating did not.
+
+### An adapter measures the interpreter, not the tool
+
+`bench/adapters/*.sh` wrap external tools as subprocesses, so an adapter
+timing includes interpreter startup, TSV parsing and TSV writing. On a
+110 x 10000 fixture that overhead was 2.31 s of a 2.436 s measurement.
+
+Quoted from adapter timings, atman looked 12.9x faster than scikit-learn
+on ICA and 7.3x slower on NMF. Timed kernel to kernel, it was 1.4x slower
+on ICA and 16x slower on NMF. Both published figures were artifacts, in
+opposite directions.
+
+Compare kernels to kernels. If you quote an adapter number, say so.
+
+### And check the iteration count before optimising
+
+A wall-clock comparison between two solvers is meaningless without their
+iteration counts. `decompose ica` records `ica_n_iterations`,
+`ica_converged` and `ica_final_tol` in its run sidecar; `bench decompose`
+does not carry them in the row. FastICA's iterations run on the
+k-dimensional whitened data and are effectively free — 2000 of them cost
+the same wall clock as 10 — so for ICA the kernel is the whitening, not
+the loop.
+
+## Building a non-negative fixture for NMF
+
+Make it non-negative BY CONSTRUCTION (`W @ H` with `W, H >= 0`), not by
+shifting (`X - X.min() + eps`). A shift adds a constant offset that NMF
+then has to model, and on such a fixture atman scores correlation 0.3155
+and recovers 4 of 10 archetypes. It looks broken and is not.

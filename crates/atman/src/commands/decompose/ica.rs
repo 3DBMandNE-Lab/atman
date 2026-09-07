@@ -12,6 +12,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+/// Largest assay count `--weighted-whitening` will accept.
+///
+/// The weighted path is O(p^3) on a dense p x p covariance. 2000 assays
+/// extrapolates to about 7 minutes from the measured p=1200 at 88 s,
+/// which is a tolerable ceiling; real proteomics widths (10,000+) are
+/// 16 to 19 hours and about 1 GB.
+const MAX_WEIGHTED_WHITENING_ASSAYS: usize = 2000;
+
 use super::program_name;
 use crate::io::{
     atomic_write, format_float, hash_canonical_inputs, read_measurements_long, read_samples,
@@ -155,6 +163,11 @@ pub struct IcaArgs {
     /// route by which it reaches the estimator. Validate it on ground
     /// truth for your data before trusting it — a decomposition that
     /// looks different is not one that is better.
+    ///
+    /// SCALE CEILING: this path cannot use the sample-space shortcut, so
+    /// it builds a dense p x p covariance and eigendecomposes it at
+    /// O(p^3). The command refuses above 2000 assays. A full proteomics
+    /// width of 10,000 would need about 1 GB and roughly 16 hours.
     #[arg(long, default_value_t = false)]
     pub(super) weighted_whitening: bool,
 
@@ -250,6 +263,45 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
             "k={k} exceeds min(n_samples={}, n_assays={})",
             matrix.samples.len(),
             matrix.assays.len()
+        );
+    }
+
+    // --weighted-whitening cannot use the sample-space Gram shortcut,
+    // because a weighted inner product between two SAMPLES is not the
+    // weighted covariance between two FEATURES. It therefore builds a
+    // dense p x p covariance and runs a Jacobi eigendecomposition on it,
+    // which is O(p^3).
+    //
+    // Measured on this machine, n=60, k=5, uniform weights:
+    //
+    //   p=200   0.46 s     p=800    26.5 s
+    //   p=400   5.22 s     p=1200   88.0 s
+    //
+    // The fitted exponent between the last two points is 2.96, so the
+    // extrapolation to real cohort widths is p=10491 -> ~16 h and
+    // p=10977 -> ~19 h, on a covariance matrix of about 1 GB.
+    //
+    // A flag that allocates a gigabyte and runs overnight without
+    // warning is the same defect class as a well-formed but meaningless
+    // output: it looks like it is working. Refuse instead, and name the
+    // limit and the reason.
+    if args.weighted_whitening && matrix.assays.len() > MAX_WEIGHTED_WHITENING_ASSAYS {
+        bail!(
+            concat!(
+                "--weighted-whitening builds a dense {p} x {p} covariance and ",
+                "eigendecomposes it. That costs about {gb:.1} GB and scales as ",
+                "p^3. Measured p=1200 at 88 s, so {p} assays extrapolates to ",
+                "roughly {hours:.0} hours. The limit is {limit} assays.\n\n",
+                "Either drop --weighted-whitening, or reduce the assay count ",
+                "first with --max-missing-fraction or a panel subset. The ",
+                "sample-space shortcut that makes unweighted whitening fast ",
+                "cannot carry per-cell weights, so this needs a different ",
+                "algorithm rather than a faster loop."
+            ),
+            p = matrix.assays.len(),
+            gb = (matrix.assays.len() as f64).powi(2) * 8.0 / 1e9,
+            hours = 88.0 * (matrix.assays.len() as f64 / 1200.0).powi(3) / 3600.0,
+            limit = MAX_WEIGHTED_WHITENING_ASSAYS,
         );
     }
 
