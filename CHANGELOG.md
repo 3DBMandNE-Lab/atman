@@ -84,6 +84,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and AUC 0.70, while its permuted null ran +0.542 to +0.698 with mean
   AUC 0.73 — the shuffled arm separated cases *better* than the real
   one, and standardised against its own null the result was z = −0.66.
+  That z is weakly determined and should be read as a direction rather
+  than a magnitude. The reporting session has since measured its null
+  spread: the reference-protein arm on that fold has a null standard
+  deviation of 0.048 across eight permuted seeds, an order narrower than
+  the widest cell in the same sweep at 0.399. A denominator estimated
+  from eight draws that barely vary makes the ratio itself uncertain,
+  and a narrow null inflates any standardised score. The finding the
+  entry describes does not depend on the z: the permuted arm's raw
+  separation exceeded the real arm's, which needs no denominator.
   Their measured null means order exactly as the mechanism predicts:
   reference-protein +0.267, quantile +0.193, rank +0.103, and the one
   per-protein method, zscore, at −0.103.
