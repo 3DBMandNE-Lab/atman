@@ -184,6 +184,7 @@ fn decompose_null_produces_valid_p_values_and_monotone_q() {
         "null_p",
         "null_q",
         "decision",
+        "n_perm",
     ] {
         assert!(header.iter().any(|h| h == col), "missing column {col}");
     }
@@ -296,5 +297,82 @@ fn decompose_null_rejects_k_above_sample_count() {
     assert!(
         stderr.contains("k=500 exceeds"),
         "unexpected stderr: {stderr}"
+    );
+}
+
+/// The draw count that determines null_stability_mean,
+/// null_stability_p95 and null_p must travel in the file.
+///
+/// It was already in the run sidecar, which is recoverable but not where
+/// a reader of the table looks. The p95 is the reason: its index is
+/// `ceil(0.95 * n_perm) - 1`, so at a low n_perm one or two draws decide
+/// it and nothing in the row said how many there were.
+///
+/// n_perm is NOT the denominator of null_q, which is BH across programs.
+/// A reader must not generalise the column to that one, so the reference
+/// says so and this test pins the distinction by checking n_perm against
+/// the flag rather than against the row count.
+#[test]
+fn decompose_null_writes_the_draw_count_that_determines_its_statistics() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("canonical");
+    let out_path = tmp.path().join("null_out").join("archetype_null.tsv");
+    write_planted_canonical(&input);
+
+    let n_perm = 24usize;
+    let out = run_atman(&[
+        "decompose",
+        "null",
+        "--input-dir",
+        input.to_str().unwrap(),
+        "--output",
+        out_path.to_str().unwrap(),
+        "--k",
+        "4",
+        "--n-perm",
+        &n_perm.to_string(),
+        "--n-seeds",
+        "2",
+        "--seed",
+        "20260418",
+        "--null-mode",
+        "protein-shuffle",
+        "--top-n",
+        "10",
+        "--max-iter",
+        "150",
+        "--tol",
+        "1e-3",
+    ]);
+    assert!(
+        out.status.success(),
+        "decompose null failed:\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let (header, rows) = parse_tsv(&out_path);
+    assert!(
+        header.iter().any(|h| h == "n_perm"),
+        "n_perm must be a column"
+    );
+    assert!(!rows.is_empty(), "no programs written");
+    for row in &rows {
+        let got: usize = row["n_perm"].parse().expect("n_perm parses as an integer");
+        assert_eq!(
+            got, n_perm,
+            "n_perm must report the draw count actually used, not the \
+             row count or a default"
+        );
+        // Not the row count: the distinction the column must not blur,
+        // since null_q's denominator IS the row count.
+        assert_ne!(got, rows.len());
+    }
+
+    // At this count the p95 rests on the 23rd of 24 sorted draws, which
+    // is the situation the column exists to expose.
+    let p95_idx = (0.95f64 * n_perm as f64).ceil() as usize - 1;
+    assert_eq!(
+        p95_idx, 22,
+        "at n_perm=24 the p95 index is the 23rd of 24 draws"
     );
 }

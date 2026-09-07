@@ -77,11 +77,29 @@ pub struct ArchetypeNullRow {
     pub program: usize,
     pub observed_stability: f64,
     /// Mean over null iterations of the max-across-programs stability.
+    ///
+    /// Over `NullParams::n_perm` draws. `decompose null` writes that
+    /// count as the `n_perm` column beside this one.
     pub null_stability_mean: f64,
-    /// 95th percentile of the null "max stability" distribution.
+    /// 95th percentile of the null "max stability" distribution, over
+    /// `NullParams::n_perm` draws.
+    ///
+    /// POORLY DETERMINED AT A LOW `n_perm`. The index is
+    /// `ceil(0.95 * n_perm) - 1`, so at `n_perm = 20` it lands on the
+    /// 19th of 20 sorted values and one or two draws decide it. At the
+    /// CLI default of 200 it rests on roughly the top ten. Read it with
+    /// the `n_perm` column, which `decompose null` writes beside it.
+    ///
+    /// Nothing downstream keys on this. `decision` comes from
+    /// `null_q`, which derives from the properly floored [`Self::null_p`],
+    /// so a poorly determined p95 is descriptive rather than load
+    /// bearing.
     pub null_stability_p95: f64,
     /// Permutation p-value with the +1 small-sample correction:
     /// `(1 + count(null_max ≥ observed)) / (1 + n_perm)`.
+    ///
+    /// Floored at `1 / (n_perm + 1)`, so `n_perm` bounds how small this
+    /// can get however extreme the observed stability.
     pub null_p: f64,
 }
 

@@ -185,8 +185,14 @@ pub(super) fn run_null(args: NullArgs) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating output dir {:?}", parent))?;
     }
+    // n_perm is the denominator of null_stability_mean,
+    // null_stability_p95 and null_p, so it travels in the file rather
+    // than only in the sidecar. It is NOT the denominator of null_q,
+    // which is BH across programs and so is bounded by the row count.
+    // Appended last so a positional reader of the original seven
+    // columns keeps working.
     let mut out = String::from(
-        "program\tobserved_stability\tnull_stability_mean\tnull_stability_p95\tnull_p\tnull_q\tdecision\n",
+        "program\tobserved_stability\tnull_stability_mean\tnull_stability_p95\tnull_p\tnull_q\tdecision\tn_perm\n",
     );
     for (row, q) in rows.iter().zip(qs.iter()) {
         let program = program_name(row.program - 1);
@@ -197,12 +203,13 @@ pub(super) fn run_null(args: NullArgs) -> Result<()> {
             "noise"
         };
         out.push_str(&format!(
-            "{program}\t{}\t{}\t{}\t{}\t{}\t{decision}\n",
+            "{program}\t{}\t{}\t{}\t{}\t{}\t{decision}\t{}\n",
             format_float(row.observed_stability),
             format_float(row.null_stability_mean),
             format_float(row.null_stability_p95),
             format_float(row.null_p),
             format_float(q_val),
+            args.n_perm,
         ));
     }
     atomic_write(&args.output, out.as_bytes())?;

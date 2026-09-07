@@ -653,6 +653,29 @@ caption a panel with the word "survive" for a count derived from one. An
 archetype matched twice in 200 resamples sorts to the top of a
 descending `ci_lower_n_cohorts` and passes any threshold on it.
 
+### atman decompose null — n_perm travels with the table
+
+`null_stability_mean`, `null_stability_p95` and `null_p` are all
+computed over `--n-perm` draws. The `n_perm` column records that count
+in every row.
+
+`null_stability_p95` is poorly determined at a low `--n-perm`. Its index
+is `ceil(0.95 * n_perm) - 1`. At `--n-perm 20` that lands on the 19th of
+20 sorted values, so one or two draws decide it. At the default of 200 it
+rests on roughly the top ten.
+
+Nothing keys on `null_stability_p95`. The `decision` column comes from
+`null_q`, which derives from `null_p`. `null_p` carries the `+1`
+correction and is floored at `1 / (n_perm + 1)`. So a poorly determined
+p95 is descriptive and does not reach a decision.
+
+`n_perm` is NOT the denominator of `null_q`. BH runs across the programs
+in the run, so the row count bounds `null_q`. Do not read the `n_perm`
+column as the support for that column.
+
+The count was always in the run sidecar. It is now in the table as well,
+because a reader of the table does not open the sidecar.
+
 ### atman enrich gsea — read NES with n_same_sign_perms
 
 **A larger NES is a less determined NES.** The score is anti-correlated

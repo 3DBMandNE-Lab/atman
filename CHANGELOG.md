@@ -8,6 +8,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`decompose null` writes an `n_perm` column.** It is the denominator
+  of `null_stability_mean`, `null_stability_p95` and `null_p`, and it
+  travelled only in the run sidecar. `null_stability_p95` is the reason:
+  its index is `ceil(0.95 * n_perm) - 1`, so at `--n-perm 20` it lands on
+  the 19th of 20 sorted draws and one or two decide it, with nothing in
+  the row saying how many there were. Exposure was limited rather than
+  absent — the default is 200, where the p95 rests on roughly the top
+  ten, and `decision` keys on `null_q` from the properly floored
+  `null_p`, so nothing rides on the p95 — but a reader of the table does
+  not open the sidecar. `n_perm` is NOT the denominator of `null_q`,
+  which is BH across programs and bounded by the row count, and the
+  reference says so. The column is appended last so a positional reader
+  of the original seven keeps working. Found by applying the meningioma
+  session's percentile-of-few-draws shape to atman's own estimators.
+
 - **`enrich gsea` reports `n_same_sign_perms`**, the number of
   permutation draws the NES denominator was averaged over, as a new
   trailing column and on `GseaResult`. NES is `es / mean(|es_perm|)`
