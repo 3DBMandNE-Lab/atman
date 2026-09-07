@@ -20,11 +20,11 @@ use std::path::{Path, PathBuf};
 
 /// `(path, max share of long sentences in percent, max semicolons)`.
 const BUDGETS: &[(&str, usize, usize)] = &[
-    ("README.md", 4, 0),
-    ("docs/reference.md", 8, 0),
+    ("README.md", 2, 0),
+    ("docs/reference.md", 7, 0),
     ("docs/recipes.md", 17, 14),
     ("docs/tutorial.md", 2, 8),
-    ("docs/style.md", 1, 0),
+    ("docs/style.md", 0, 0),
 ];
 
 const LONG_SENTENCE_WORDS: usize = 25;

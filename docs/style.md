@@ -70,14 +70,14 @@ thing that just went wrong.
 can count without judgement: the share of sentences longer than 25
 words, and the number of semicolons. It asserts a per-file budget.
 
-The budgets record the state on 2026-09-06 and exist to ratchet. A new
+The budgets record the state on 2026-09-07 and exist to ratchet. A new
 document must not make a file worse. Lower a budget when you improve a
 file, and never raise one.
 
 | File | Long sentences | Semicolons |
 |---|---|---|
-| `README.md` | 4% | 0 |
-| `docs/reference.md` | 8% | 0 |
+| `README.md` | 2% | 0 |
+| `docs/reference.md` | 7% | 0 |
 | `docs/recipes.md` | 17% | 14 |
 | `docs/tutorial.md` | 2% | 8 |
 | `docs/style.md` | 0% | 0 |
