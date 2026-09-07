@@ -49,6 +49,30 @@ pub fn optional_cell(row: &StringRecord, col: Option<usize>) -> Option<&str> {
 /// `NaN`/`Inf` explicitly and collapses zero to `"0"`. This rounding loses
 /// precision and is NOT round-trip-safe — use [`format_f64`] for value columns
 /// that must reparse to the exact same `f64`.
+/// Format a float for TSV output at SIX DECIMALS.
+///
+/// This is the narrower of atman's two float writers, and the pair is a
+/// footgun because the names look interchangeable and are not:
+///
+/// | Writer | Precision | Used by |
+/// |---|---|---|
+/// | `format_float` | `{:.6}` | `decompose`, `align`, `harmonize`, `bootstrap`, most analysis commands |
+/// | [`format_f64`] | `{}`, shortest round-trip | the `axes` family, `de/output_rows`, `enrich`, `concordance`, `residuals`, `scale`, `score_weighted`, `report` |
+///
+/// At six decimals a value read back from the file is not the value that
+/// was computed: `7.5/8.5` writes as `0.882353` and parses back 5.9e-8
+/// away from the original. That is fine for a report and wrong for a
+/// round-trip, so a test that parses this output must not assert a
+/// tolerance tighter than about 1e-6 — and tighter still if it sums
+/// several values, since the rounding accumulates.
+///
+/// It also means a byte-comparison of two files written by THIS function
+/// is an agreement test at 1e-6, not a bit-identity test. Files written
+/// by [`format_f64`] compare at full precision. When citing a
+/// byte-comparison as evidence, say which writer produced the file.
+///
+/// Zero is written as `0` rather than `0.000000`, and non-finite values
+/// as `NaN` / `Inf` / `-Inf`.
 pub fn format_float(value: f64) -> String {
     if !value.is_finite() {
         return if value.is_nan() {
@@ -791,6 +815,16 @@ fn empty_to_none(s: &str) -> Option<String> {
 /// `{}` formatting, which emits the shortest decimal string that parses back to
 /// the exact same `f64`. Contrast with [`format_float`], whose fixed-6-decimal
 /// rounding is for human-facing report columns and is NOT round-trip-safe.
+/// Format a float for TSV output at FULL round-trip precision.
+///
+/// The wider of atman's two float writers. `{}` on an `f64` emits the
+/// shortest decimal string that parses back to the same bits, so a value
+/// written by this function survives a write/read cycle exactly.
+///
+/// See [`format_float`] for the six-decimal writer and for why the two
+/// are easy to confuse. Do not swap one for the other to make a test
+/// pass: the choice changes the precision of every column in the file,
+/// and downstream byte-comparisons inherit it.
 pub fn format_f64(v: f64) -> String {
     format!("{}", v)
 }

@@ -401,6 +401,30 @@ drift on the R side cannot affect CI.
 The parity assertions run on every `cargo test --workspace --release`.
 CI fails if any drifts.
 
+### Output precision is not uniform across commands
+
+Atman writes floats two ways, and which one you get depends on the
+command.
+
+| Precision | Commands |
+|---|---|
+| Six decimals | `decompose`, `align`, `harmonize`, `bootstrap`, and most analysis commands |
+| Full round-trip | the `axes` family, `de` result rows, `enrich`, `concordance`, `residuals`, `scale`, `score-weighted`, `report` |
+
+A six-decimal value is not the value that was computed. `7.5/8.5` writes
+as `0.882353`, which parses back 5.9e-8 away from the original. A
+full-round-trip value parses back to the same bits.
+
+This matters when you compare two output files. A byte-comparison of
+six-decimal files is an agreement test at about 1e-6. The same comparison
+on full-precision files is a bit-identity test. **Say which writer
+produced the file when you cite a byte-comparison as evidence.**
+
+It also matters when you write a check. A test that parses six-decimal
+output must not assert a tolerance tighter than about 1e-6, and must
+allow more when it sums several values, because the rounding
+accumulates.
+
 ### What determinism atman guarantees
 
 The guarantee is: the same binary, on the same input, with the same
