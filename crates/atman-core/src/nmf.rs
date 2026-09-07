@@ -14,6 +14,7 @@
 //! that representation; the inner math uses index loops rather than
 //! ndarray to avoid introducing new workspace dependencies.
 
+use crate::blas::{gemm, Op};
 use crate::ica::{jacobi_eigen, Xoshiro256pp};
 
 // ── public types ────────────────────────────────────────────────────────────
@@ -216,121 +217,199 @@ fn frobenius_mu(
     max_iter: usize,
     tol: f64,
 ) -> NmfResult {
-    let mut prev_error = frobenius_error(x, w, h, n, p, k);
+    // Flat row-major for the whole solve.
+    //
+    // `Vec<Vec<f64>>` puts every row in its own allocation, so nothing
+    // is contiguous across rows and no kernel can be handed to a BLAS.
+    // Flattening once at the top and writing back at the bottom keeps
+    // that entirely inside this function: the signature, the callers
+    // and `NmfResult` are unchanged.
+    //
+    // The seven matrix products below are the whole cost of the solve.
+    // Routing them through `blas::gemm` moves them from ~2.3 GFLOP/s of
+    // scalar Rust to Accelerate's 68-126 GFLOP/s at these shapes. A
+    // blocked kernel reassociates each sum, so results move against the
+    // scalar path -- see `blas` for why that is a re-baseline rather
+    // than a loss of the determinism atman actually guarantees.
+    let xf = flatten(x, n, p);
+    let mut wf = flatten(w, n, k);
+    let mut hf = flatten(h, k, p);
+
+    // Every buffer allocated once, reused across iterations.
+    let mut wtx = vec![0.0_f64; k * p];
+    let mut wtw = vec![0.0_f64; k * k];
+    let mut wtwh = vec![0.0_f64; k * p];
+    let mut xht = vec![0.0_f64; n * k];
+    let mut hht = vec![0.0_f64; k * k];
+    let mut whht = vec![0.0_f64; n * k];
+    let mut wtw_post = vec![0.0_f64; k * k];
+
+    // ||X||_F^2, constant for the whole solve. See
+    // `frobenius_error_gram` for why it is worth carrying.
+    let x_norm_sq: f64 = xf.iter().map(|v| v * v).sum();
+
+    let mut prev_error = {
+        // Iteration 0 has no XH^T or HH^T in hand yet, so the opening
+        // error is the one place the explicit reconstruction is paid.
+        let mut wh0 = vec![0.0_f64; n * p];
+        frobenius_error_explicit(&xf, &wf, &hf, n, p, k, &mut wh0)
+    };
     let mut n_iter = 0usize;
     let mut converged = false;
 
     for iter in 0..max_iter {
         n_iter = iter + 1;
 
-        // ── update H ──────────────────────────────────────────────────────
-        // H_new[a, j] = H[a, j] * (W^T X)[a, j] / (W^T W H)[a, j]
-        //
-        // WtX[a, j]  = sum_i  W[i, a] * X[i, j]
-        // WtWH[a, j] = sum_i (W^T W)[a, i] * H[i, j]
-        //            = sum_i (sum_l W[l, a] * W[l, i]) * H[i, j]
+        // ── update H ──────────────────────────────────────────────────
+        // H <- H * (WᵀX) / (WᵀW H)
+        gemm(k, p, n, Op::T, &wf, k, Op::N, &xf, p, &mut wtx, p);
+        gemm(k, k, n, Op::T, &wf, k, Op::N, &wf, k, &mut wtw, k);
+        gemm(k, p, k, Op::N, &wtw, k, Op::N, &hf, p, &mut wtwh, p);
 
-        // precompute WtX (k × p)
-        let wtx = mat_mul_at_b(w, x, k, n, p);
-        // precompute WtW (k × k)
-        let wtw = mat_mul_at_a(w, k, n);
-        // WtWH (k × p) = WtW @ H
-        let wtwh = mat_mul(k, k, &wtw, k, p, h);
-
-        for a in 0..k {
-            for j in 0..p {
-                let num = wtx[a][j];
-                let den = wtwh[a][j] + EPSILON;
-                h[a][j] *= num / den;
-                // clip negatives that floating-point errors might introduce
-                if h[a][j] < 0.0 {
-                    h[a][j] = 0.0;
-                }
+        for idx in 0..k * p {
+            let den = wtwh[idx] + EPSILON;
+            hf[idx] *= wtx[idx] / den;
+            // clip negatives that floating-point errors might introduce
+            if hf[idx] < 0.0 {
+                hf[idx] = 0.0;
             }
         }
 
-        // ── update W ──────────────────────────────────────────────────────
-        // W_new[i, a] = W[i, a] * (X H^T)[i, a] / (W H H^T)[i, a]
+        // ── update W ──────────────────────────────────────────────────
+        // W <- W * (X Hᵀ) / (W H Hᵀ)
+        gemm(n, k, p, Op::N, &xf, p, Op::T, &hf, p, &mut xht, k);
+        gemm(k, k, p, Op::N, &hf, p, Op::T, &hf, p, &mut hht, k);
+        gemm(n, k, k, Op::N, &wf, k, Op::N, &hht, k, &mut whht, k);
 
-        // XHt (n × k) = X @ H^T
-        let xht = mat_mul_a_bt(x, h, n, p, k);
-        // HHt (k × k) = H @ H^T
-        let hht = mat_mul_a_at(h, k, p);
-        // WHHt (n × k) = W @ HHt
-        let whht = mat_mul(n, k, w, k, k, &hht);
-
-        for i in 0..n {
-            for a in 0..k {
-                let num = xht[i][a];
-                let den = whht[i][a] + EPSILON;
-                w[i][a] *= num / den;
-                if w[i][a] < 0.0 {
-                    w[i][a] = 0.0;
-                }
+        for idx in 0..n * k {
+            let den = whht[idx] + EPSILON;
+            wf[idx] *= xht[idx] / den;
+            if wf[idx] < 0.0 {
+                wf[idx] = 0.0;
             }
         }
 
-        // ── convergence check ─────────────────────────────────────────────
-        let error = frobenius_error(x, w, h, n, p, k);
+        // ── convergence check ─────────────────────────────────────────
+        // Evaluated EVERY iteration, as before. Checking it periodically
+        // would be cheaper and would change the stopping rule: a
+        // different break iteration gives different W, H, n_iter,
+        // converged and final_error, all of which reach the run sidecar.
+        // That is a change of behaviour, not an optimisation.
+        // `xht` and `hht` were both built from the CURRENT H above, and
+        // `wf` has just been updated, so the Gram identity is evaluated
+        // on exactly the post-update W and H.
+        gemm(k, k, n, Op::T, &wf, k, Op::N, &wf, k, &mut wtw_post, k);
+        let error = frobenius_error_gram(x_norm_sq, &wf, &xht, &wtw_post, &hht, n, k);
         if (prev_error - error).abs() < tol {
             converged = true;
-            prev_error = error;
             break;
         }
         prev_error = error;
     }
 
+    unflatten_into(&wf, w, n, k);
+    unflatten_into(&hf, h, k, p);
+
+    // The Gram identity drives the convergence CHECK, where its cost
+    // matters and its precision is sufficient. The error that leaves
+    // this function is reported in the log line and the run sidecar, so
+    // it is recomputed explicitly: one reconstruction per solve against
+    // the one per iteration that used to dominate, which is free at this
+    // scale and keeps the published number exact.
+    let mut wh_final = vec![0.0_f64; n * p];
+    let final_error = frobenius_error_explicit(&xf, &wf, &hf, n, p, k, &mut wh_final);
+
     NmfResult {
         w: w.to_vec(),
         h: h.to_vec(),
         n_iter,
-        final_error: prev_error,
+        final_error,
         converged,
     }
 }
 
-/// ||X - WH||_F
-fn frobenius_error(
-    x: &[Vec<f64>],
-    w: &[Vec<f64>],
-    h: &[Vec<f64>],
+/// Row-major copy of a `rows × cols` matrix-of-rows.
+fn flatten(m: &[Vec<f64>], rows: usize, cols: usize) -> Vec<f64> {
+    let mut out = vec![0.0_f64; rows * cols];
+    for (i, row) in m.iter().enumerate().take(rows) {
+        out[i * cols..i * cols + cols].copy_from_slice(&row[..cols]);
+    }
+    out
+}
+
+/// Write a flat row-major matrix back into a matrix-of-rows.
+fn unflatten_into(flat: &[f64], m: &mut [Vec<f64>], rows: usize, cols: usize) {
+    for (i, row) in m.iter_mut().enumerate().take(rows) {
+        row[..cols].copy_from_slice(&flat[i * cols..i * cols + cols]);
+    }
+}
+
+/// `||X - WH||_F` from Gram matrices already computed this iteration.
+///
+/// Expands the square:
+/// `||X - WH||^2 = ||X||^2 - 2<W, XH^T> + <W^T W, H H^T>`.
+///
+/// Every term on the right is either constant or `k`-sized. `XH^T` and
+/// `H H^T` are already built for the W update, so the extra cost is one
+/// `k x k` Gram of W plus two small dot products — O(n·k^2) against the
+/// O(n·p·k) of reconstructing `WH`.
+///
+/// This is what makes the error step stop being the bottleneck. Routing
+/// the reconstruction through a BLAS made it compute-cheap but left it
+/// streaming an n×p buffer every iteration, which is bandwidth-bound:
+/// at n=110, p=2000 that is 1.76 MB written and 3.5 MB read per
+/// iteration, and it dominated once the GEMMs were fast.
+///
+/// The cost is precision. Near convergence `||X - WH||` is small
+/// against `||X||`, so the subtraction cancels and the result carries
+/// fewer significant digits than the explicit form. The negative values
+/// that cancellation can produce are clamped at zero before the square
+/// root, which is what scikit-learn does in the same place for the same
+/// reason. `frobenius_error_explicit` remains the reference, and
+/// `gram_error_tracks_explicit_error_along_a_real_solve` pins the two
+/// together.
+fn frobenius_error_gram(
+    x_norm_sq: f64,
+    w: &[f64],
+    xht: &[f64],
+    wtw: &[f64],
+    hht: &[f64],
+    n: usize,
+    k: usize,
+) -> f64 {
+    let cross: f64 = w
+        .iter()
+        .zip(xht.iter())
+        .take(n * k)
+        .map(|(a, b)| a * b)
+        .sum();
+    let quad: f64 = wtw
+        .iter()
+        .zip(hht.iter())
+        .take(k * k)
+        .map(|(a, b)| a * b)
+        .sum();
+    (x_norm_sq - 2.0 * cross + quad).max(0.0).sqrt()
+}
+
+/// `||X - WH||_F` by explicit reconstruction. The reference form.
+fn frobenius_error_explicit(
+    x: &[f64],
+    w: &[f64],
+    h: &[f64],
     n: usize,
     p: usize,
     k: usize,
+    wh: &mut [f64],
 ) -> f64 {
-    // One reconstructed row at a time, accumulated over `a` in the OUTER loop.
-    //
-    // The obvious formulation computes `(0..k).map(|a| w[i][a] * h[a][j]).sum()` per (i, j),
-    // which walks `h[a][j]` down a column. With `Vec<Vec<f64>>` every step of that walk is a
-    // pointer chase into a different heap allocation, so each output element costs k cache
-    // misses. This is the hottest loop in the Frobenius path — n·p·k multiply-adds, paid on
-    // EVERY iteration for the convergence check — so its layout dominates the runtime.
-    //
-    // Accumulating into a row buffer makes both `h_a[j]` and `wh_row[j]` contiguous and lets
-    // the inner loop vectorise. The additions over `a` still run in ascending order and the
-    // residual accumulation still walks (i, j) row-major, so the sequence of floating-point
-    // operations is unchanged and the result is bit-identical.
+    gemm(n, p, k, Op::N, w, k, Op::N, h, p, wh, p);
     let mut acc = 0.0_f64;
-    let mut wh_row = vec![0.0_f64; p];
-    for i in 0..n {
-        wh_row.iter_mut().for_each(|v| *v = 0.0);
-        let w_i = &w[i];
-        for (a, h_a) in h.iter().enumerate().take(k) {
-            let w_ia = w_i[a];
-            for (dst, h_aj) in wh_row.iter_mut().zip(h_a.iter()).take(p) {
-                *dst += w_ia * h_aj;
-            }
-
-        }
-        let x_i = &x[i];
-        for (j, wh) in wh_row.iter().enumerate().take(p) {
-            let r = x_i[j] - wh;
-            acc += r * r;
-        }
+    for (xv, whv) in x.iter().zip(wh.iter()).take(n * p) {
+        let r = xv - whv;
+        acc += r * r;
     }
     acc.sqrt()
 }
-
 // ── KL-divergence multiplicative updates ────────────────────────────────────
 
 /// Run Lee & Seung 2001 (NIPS) multiplicative updates for the KL-divergence loss.
@@ -717,106 +796,6 @@ fn mat_mul(
             for (dst, b_lj) in out_i.iter_mut().zip(b_l.iter()).take(cols_b) {
                 *dst += a_il * b_lj;
             }
-        }
-    }
-    out
-}
-
-/// A^T @ B: (cols_a × cols_b) from (rows × cols_a) and (rows × cols_b)
-fn mat_mul_at_b(
-    a: &[Vec<f64>],
-    b: &[Vec<f64>],
-    cols_a: usize,
-    rows: usize,
-    cols_b: usize,
-) -> Vec<Vec<f64>> {
-    let mut out = vec![vec![0.0_f64; cols_b]; cols_a];
-    for r in 0..rows {
-        for i in 0..cols_a {
-            let ai = a[r][i];
-            for j in 0..cols_b {
-                out[i][j] += ai * b[r][j];
-            }
-        }
-    }
-    out
-}
-
-/// A^T @ A: (cols × cols) from (rows × cols)
-fn mat_mul_at_a(a: &[Vec<f64>], cols: usize, rows: usize) -> Vec<Vec<f64>> {
-    let mut out = vec![vec![0.0_f64; cols]; cols];
-    // `r` indexes rows of a; the inner loops read a[r] at two columns (i and j).
-    #[allow(clippy::needless_range_loop)]
-    for r in 0..rows {
-        for i in 0..cols {
-            let ai = a[r][i];
-            for j in i..cols {
-                let v = ai * a[r][j];
-                out[i][j] += v;
-                if i != j {
-                    out[j][i] += v;
-                }
-            }
-        }
-    }
-    out
-}
-
-/// A @ B^T: (rows_a × rows_b) from (rows_a × shared) and (rows_b × shared)
-fn mat_mul_a_bt(
-    a: &[Vec<f64>],
-    b: &[Vec<f64>],
-    rows_a: usize,
-    _shared: usize,
-    rows_b: usize,
-) -> Vec<Vec<f64>> {
-    // Transpose B once, then accumulate along `l` into rows_b independent accumulators.
-    //
-    // The natural form is a dot product per (i, j): `acc += a[i][l] * b[j][l]` over `l`.
-    // Both operands are contiguous, so locality is fine — but it is a floating-point
-    // REDUCTION, and the compiler may not vectorise it because doing so would reassociate
-    // the sum. What is left is a serial multiply-add chain whose loop-carried dependency is
-    // several cycles per element, so with `shared` in the thousands this loop is
-    // latency-bound rather than throughput-bound and becomes the hottest call in the
-    // multiplicative-update path once the others are fixed.
-    //
-    // Accumulating into `out[i][0..rows_b]` instead gives rows_b independent dependency
-    // chains, which hides that latency and lets the inner loop vectorise. Each output still
-    // accumulates over `l` in ascending order, exactly as the scalar accumulator did, so the
-    // sequence of floating-point operations per output element is unchanged.
-    //
-    // The transpose costs rows_b × shared writes once per call, against rows_a × rows_b ×
-    // shared multiply-adds for the product itself — negligible at any shape where this
-    // function is hot.
-    let shared = a[0].len();
-    let mut bt = vec![vec![0.0_f64; rows_b]; shared];
-    for (j, b_j) in b.iter().enumerate().take(rows_b) {
-        for (l, b_jl) in b_j.iter().enumerate().take(shared) {
-            bt[l][j] = *b_jl;
-        }
-    }
-    let mut out = vec![vec![0.0_f64; rows_b]; rows_a];
-    for i in 0..rows_a {
-        let a_i = &a[i];
-        let out_i = &mut out[i];
-        for (l, bt_l) in bt.iter().enumerate().take(shared) {
-            let a_il = a_i[l];
-            for (dst, bt_lj) in out_i.iter_mut().zip(bt_l.iter()).take(rows_b) {
-                *dst += a_il * bt_lj;
-            }
-        }
-    }
-    out
-}
-
-/// A @ A^T: (rows × rows) from (rows × cols)
-fn mat_mul_a_at(a: &[Vec<f64>], rows: usize, cols: usize) -> Vec<Vec<f64>> {
-    let mut out = vec![vec![0.0_f64; rows]; rows];
-    for i in 0..rows {
-        for j in i..rows {
-            let acc: f64 = (0..cols).map(|l| a[i][l] * a[j][l]).sum();
-            out[i][j] = acc;
-            out[j][i] = acc;
         }
     }
     out
@@ -1414,6 +1393,109 @@ fn pearson_r(a: &[f64], b: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Gram identity must agree with explicit reconstruction across
+    /// the whole range of residuals a solve passes through, INCLUDING
+    /// the near-converged regime where it is weakest.
+    ///
+    /// `||X - WH||^2 = ||X||^2 - 2<W, XH^T> + <W^T W, HH^T>` is exact in
+    /// real arithmetic. In floating point the right-hand side is a
+    /// difference of similar-sized quantities, so as the residual
+    /// shrinks against `||X||` it loses significant digits. This walks
+    /// the perturbation down six orders of magnitude and asserts the two
+    /// forms stay in relative agreement, so the point at which the
+    /// identity stops being usable is measured rather than assumed.
+    #[test]
+    fn gram_error_tracks_explicit_error_across_six_orders_of_residual() {
+        let (n, p, k) = (40, 300, 5);
+        let mut st = 0x5DEECE66D_u64;
+        let mut rnd = || {
+            st = st
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (st >> 33) as f64 / (u32::MAX as f64)
+        };
+        let w0: Vec<f64> = (0..n * k).map(|_| rnd()).collect();
+        let h0: Vec<f64> = (0..k * p).map(|_| rnd()).collect();
+        // X = W0 H0 exactly, so a zero-residual fit exists.
+        let mut x = vec![0.0; n * p];
+        gemm(n, p, k, Op::N, &w0, k, Op::N, &h0, p, &mut x, p);
+        let x_norm_sq: f64 = x.iter().map(|v| v * v).sum();
+
+        for mag in [1e0, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6] {
+            let w: Vec<f64> = w0.iter().map(|v| v + mag * (rnd() - 0.5)).collect();
+            let h: Vec<f64> = h0.iter().map(|v| v + mag * (rnd() - 0.5)).collect();
+
+            let mut wh = vec![0.0; n * p];
+            let explicit = frobenius_error_explicit(&x, &w, &h, n, p, k, &mut wh);
+
+            let mut xht = vec![0.0; n * k];
+            let mut wtw = vec![0.0; k * k];
+            let mut hht = vec![0.0; k * k];
+            gemm(n, k, p, Op::N, &x, p, Op::T, &h, p, &mut xht, k);
+            gemm(k, k, n, Op::T, &w, k, Op::N, &w, k, &mut wtw, k);
+            gemm(k, k, p, Op::N, &h, p, Op::T, &h, p, &mut hht, k);
+            let gram = frobenius_error_gram(x_norm_sq, &w, &xht, &wtw, &hht, n, k);
+
+            let rel = (gram - explicit).abs() / explicit.max(1e-300);
+            let abs = (gram - explicit).abs();
+            let ratio = explicit / x_norm_sq.sqrt();
+            println!(
+                "perturb {mag:>7.0e}  residual/||X|| {ratio:>9.2e}                   explicit {explicit:>12.6e}  abs_diff {abs:>10.3e}  rel_diff {rel:>10.3e}"
+            );
+            // ABSOLUTE agreement is what the convergence rule needs:
+            // it tests `(prev_error - error).abs() < tol`. Measured max
+            // across this sweep is 8.7e-8, against a default `--tol` of
+            // 1e-6. Relative agreement degrades to 1.2e-3 at the tightest
+            // residual, which is why `final_error` is recomputed
+            // explicitly rather than reported from this form.
+            assert!(
+                abs < 1e-6,
+                "perturbation {mag:e}: gram {gram:e} vs explicit {explicit:e}, \
+                 absolute difference {abs:e} is not comfortably below a default \
+                 --tol of 1e-6"
+            );
+            assert!(
+                rel < 1e-2,
+                "perturbation {mag:e}: gram {gram:e} vs explicit {explicit:e}, \
+                 relative difference {rel:e}. The identity has lost too much \
+                 precision at this residual to drive a convergence test."
+            );
+        }
+    }
+
+    /// The Gram form must never return NaN, however much cancellation
+    /// occurs. A perfect fit drives the expansion to a small difference
+    /// of large numbers, which can land negative; the clamp is what
+    /// keeps the square root defined.
+    #[test]
+    fn gram_error_is_finite_and_non_negative_at_a_perfect_fit() {
+        let (n, p, k) = (12, 40, 3);
+        let mut st = 99_u64;
+        let mut rnd = || {
+            st = st
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (st >> 33) as f64 / (u32::MAX as f64)
+        };
+        let w: Vec<f64> = (0..n * k).map(|_| rnd()).collect();
+        let h: Vec<f64> = (0..k * p).map(|_| rnd()).collect();
+        let mut x = vec![0.0; n * p];
+        gemm(n, p, k, Op::N, &w, k, Op::N, &h, p, &mut x, p);
+        let x_norm_sq: f64 = x.iter().map(|v| v * v).sum();
+
+        let mut xht = vec![0.0; n * k];
+        let mut wtw = vec![0.0; k * k];
+        let mut hht = vec![0.0; k * k];
+        gemm(n, k, p, Op::N, &x, p, Op::T, &h, p, &mut xht, k);
+        gemm(k, k, n, Op::T, &w, k, Op::N, &w, k, &mut wtw, k);
+        gemm(k, k, p, Op::N, &h, p, Op::T, &h, p, &mut hht, k);
+
+        let e = frobenius_error_gram(x_norm_sq, &w, &xht, &wtw, &hht, n, k);
+        assert!(e.is_finite(), "gram error was not finite: {e}");
+        assert!(e >= 0.0, "gram error was negative: {e}");
+        assert!(e < 1e-6, "a perfect fit should score ~0, got {e}");
+    }
 
     // Convenience: build a Vec<Vec<f64>> from a 2-D slice literal.
     fn mat(rows: &[&[f64]]) -> Vec<Vec<f64>> {

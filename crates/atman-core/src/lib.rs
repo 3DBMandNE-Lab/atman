@@ -9,6 +9,7 @@ pub mod align;
 pub mod align_bootstrap;
 pub mod align_project;
 pub mod bench_decompose;
+pub mod blas;
 pub mod compositional;
 pub mod contrast;
 pub mod de;
