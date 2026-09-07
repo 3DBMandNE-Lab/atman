@@ -162,6 +162,8 @@ atman enrich gsea        pre-ranked gene-set enrichment (fgseaSimple-equivalent)
 atman enrich gprofiler   live g:Profiler REST wrapper with cached responses
 atman meta               combine DE results across cohorts
 atman concordance        Spearman / sign / Jaccard agreement of effect tables, stage deltas
+atman coupling           subject-level program coupling with sign-consistency reporting
+atman ratio              test subject-level log-ratios between two protein or module classes
 atman residuals          nuisance-covariate residuals (+ R² tables, canonical residual dir)
 atman network influence  feature-covariance hub scoring
 atman network differential  cross-cohort differential coexpression (edge-pairwise / edge-summary / module)
@@ -182,6 +184,10 @@ atman axes loco          leave-one-cohort-out stability of group centroids
 atman axes icc           ICC(1) trait stability of scores across repeated samples
 atman axes tree          average-linkage tree of contrasts with bootstrap clade support (Newick)
 atman scale absolute     per-sample total-protein rescaling for Reiber-style exponents
+atman within-cohort-rank rank-transform measurements within each cohort / input directory
+atman harmonize fit      fit a cross-cohort harmonisation model on training cohorts
+atman harmonize apply    apply that model to one held-out cohort (refuses a training cohort)
+atman bench decompose    cross-tool benchmark harness for decomposition methods
 atman run                execute a plan YAML/JSON and emit a hash manifest (vars, --dry-run, sidecar hashes)
 ```
 
