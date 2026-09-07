@@ -131,6 +131,63 @@ mod accelerate {
 }
 
 #[cfg(target_os = "macos")]
+mod threading {
+    use std::os::raw::{c_char, c_int, c_void};
+    use std::sync::Once;
+
+    /// `BLAS_THREADING_SINGLE_THREADED` from `vecLib/thread_api.h`.
+    const SINGLE_THREADED: u32 = 1;
+    /// macOS `RTLD_DEFAULT`: search every loaded image.
+    const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
+
+    extern "C" {
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+
+    static INIT: Once = Once::new();
+
+    /// Put Accelerate's BLAS in single-threaded mode, once per process.
+    ///
+    /// MEASURED, not assumed. NMF's GEMMs are skinny — one dimension is
+    /// `k`, typically 10 — so the work per call is small and Accelerate's
+    /// thread dispatch costs more than it saves. At n=110, p=10000, k=10,
+    /// per-iteration cost in situ:
+    ///
+    /// | threading | WᵀX | XHᵀ | total/iter |
+    /// |---|---|---|---|
+    /// | Accelerate's default | 0.743 ms | 0.864 ms | 2.15 ms |
+    /// | 2 threads | 0.466 ms | 0.548 ms | 1.38 ms |
+    /// | single-threaded | 0.262 ms | 0.360 ms | 0.93 ms |
+    ///
+    /// 2.3x faster single-threaded. The same GEMMs measured standalone in
+    /// a tight loop ran at 0.179 ms and 0.304 ms, which is why the
+    /// isolated benchmark did not predict the in-loop cost: back-to-back
+    /// calls keep Accelerate's threads hot, and calls separated by other
+    /// work do not.
+    ///
+    /// It also removes a determinism question rather than raising one: a
+    /// single-threaded BLAS cannot vary its reduction order with thread
+    /// count or machine load.
+    ///
+    /// This is process-global. It is right for the skinny shapes atman
+    /// decomposes and would be the wrong default for large square GEMMs,
+    /// so revisit it if this module gains such a caller.
+    ///
+    /// `BLASSetThreading` needs macOS 15. Looked up with `dlsym` rather
+    /// than linked directly so that an older system silently keeps
+    /// Accelerate's default instead of failing to launch.
+    pub fn set_single_threaded_once() {
+        INIT.call_once(|| unsafe {
+            let sym = dlsym(RTLD_DEFAULT, c"BLASSetThreading".as_ptr());
+            if !sym.is_null() {
+                let f: extern "C" fn(u32) -> c_int = std::mem::transmute(sym);
+                let _ = f(SINGLE_THREADED);
+            }
+        });
+    }
+}
+
+#[cfg(target_os = "macos")]
 #[allow(clippy::too_many_arguments)]
 fn gemm_accelerate(
     m: usize,
@@ -146,6 +203,7 @@ fn gemm_accelerate(
     ldc: usize,
 ) {
     use accelerate::*;
+    threading::set_single_threaded_once();
     let ta = if op_a == Op::N { NO_TRANS } else { TRANS };
     let tb = if op_b == Op::N { NO_TRANS } else { TRANS };
     // SAFETY: every length was asserted against its dimensions in
