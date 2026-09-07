@@ -343,6 +343,197 @@ fn run_fit(args: FitArgs) -> Result<()> {
     Ok(())
 }
 
+/// Read a model file, refusing anything the fit/apply contract rests on
+/// that is absent or malformed.
+///
+/// The previous reader took every field with `unwrap_or_default`, which
+/// made the two safety claims FAIL OPEN. An absent `fit_cohorts` became
+/// an empty vector, so the held-out refusal in `apply_with` permitted
+/// every cohort. An absent `permuted_labels` became `false`, so a
+/// negative-control model reported itself as a real-labels one. Both
+/// are silent, and both invert the guarantee the file exists to carry.
+///
+/// A model written by `harmonize fit` always contains every field here.
+/// Reaching one of these errors means the file was truncated, edited by
+/// hand, or produced by something other than this command — which is
+/// precisely when the contract must not be assumed. Model files travel
+/// between people and sessions, because "a replay can prove the
+/// held-out cohort was absent" is the whole point of writing one.
+fn read_model_strict(
+    doc: &serde_json::Value,
+    path: &Path,
+) -> Result<atman_core::harmonize::HarmonizeModel> {
+    let missing = |field: &str| -> anyhow::Error {
+        anyhow::anyhow!(
+            "model {path:?} is missing {field:?}. A model written by \
+             `harmonize fit` always records it. Refusing rather than \
+             assuming a value for it."
+        )
+    };
+
+    match doc.get("schema_version").and_then(|v| v.as_u64()) {
+        Some(1) => {}
+        Some(other) => bail!(
+            "model {path:?} declares schema_version {other}, and this \
+             build reads version 1. Refit the model."
+        ),
+        None => return Err(missing("schema_version")),
+    }
+
+    let method_name = doc
+        .get("method")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| missing("method"))?
+        .to_string();
+
+    let features: Vec<String> = doc
+        .get("features")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| missing("features"))?
+        .iter()
+        .map(|v| {
+            v.as_str().map(|s| s.to_string()).ok_or_else(|| {
+                anyhow::anyhow!("model {path:?} has a non-string entry in \"features\"")
+            })
+        })
+        .collect::<Result<_>>()?;
+    if features.is_empty() {
+        bail!("model {path:?} has an empty feature axis");
+    }
+
+    let direction: Vec<f64> = doc
+        .get("direction")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| missing("direction"))?
+        .iter()
+        .map(|v| {
+            let x = v.as_f64().ok_or_else(|| {
+                anyhow::anyhow!("model {path:?} has a non-numeric entry in \"direction\"")
+            })?;
+            if !x.is_finite() {
+                bail!("model {path:?} has a non-finite entry in \"direction\"");
+            }
+            Ok(x)
+        })
+        .collect::<Result<_>>()?;
+    if direction.len() != features.len() {
+        bail!(
+            "model {path:?} is malformed: {} features against {} direction entries",
+            features.len(),
+            direction.len()
+        );
+    }
+
+    // The leakage guard. An empty or absent list means `apply` cannot
+    // tell a held-out cohort from a training one, so it is refused here
+    // rather than permitted silently downstream.
+    let fit_cohorts: Vec<String> = doc
+        .get("fit_cohorts")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| missing("fit_cohorts"))?
+        .iter()
+        .map(|v| {
+            v.as_str().map(|s| s.to_string()).ok_or_else(|| {
+                anyhow::anyhow!("model {path:?} has a non-string entry in \"fit_cohorts\"")
+            })
+        })
+        .collect::<Result<_>>()?;
+    if fit_cohorts.is_empty() {
+        bail!(
+            "model {path:?} lists no training cohorts. `apply` uses that \
+             list to refuse a cohort the model was fit on, so an empty \
+             list would silently permit every cohort and no run against \
+             it would be a held-out evaluation."
+        );
+    }
+
+    // The negative-control label. Defaulting this to false would let a
+    // permuted model be read, reported and cited as a real-labels one.
+    let permuted = doc
+        .get("permuted_labels")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| missing("permuted_labels"))?;
+
+    let method = match method_name.as_str() {
+        "zscore" => HarmonizeMethod::ZScore,
+        "rank" => HarmonizeMethod::Rank,
+        "quantile" => {
+            let reference: Vec<f64> = doc
+                .get("quantile_reference")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| missing("quantile_reference"))?
+                .iter()
+                .map(|v| {
+                    let x = v.as_f64().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "model {path:?} has a non-numeric entry in \"quantile_reference\""
+                        )
+                    })?;
+                    if !x.is_finite() {
+                        bail!(
+                            "model {path:?} has a non-finite entry in \"quantile_reference\""
+                        );
+                    }
+                    Ok(x)
+                })
+                .collect::<Result<_>>()?;
+            if reference.is_empty() {
+                bail!(
+                    "model {path:?} is method quantile with an empty \
+                     reference profile, which would score every subject \
+                     as missing"
+                );
+            }
+            HarmonizeMethod::Quantile { reference }
+        }
+        "reference-protein" => {
+            let reference_features: Vec<String> = doc
+                .get("reference_features")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| missing("reference_features"))?
+                .iter()
+                .map(|v| {
+                    v.as_str().map(|s| s.to_string()).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "model {path:?} has a non-string entry in \"reference_features\""
+                        )
+                    })
+                })
+                .collect::<Result<_>>()?;
+            if reference_features.is_empty() {
+                bail!(
+                    "model {path:?} is method reference-protein with an \
+                     empty reference set, which would score every subject \
+                     as missing"
+                );
+            }
+            HarmonizeMethod::ReferenceProtein { reference_features }
+        }
+        other => bail!("model {path:?} names unknown method {other:?}"),
+    };
+
+    // Provenance, not a safety gate: `apply` cannot see the training
+    // inputs, so it cannot verify the hash. Its absence still means the
+    // file did not come from `fit`, and a replay cannot prove the
+    // held-out cohort was absent without it.
+    if doc.get("fit_inputs_sha256").is_none() {
+        eprintln!(
+            "harmonize apply: warning: model {path:?} records no \
+             fit_inputs_sha256. A replay cannot prove the held-out cohort \
+             was absent from the fit, because a cohort label can be \
+             reused over different data."
+        );
+    }
+
+    Ok(atman_core::harmonize::HarmonizeModel {
+        method,
+        features,
+        direction,
+        fit_cohorts,
+        permuted,
+    })
+}
+
 fn run_apply(args: ApplyArgs) -> Result<()> {
     let started_at = SystemTime::now();
     let text = std::fs::read_to_string(&args.model)
@@ -350,61 +541,7 @@ fn run_apply(args: ApplyArgs) -> Result<()> {
     let doc: serde_json::Value =
         serde_json::from_str(&text).with_context(|| format!("parsing model {:?}", args.model))?;
 
-    let method_name = doc["method"].as_str().unwrap_or_default().to_string();
-    let features: Vec<String> = doc["features"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .map(|v| v.as_str().unwrap_or_default().to_string())
-                .collect()
-        })
-        .unwrap_or_default();
-    let direction: Vec<f64> = doc["direction"]
-        .as_array()
-        .map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0)).collect())
-        .unwrap_or_default();
-    let fit_cohorts: Vec<String> = doc["fit_cohorts"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .map(|v| v.as_str().unwrap_or_default().to_string())
-                .collect()
-        })
-        .unwrap_or_default();
-    if features.is_empty() || direction.len() != features.len() {
-        bail!(
-            "model {:?} is malformed: features/direction mismatch",
-            args.model
-        );
-    }
-    let method = match method_name.as_str() {
-        "zscore" => HarmonizeMethod::ZScore,
-        "rank" => HarmonizeMethod::Rank,
-        "quantile" => HarmonizeMethod::Quantile {
-            reference: doc["quantile_reference"]
-                .as_array()
-                .map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0)).collect())
-                .unwrap_or_default(),
-        },
-        "reference-protein" => HarmonizeMethod::ReferenceProtein {
-            reference_features: doc["reference_features"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .map(|v| v.as_str().unwrap_or_default().to_string())
-                        .collect()
-                })
-                .unwrap_or_default(),
-        },
-        other => bail!("model {:?} names unknown method {other:?}", args.model),
-    };
-    let model = atman_core::harmonize::HarmonizeModel {
-        method,
-        features,
-        direction,
-        fit_cohorts,
-        permuted: doc["permuted_labels"].as_bool().unwrap_or(false),
-    };
+    let model = read_model_strict(&doc, &args.model)?;
 
     let (label, dir) = parse_cohort_spec(&args.cohort)?;
     let cohort = load_cohort(&label, &dir, &args.condition_col, &args.case_value)?;

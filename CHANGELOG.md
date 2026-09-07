@@ -8,6 +8,35 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`harmonize apply` now reads the model file strictly**, and the
+  CLI layer has tests. Every field the fit/apply contract rests on was
+  read with `unwrap_or_default`, so the two safety claims FAILED OPEN on
+  a truncated or hand-edited file.
+
+  An absent `fit_cohorts` became an empty list. The held-out refusal is
+  a membership test against that list, so an empty one matched nothing
+  and permitted every cohort, including the ones the model was fit on.
+  **The command then exits 0 and reports a held-out evaluation that is
+  not one.** The failure preserves every surface property a user
+  checks — exit code, output shape, subject count, score distribution
+  are all normal. Only the guarantee is gone, and nothing in the output
+  records its absence.
+
+  An absent `permuted_labels` became `false`, so a negative-control
+  model reported itself as a real-labels one in the log line and the run
+  sidecar. That is the one arm whose entire purpose is to be
+  distinguishable from the real one.
+
+  Both failures were silent.
+  `apply` now names the missing field and exits non-zero, and also
+  refuses an empty feature axis, a non-numeric or non-finite direction
+  entry, a method whose fitted state is absent or empty, and an unknown
+  `schema_version`. It warns when the file records no
+  `fit_inputs_sha256`. A model written by `harmonize fit` is unaffected.
+  Ten CLI tests were added, against a layer that previously had none.
+  Six of them fail against the old reader, which was verified rather
+  than assumed.
+
 - **`align bootstrap` now names the population behind every summary
   column**, on stderr and in the run sidecar. The percentile CI and
   `bootstrap_mean_n_cohorts` are computed over matched replicates only,

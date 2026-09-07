@@ -436,6 +436,20 @@ cohorts, and a SHA-256 hash of their inputs. The hash matters because a
 label can be reused over different data. A replay can check the hash and
 prove that the held-out cohort was absent.
 
+`apply` reads the model file strictly. It refuses a file that omits any
+field the contract rests on. Two of those fields carry the safety
+claims. `fit_cohorts` is the list `apply` refuses a training cohort
+with. `permuted_labels` marks the negative-control arm. An absent
+`fit_cohorts` would permit every cohort. An absent `permuted_labels`
+would report a permuted model as a real one. The command names the
+missing field and exits non-zero.
+
+A model written by `harmonize fit` always contains every required
+field. A file that fails this check was truncated, edited by hand, or
+written by something else. `apply` warns when the file records no
+`fit_inputs_sha256`, because a replay cannot prove the held-out cohort
+was absent without it.
+
 **Methods** (`--method`):
 
 - `zscore` — per-cohort standardisation. This is the null
