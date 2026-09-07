@@ -682,6 +682,14 @@ The p-value cannot fall below `1 / (n_same_sign_perms + 1)`, whatever
 the ES. Below 19 draws a set cannot reach `p <= 0.05` at all. The
 command warns below 19.
 
+Do not sort a GSEA table by `|NES|` descending without reading
+`n_same_sign_perms` beside it. That sort is the common one. When any
+denominator is small it puts the least determined rows at the top,
+because the score is anti-correlated with the evidence. `enrich gsea`
+writes its own output sorted by `bh_q` first, so the file it produces is
+already ordered by evidence. A downstream re-sort on `|NES|` undoes
+that.
+
 The normalisation is unchanged and stays faithful to the reference
 method. The column reports how well determined a result is. It does not
 alter the result.
