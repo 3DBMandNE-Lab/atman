@@ -31,9 +31,8 @@ fn write_cohort(dir: &Path, tag: &str, n: usize, p: usize, effect: f64) {
     let subjects: Vec<String> = (0..n).map(|i| format!("{tag}_S{i:03}")).collect();
     let features: Vec<String> = (0..p).map(|j| format!("P{j:03}")).collect();
 
-    let mut samples = String::from(
-        "sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n",
-    );
+    let mut samples =
+        String::from("sample_id\tsubject_id\tcondition\tis_control\tsample_type\tingest_order\n");
     for (i, s) in subjects.iter().enumerate() {
         let cond = if i % 2 == 0 { "Control" } else { "Case" };
         samples.push_str(&format!("{s}\t{s}\t{cond}\t0\tcsf\t{}\n", i + 1));

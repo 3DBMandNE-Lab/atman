@@ -255,10 +255,12 @@ fn run_gsea(args: GseaCliArgs) -> Result<()> {
         .iter()
         .filter(|r| r.n_same_sign_perms < GSEA_MIN_SAME_SIGN_PERMS && r.nes.is_finite())
         .collect();
-    if let Some(worst) = weak
-        .iter()
-        .max_by(|a, b| a.nes.abs().partial_cmp(&b.nes.abs()).unwrap_or(std::cmp::Ordering::Equal))
-    {
+    if let Some(worst) = weak.iter().max_by(|a, b| {
+        a.nes
+            .abs()
+            .partial_cmp(&b.nes.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
         eprintln!(
             "enrich gsea: warning: {}/{} sets have fewer than {} permutation draws sharing the \
              sign of their ES. NES divides by the mean of those draws only, so for those sets \

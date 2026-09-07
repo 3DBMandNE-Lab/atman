@@ -328,7 +328,10 @@ mod tests {
             (500, 2.97, 0.0020),
         ] {
             let (p, nes, n_same_sign) = pvalue_and_nes(es, &build(n_pos));
-            assert_eq!(n_same_sign, n_pos, "the reported count must be the one used");
+            assert_eq!(
+                n_same_sign, n_pos,
+                "the reported count must be the one used"
+            );
             assert!(
                 (nes - want_nes).abs() < 0.01,
                 "n_same_sign={n_pos}: NES {nes:.2}, expected {want_nes:.2}"
@@ -400,7 +403,6 @@ mod tests {
         assert!(nes.is_nan());
         assert!((p - 1.0 / 101.0).abs() < 1e-12);
     }
-
 
     fn ranked_with_planted_top(n: usize, k: usize) -> Vec<(String, f64)> {
         // `k` planted "responder" genes get the top-ranked positions.

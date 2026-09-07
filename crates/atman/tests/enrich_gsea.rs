@@ -87,8 +87,7 @@ fn enrich_gsea_top_loaded_set_is_significant() {
     let body = std::fs::read_to_string(&out).unwrap();
     let lines: Vec<&str> = body.lines().collect();
     assert_eq!(
-        lines[0],
-        "set_name\tset_size\tes\tnes\tp_value\tbh_q\tleading_edge\tn_same_sign_perms",
+        lines[0], "set_name\tset_size\tes\tnes\tp_value\tbh_q\tleading_edge\tn_same_sign_perms",
         "header mismatch"
     );
     let rows: Vec<Vec<&str>> = lines[1..].iter().map(|l| l.split('\t').collect()).collect();

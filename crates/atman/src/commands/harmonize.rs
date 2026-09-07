@@ -470,9 +470,7 @@ fn read_model_strict(
                         )
                     })?;
                     if !x.is_finite() {
-                        bail!(
-                            "model {path:?} has a non-finite entry in \"quantile_reference\""
-                        );
+                        bail!("model {path:?} has a non-finite entry in \"quantile_reference\"");
                     }
                     Ok(x)
                 })
