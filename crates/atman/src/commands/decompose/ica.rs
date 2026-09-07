@@ -12,6 +12,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+/// Default `--k-selection` rule. Named so the "was it explicitly set?"
+/// check has something to compare against.
+const DEFAULT_K_SELECTION: &str = "cumulative-variance=0.80";
+
 /// Largest assay count `--weighted-whitening` will accept.
 ///
 /// The weighted path is O(p^3) on a dense p x p covariance. 2000 assays
@@ -37,7 +41,11 @@ pub struct IcaArgs {
     pub(super) k: Option<usize>,
 
     /// K-selection method; currently supports `cumulative-variance=<target>`.
-    #[arg(long, default_value = "cumulative-variance=0.80")]
+    ///
+    /// IGNORED when `--k` is given. The value is still validated, and
+    /// the run sidecar records `k_selection_applied` so a replay can
+    /// tell which of the two actually set k.
+    #[arg(long, default_value = DEFAULT_K_SELECTION)]
     pub(super) k_selection: String,
 
     /// Minimum allowed K (lower clamp for `--k-selection`).
@@ -247,6 +255,39 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
     }
     if args.stability_top_n == 0 {
         bail!("--stability-top-n must be at least 1");
+    }
+
+    // Validate --k-selection HERE, before reading the input.
+    //
+    // `resolve_k` returns early when `--k` is set and never looks at the
+    // string, so an unsupported value used to be accepted in silence:
+    // `--k 10 --k-selection fixed=30` ran with k=10 and wrote
+    // `"k-selection": "fixed=30"` into the sidecar, naming a rule that
+    // was never parsed and never applied.
+    //
+    // And when `--k` was absent the same string failed inside
+    // `resolve_k`, which runs AFTER the matrix is loaded. On a 123 MB
+    // cohort that is a failure costing 3.5 s, which in a timing loop is
+    // indistinguishable from a successful run -- the GBM session read
+    // four such runs as a flat max-iter slope and concluded from them.
+    // The conclusion happened to be right; the measurement was of a
+    // command that did nothing.
+    //
+    // Validating up front makes a bad flag cost milliseconds and makes
+    // the failure obvious in any timing.
+    let k_selection_valid = parse_k_selection(&args.k_selection);
+    let k_selection_applied = args.k.is_none();
+    if let Err(e) = &k_selection_valid {
+        bail!("{e}");
+    }
+    if !k_selection_applied && args.k_selection != DEFAULT_K_SELECTION {
+        eprintln!(
+            "decompose ica: warning: --k-selection {:?} is IGNORED because --k {} was given. \
+             The sidecar records k_selection_applied=false so a replay can tell which one set \
+             k. Drop --k to select k by the rule, or drop --k-selection to silence this.",
+            args.k_selection,
+            args.k.unwrap_or(0),
+        );
     }
 
     // Load the matrix.  For `abundance-conditional`, we also load a NaN-
@@ -645,6 +686,10 @@ pub(super) fn run_ica(args: IcaArgs) -> Result<()> {
             // Whether the rule ran into its own search bound. `k_max`
             // means the criterion was never satisfied inside the sweep
             // and `k_resolved` is a truncation, not a selection.
+            extras.insert(
+                "k_selection_applied".into(),
+                serde_json::json!(k_selection_applied),
+            );
             extras.insert(
                 "k_selection_bound_hit".into(),
                 serde_json::json!(k_selection_bound_hit(
