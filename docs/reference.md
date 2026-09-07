@@ -655,14 +655,19 @@ descending `ci_lower_n_cohorts` and passes any threshold on it.
 
 ### atman enrich gsea — read NES with n_same_sign_perms
 
+**A larger NES is a less determined NES.** The score is anti-correlated
+with the evidence behind it, so a ranking by `|NES|` sorts by noise. Read
+`n_same_sign_perms` before you quote or rank on any NES.
+
+This corrupts an ordering rather than a value, which is why value-level
+checking does not catch it. Every individual NES is computed correctly.
+What goes wrong is the sequence a reader actually reads.
+
 NES is `es / mean(|es_perm|)` over the permutation draws that share the
 sign of `es`. The denominator uses those draws only. The
-`n_same_sign_perms` column reports how many there were.
-
-Read that column before you quote an NES. The relationship is inverted.
-Fewer same-sign draws give a larger NES and a less determined one.
-Measured at `es = 0.80` over 1000 draws, varying only how many share its
-sign:
+`n_same_sign_perms` column reports how many there were. Fewer same-sign
+draws give a larger NES and a less determined one. Measured at
+`es = 0.80` over 1000 draws, varying only how many share its sign:
 
 | `n_same_sign_perms` | p-value | NES |
 |---|---|---|
