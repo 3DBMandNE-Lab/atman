@@ -39,11 +39,28 @@ another machine. See `docs/release-checklist.md` for the generic publish flow.
 This is the biggest open risk: everything so far was validated on one darwin
 host, and the repo is local-only so CI has never actually run.
 
-- [ ] Build + test on **Linux** (the CI target / Dockerfile base, rust 1.94).
-- [ ] Build + test on **Windows** if it's a supported target (the build.rs
-      git-dir resolution and BLAS/thread-pinning are the likely sore spots).
+**Resolved 2026-09-07: macOS is the supported platform.** Atman is built,
+validated and released on darwin. Linux and Windows are not supported
+targets, so the two items below are closed as out of scope rather than
+outstanding.
+
+- [x] ~~Build + test on **Linux**~~ — out of scope. The non-macOS numeric
+      path was still verified locally by flipping the eight `cfg` gates in
+      `blas.rs`: 689 tests pass on the portable scalar kernel, the same
+      count as on Accelerate. That covers the arithmetic, not the build.
+- [x] ~~Build + test on **Windows**~~ — out of scope.
 - [ ] If/when a remote is added: push and confirm `.github/workflows/ci.yml`
-      goes green with the 1.94 toolchain + thread-pinning env.
+      goes green. The `test` job still runs a
+      `[ubuntu, macos, windows]` matrix. That is kept deliberately: it costs
+      nothing and it catches `cfg`-gated compile breakage in the fallback
+      path. **A red ubuntu or windows leg is not a release blocker.**
+
+**The Docker image is a Linux build**, so it is not the supported
+platform either. It uses the scalar kernel: roughly an order of magnitude
+slower on `decompose nmf` and `decompose ica`, with different low-order
+digits. README and `docs/reference.md` say so. Decide before release
+whether to keep shipping it — it is a legitimate distribution path with a
+documented cost, not a defect.
 
 ## 4. Decisions only you can make — LARGELY DONE (2026-05-30)
 

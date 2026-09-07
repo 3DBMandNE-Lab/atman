@@ -435,9 +435,15 @@ The guarantee is scoped to a build. The run sidecar records
 `rustc_version` and `target_triple` in `build_env` because results
 belong to the binary that produced them.
 
+macOS is the supported platform. Atman is built, validated and released
+there. Every other target compiles and passes the full test suite, and
+none has been run on real hardware. The Docker image is a Debian build
+and is therefore one of those targets.
+
 Numeric results differ between operating systems. `decompose nmf` and
 `decompose ica` call Apple's Accelerate BLAS on macOS and a portable
-scalar kernel on every other target. A blocked kernel accumulates in a
+scalar kernel on every other target. The scalar kernel is roughly an
+order of magnitude slower on those two commands. A blocked kernel accumulates in a
 different order, so the low bits differ.
 
 How large is the difference? Measure it on the full-precision files —

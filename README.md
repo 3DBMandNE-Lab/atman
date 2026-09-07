@@ -118,6 +118,17 @@ docker build -t atman:1.2.0 .
 docker run --rm atman:1.2.0 --help
 ```
 
+**macOS is the supported platform.** It is where Atman is built,
+validated and released. Other targets compile and pass the full test
+suite, and nobody has run them on real hardware.
+
+The container is a Debian build, so it is one of those targets. It uses
+the portable scalar kernel instead of Accelerate. Expect the
+decomposition commands to be roughly an order of magnitude slower, and
+expect the low-order digits to differ from a macOS run. Neither affects
+a result — see "Determinism and Your Operating System" below — but do
+not byte-compare container output against native output.
+
 ## Commands
 
 ```text
