@@ -97,10 +97,18 @@ it is cited for is the failure this project spent a release removing.
 
 Recorded for commit `a92f380` (version 1.2.0):
 
-| Scope | Digest |
-|---|---|
-| sources only | `952cb1a7243060ec83c72bf78bb4460b5b651845994f36aa5fa2986c08c8f2b0` |
-| sources + manifests + lockfile + toolchain | `adcbad75e7850197967cdd4d20bf41a87b3f8d891c8a3a56580bd7832cd54269` |
+| Scope | Digest | Use |
+|---|---|---|
+| sources only | `952cb1a7243060ec83c72bf78bb4460b5b651845994f36aa5fa2986c08c8f2b0` | **INSUFFICIENT — do not cite** |
+| sources + manifests + lockfile + toolchain | `adcbad75e7850197967cdd4d20bf41a87b3f8d891c8a3a56580bd7832cd54269` | **Use this one** |
+
+The narrow digest is kept only so a reader who computes it can tell which
+of the two they have. It must not be cited as evidence of identical
+numerics: two trees matching on it can still differ in `Cargo.lock`, the
+manifests or the toolchain, and would then produce different numbers
+while the digest called them identical. Labelling it rather than deleting
+it is deliberate — an unlabelled digest in a file is something someone
+picks up and uses.
 
 Both were computed on a clean tree. `target/` is excluded by
 construction, and the digest is path-sensitive, so the published tree
