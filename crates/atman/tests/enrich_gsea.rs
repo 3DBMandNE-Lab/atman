@@ -87,7 +87,8 @@ fn enrich_gsea_top_loaded_set_is_significant() {
     let body = std::fs::read_to_string(&out).unwrap();
     let lines: Vec<&str> = body.lines().collect();
     assert_eq!(
-        lines[0], "set_name\tset_size\tes\tnes\tp_value\tbh_q\tleading_edge",
+        lines[0],
+        "set_name\tset_size\tes\tnes\tp_value\tbh_q\tleading_edge\tn_same_sign_perms",
         "header mismatch"
     );
     let rows: Vec<Vec<&str>> = lines[1..].iter().map(|l| l.split('\t').collect()).collect();
@@ -286,5 +287,163 @@ fn enrich_gsea_requires_comparison_when_multiple_present() {
     assert!(
         stderr.contains("--comparison") || stderr.contains("comparison"),
         "stderr should mention --comparison: {stderr}"
+    );
+}
+
+/// A low permutation count leaves the NES denominator resting on a
+/// handful of draws, and the warning must fire.
+///
+/// This is the realistic route to a weakly determined NES. The first
+/// version of this test tried to reach it the other way, with an ES so
+/// extreme that few draws share its sign, and the fixtures would not
+/// produce it: a perfectly top-loaded set still had 353 same-sign draws
+/// of 500, and a single dominant gene still had 256. The permutation ES
+/// distribution is close to sign-balanced for realistic rankings, so the
+/// pathological asymmetry that the unit tests construct directly is rare
+/// in practice. What is NOT rare is a user running few permutations,
+/// which caps the denominator at that count.
+///
+/// The precondition is asserted rather than assumed: if the fixture ever
+/// stops producing a weak set, the assertions below would pass without
+/// exercising anything, which is the failure mode that made an earlier
+/// warning test in this repo vacuous.
+#[test]
+fn enrich_gsea_reports_and_warns_on_a_weakly_determined_nes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let de = tmp.path().join("de_results.tsv");
+    let sets = tmp.path().join("gene_sets.tsv");
+    let out = tmp.path().join("gsea.tsv");
+
+    let top: Vec<String> = (0..15).map(|i| format!("HIT{:03}", i)).collect();
+    let rest: Vec<String> = (0..200).map(|i| format!("BG{:03}", i)).collect();
+    let top_refs: Vec<&str> = top.iter().map(String::as_str).collect();
+    let rest_refs: Vec<&str> = rest.iter().map(String::as_str).collect();
+    write_de_results(&de, &top_refs, &rest_refs);
+
+    let mut sets_text = String::from("set_name\tgene_symbol\n");
+    for i in (0..200).step_by(2) {
+        sets_text.push_str(&format!("bg_large\tBG{:03}\n", i));
+    }
+    std::fs::write(&sets, sets_text).unwrap();
+
+    let output = run_atman(&[
+        "enrich",
+        "gsea",
+        "--de-results",
+        de.to_str().unwrap(),
+        "--gene-sets",
+        sets.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        // Few permutations: the denominator cannot exceed this.
+        "--n-permutations",
+        "10",
+        "--seed",
+        "13",
+        "--min-set-size",
+        "5",
+    ]);
+    assert!(output.status.success());
+    let err = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let body = std::fs::read_to_string(&out).unwrap();
+    let lines: Vec<&str> = body.lines().collect();
+    let header: Vec<&str> = lines[0].split('\t').collect();
+    let idx = header
+        .iter()
+        .position(|c| *c == "n_same_sign_perms")
+        .expect("the count must be a column");
+
+    let counts: Vec<usize> = lines[1..]
+        .iter()
+        .map(|l| {
+            l.split('\t').collect::<Vec<_>>()[idx]
+                .parse::<usize>()
+                .expect("count parses as an integer")
+        })
+        .collect();
+    assert!(!counts.is_empty(), "fixture produced no sets");
+
+    let n_weak = counts.iter().filter(|&&c| c < 19).count();
+    assert!(
+        n_weak > 0,
+        "this fixture must produce a set with fewer than 19 same-sign \
+         draws, or the warning assertion below never exercises anything. \
+         Counts: {counts:?}"
+    );
+
+    assert!(
+        err.contains("sharing the sign of their ES"),
+        "a weakly determined NES must warn on stderr; got:\n{err}"
+    );
+    assert!(
+        err.contains("n_same_sign_perms"),
+        "the warning must name the column that carries the count:\n{err}"
+    );
+}
+
+/// The complement: a set whose ES is unremarkable has plenty of
+/// same-sign draws, and the warning must stay silent. A diagnostic that
+/// always fires gets ignored.
+#[test]
+fn enrich_gsea_stays_silent_when_every_nes_is_well_determined() {
+    let tmp = tempfile::tempdir().unwrap();
+    let de = tmp.path().join("de_results.tsv");
+    let sets = tmp.path().join("gene_sets.tsv");
+    let out = tmp.path().join("gsea.tsv");
+
+    let top: Vec<String> = (0..15).map(|i| format!("HIT{:03}", i)).collect();
+    let rest: Vec<String> = (0..200).map(|i| format!("BG{:03}", i)).collect();
+    let top_refs: Vec<&str> = top.iter().map(String::as_str).collect();
+    let rest_refs: Vec<&str> = rest.iter().map(String::as_str).collect();
+    write_de_results(&de, &top_refs, &rest_refs);
+
+    // Background genes spread evenly through the ranked list: ES near
+    // zero, so roughly half the permutation draws share its sign.
+    let mut sets_text = String::from("set_name\tgene_symbol\n");
+    for i in (0..200).step_by(20) {
+        sets_text.push_str(&format!("background_panel\tBG{:03}\n", i));
+    }
+    std::fs::write(&sets, sets_text).unwrap();
+
+    let output = run_atman(&[
+        "enrich",
+        "gsea",
+        "--de-results",
+        de.to_str().unwrap(),
+        "--gene-sets",
+        sets.to_str().unwrap(),
+        "--output",
+        out.to_str().unwrap(),
+        "--n-permutations",
+        "500",
+        "--seed",
+        "13",
+        "--min-set-size",
+        "5",
+    ]);
+    assert!(output.status.success());
+    let err = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let body = std::fs::read_to_string(&out).unwrap();
+    let lines: Vec<&str> = body.lines().collect();
+    let header: Vec<&str> = lines[0].split('\t').collect();
+    let idx = header
+        .iter()
+        .position(|c| *c == "n_same_sign_perms")
+        .unwrap();
+    let counts: Vec<usize> = lines[1..]
+        .iter()
+        .map(|l| l.split('\t').collect::<Vec<_>>()[idx].parse().unwrap())
+        .collect();
+    assert!(
+        counts.iter().all(|&c| c >= 19),
+        "this fixture is meant to produce well-determined NES values; if \
+         it no longer does, the silence asserted below is not meaningful. \
+         Counts: {counts:?}"
+    );
+    assert!(
+        !err.contains("sharing the sign of their ES"),
+        "no set is weakly determined, so the warning must not fire:\n{err}"
     );
 }

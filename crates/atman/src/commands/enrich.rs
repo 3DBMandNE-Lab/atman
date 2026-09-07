@@ -161,7 +161,17 @@ struct GseaWriteRow {
     p_value: f64,
     bh_q: Option<f64>,
     leading_edge: String,
+    /// How many permutation draws backed the NES denominator. Written as
+    /// a column because NES cannot be read without it.
+    n_same_sign_perms: usize,
 }
+
+/// Below this many same-sign permutation draws, a set cannot reach
+/// `p <= 0.05` however extreme its ES, because the empirical p-value is
+/// floored at `1 / (n_same_sign + 1)`. It is a property of the estimator
+/// rather than a convention about 0.05: the denominator is simply too
+/// small to resolve the tail.
+const GSEA_MIN_SAME_SIGN_PERMS: usize = 19;
 
 fn run_gsea(args: GseaCliArgs) -> Result<()> {
     let started_at = SystemTime::now();
@@ -214,6 +224,7 @@ fn run_gsea(args: GseaCliArgs) -> Result<()> {
             p_value: r.p_value,
             bh_q: q,
             leading_edge: r.leading_edge.join(","),
+            n_same_sign_perms: r.n_same_sign_perms,
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -233,6 +244,39 @@ fn run_gsea(args: GseaCliArgs) -> Result<()> {
     });
 
     write_gsea_rows(&args.output, &rows)?;
+
+    // NES divides by a mean over only the same-sign permutation draws,
+    // so a set whose ES is extreme enough that few draws share its sign
+    // gets both the largest NES and the least determined one. Nothing in
+    // the number itself shows that, and the p-value moves the other way,
+    // so the pair can read as a spectacular effect that is not
+    // significant. Say so rather than leaving it to the column.
+    let weak: Vec<&GseaWriteRow> = rows
+        .iter()
+        .filter(|r| r.n_same_sign_perms < GSEA_MIN_SAME_SIGN_PERMS && r.nes.is_finite())
+        .collect();
+    if let Some(worst) = weak
+        .iter()
+        .max_by(|a, b| a.nes.abs().partial_cmp(&b.nes.abs()).unwrap_or(std::cmp::Ordering::Equal))
+    {
+        eprintln!(
+            "enrich gsea: warning: {}/{} sets have fewer than {} permutation draws sharing the \
+             sign of their ES. NES divides by the mean of those draws only, so for those sets \
+             the denominator rests on a handful of values and the NES is weakly determined. \
+             The fewer the draws, the LARGER the NES, so the biggest scores here are the least \
+             determined. The p-value cannot fall below 1/(n_same_sign_perms + 1) for these \
+             sets, whatever the NES reads. Worst case in this run: {:?} at NES {} on {} \
+             draws, p {}. Read the n_same_sign_perms column before quoting any NES.",
+            weak.len(),
+            rows.len(),
+            GSEA_MIN_SAME_SIGN_PERMS,
+            worst.set_name,
+            format_f64(worst.nes),
+            worst.n_same_sign_perms,
+            format_f64(worst.p_value),
+        );
+    }
+
     eprintln!(
         "enrich gsea: sets={} ranked_genes={} perms={} rank_by={}",
         rows.len(),
@@ -369,10 +413,15 @@ fn read_ranked_genes(
 }
 
 fn write_gsea_rows(path: &Path, rows: &[GseaWriteRow]) -> Result<()> {
-    let mut out = String::from("set_name\tset_size\tes\tnes\tp_value\tbh_q\tleading_edge\n");
+    // n_same_sign_perms is appended rather than placed next to nes,
+    // where it belongs logically, so that a positional reader of the
+    // existing seven columns keeps working.
+    let mut out = String::from(
+        "set_name\tset_size\tes\tnes\tp_value\tbh_q\tleading_edge\tn_same_sign_perms\n",
+    );
     for row in rows {
         out.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             row.set_name,
             row.set_size,
             format_f64(row.es),
@@ -380,6 +429,7 @@ fn write_gsea_rows(path: &Path, rows: &[GseaWriteRow]) -> Result<()> {
             format_f64(row.p_value),
             row.bh_q.map(format_f64).unwrap_or_default(),
             row.leading_edge,
+            row.n_same_sign_perms,
         ));
     }
     atomic_write(path, out.as_bytes())

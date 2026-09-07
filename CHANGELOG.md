@@ -8,6 +8,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`enrich gsea` reports `n_same_sign_perms`**, the number of
+  permutation draws the NES denominator was averaged over, as a new
+  trailing column and on `GseaResult`. NES is `es / mean(|es_perm|)`
+  over same-sign draws only, and nothing recorded how many that was.
+  The relationship is inverted, which is what makes it dangerous: fewer
+  same-sign draws give a LARGER NES and a less determined one. Measured
+  at `es = 0.80` over 1000 draws, varying only the same-sign count: 1
+  draw gives NES 40.00 at p 0.50, 3 gives 38.10 at p 0.25, 10 gives
+  32.65, 50 gives 17.98, 500 gives 2.97 at p 0.002. The biggest scores
+  in a run are the least determined, and the p-value moves the opposite
+  way because its denominator is `n_same_sign_perms + 1`. The command
+  now warns below 19 draws, which is the point under which the p-value
+  floor of `1 / (n + 1)` prevents `p <= 0.05` however extreme the ES.
+  The normalisation is NOT changed and stays faithful to the reference
+  method — the fgsea parity test passes unaltered. This reports how well
+  determined a result is, it does not alter the result. The column is
+  appended last so a positional reader of the existing seven columns
+  keeps working. Extreme sign asymmetry turns out to be rare with real
+  rankings (a perfectly top-loaded fixture still had 353 same-sign draws
+  of 500), so the common cause is a low `--n-permutations`, which caps
+  the denominator directly. Found by applying the CSF session's null
+  calibration rule to atman's own estimators.
+
 - **`harmonize apply` now reads the model file strictly**, and the
   CLI layer has tests. Every field the fit/apply contract rests on was
   read with `unwrap_or_default`, so the two safety claims FAILED OPEN on

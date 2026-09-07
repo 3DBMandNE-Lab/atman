@@ -653,6 +653,47 @@ caption a panel with the word "survive" for a count derived from one. An
 archetype matched twice in 200 resamples sorts to the top of a
 descending `ci_lower_n_cohorts` and passes any threshold on it.
 
+### atman enrich gsea — read NES with n_same_sign_perms
+
+NES is `es / mean(|es_perm|)` over the permutation draws that share the
+sign of `es`. The denominator uses those draws only. The
+`n_same_sign_perms` column reports how many there were.
+
+Read that column before you quote an NES. The relationship is inverted.
+Fewer same-sign draws give a larger NES and a less determined one.
+Measured at `es = 0.80` over 1000 draws, varying only how many share its
+sign:
+
+| `n_same_sign_perms` | p-value | NES |
+|---|---|---|
+| 1 | 0.5000 | 40.00 |
+| 3 | 0.2500 | 38.10 |
+| 10 | 0.0909 | 32.65 |
+| 50 | 0.0196 | 17.98 |
+| 500 | 0.0020 | 2.97 |
+
+The largest scores in a run are the least determined ones.
+
+The p-value does not have this problem. Its denominator is
+`n_same_sign_perms + 1`. So the two move in opposite directions as
+evidence. A set with one same-sign draw reads NES 40.00 at p 0.50.
+
+The p-value cannot fall below `1 / (n_same_sign_perms + 1)`, whatever
+the ES. Below 19 draws a set cannot reach `p <= 0.05` at all. The
+command warns below 19.
+
+The normalisation is unchanged and stays faithful to the reference
+method. The column reports how well determined a result is. It does not
+alter the result.
+
+`--n-permutations` caps the count, so a low value makes every NES weakly
+determined. At `--n-permutations 10` the best possible p-value is 0.09.
+
+Extreme sign asymmetry is rare with real rankings. Measured on the test
+fixtures at 500 permutations, a perfectly top-loaded set still had 353
+same-sign draws and a single dominant gene still had 256. A low
+`--n-permutations` is the common cause.
+
 ### atman network differential — bounded edge-pairwise output
 
 `--mode edge-pairwise` streams the leading `--top-rows` rows through a
