@@ -278,7 +278,9 @@ pub struct BootstrapArgs {
 
     /// Two-sided alpha for the percentile and BCa CIs on the
     /// bootstrap `n_cohorts` distribution. Default `0.05` ⇒ 95% CI.
-    /// Must lie in `(0, 1)`.
+    /// Must lie in `(0, 1)`. The two intervals cover different
+    /// populations. The percentile CI uses matched replicates only.
+    /// The BCa CI uses all iterations, with each miss entered as zero.
     #[arg(long, default_value_t = 0.05)]
     ci_alpha: f64,
 
@@ -539,6 +541,44 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         }
     }
 
+    // bootstrap_mean_n_cohorts and the percentile CI are computed over
+    // matched replicates only, while prob_universal, the entropy and
+    // the BCa bound are over all n_boot. Nothing in the column names
+    // says so, and at a low match rate the conditional columns read far
+    // stronger than the archetype is: matched twice in 200 resamples,
+    // spanning six cohorts both times, reports [6, 6]. The docstring on
+    // bootstrap_match_rate has always said the others get noisy when it
+    // is low, which is invisible to anyone reading the TSV.
+    if !rows.is_empty() {
+        let mut rates: Vec<f64> = rows.iter().map(|r| r.bootstrap_match_rate).collect();
+        rates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = rates[rates.len() / 2];
+        let n_low = rates.iter().filter(|&&r| r < MATCH_RATE_WARN).count();
+        eprintln!(
+            "align bootstrap: match rate over {} archetypes: median {:.3}. {} below {:.2}.",
+            rows.len(),
+            median,
+            n_low,
+            MATCH_RATE_WARN,
+        );
+        if n_low > 0 {
+            eprintln!(
+                "align bootstrap: warning: {}/{} archetypes matched in fewer than {:.0}% of \
+                 resamples. For those, bootstrap_mean_n_cohorts and ci_lower/ci_upper_n_cohorts \
+                 use matched replicates only. They give the cohort span when the archetype is \
+                 recovered. They do not give how often it is recovered. A rarely matched \
+                 archetype can show a full-width interval. To judge recurrence, read \
+                 bootstrap_match_rate or bootstrap_prob_universal. Both cover all {} \
+                 iterations. Do not read the BCa interval below a match rate of 0.03. Its \
+                 endpoints are degenerate there.",
+                n_low,
+                rows.len(),
+                100.0 * MATCH_RATE_WARN,
+                args.n_boot,
+            );
+        }
+    }
+
     if let Some(parent) = args.output.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating output dir {:?}", parent))?;
@@ -604,7 +644,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         std::slice::from_ref(&args.output),
         started_at,
         finished_at,
-        None,
+        Some(bootstrap_column_populations()),
     )?;
     eprintln!("align bootstrap: sidecar={}", sidecar.display());
     Ok(())
@@ -751,14 +791,93 @@ fn intersect_cohorts(mut matrices: Vec<CohortMatrix>) -> Result<Vec<CohortMatrix
     Ok(matrices)
 }
 
-fn write_bootstrap_summary(path: &Path, rows: &[BootstrapRow]) -> Result<()> {
-    let mut out = String::from(
-        "archetype_id\tobserved_n_cohorts\tobserved_cohorts\t\
-         bootstrap_mean_n_cohorts\tbootstrap_prob_universal\tbootstrap_prob_multi\t\
-         ci_lower_n_cohorts\tci_upper_n_cohorts\tbootstrap_match_rate\t\
-         alignment_entropy\tbca_lower_n_cohorts\tbca_upper_n_cohorts\t\
-         bca_fallback_to_percentile\n",
+/// Which population each column of the bootstrap summary is computed
+/// over, recorded in the run sidecar next to the TSV.
+///
+/// The docstrings and the stderr warning reach whoever runs the
+/// command. They do not reach a figure script that reads `boot.tsv`
+/// months later, and that is the reader who gets this wrong: a
+/// conditional column sorted descending, filtered on, and captioned as
+/// survival. The sidecar travels with the output, so the fact travels
+/// with it and a downstream script can assert on it.
+///
+/// `conditional_on_recovery` columns are computed over matched
+/// replicates only. Do not sort, filter, threshold or describe an
+/// archetype as surviving anything on those. Use
+/// `bootstrap_prob_universal` or `bootstrap_match_rate`.
+fn bootstrap_column_populations() -> serde_json::Map<String, serde_json::Value> {
+    let mut m = serde_json::Map::new();
+    m.insert(
+        "column_populations".into(),
+        json!({
+            "conditional_on_recovery": {
+                "columns": [
+                    "bootstrap_mean_n_cohorts",
+                    "ci_lower_n_cohorts",
+                    "ci_upper_n_cohorts",
+                ],
+                "denominator": "matched replicates only",
+                "warning": "These describe the archetype's cohort span GIVEN that a \
+                            resample recovered it. They do not describe how often it is \
+                            recovered, and they cannot separate an archetype matched \
+                            twice in n_boot from one matched every time. Do not sort, \
+                            filter, threshold, or caption as 'survives' on these columns.",
+            },
+            "over_all_iterations": {
+                "columns": [
+                    "bootstrap_prob_universal",
+                    "bootstrap_prob_multi",
+                    "alignment_entropy",
+                    "bca_lower_n_cohorts",
+                    "bca_upper_n_cohorts",
+                ],
+                "denominator": "all n_boot iterations, each miss entered as zero cohorts",
+                "warning": "alignment_entropy is NOT monotone in reproducibility. It \
+                            reduces to the binary entropy of bootstrap_match_rate, peaks \
+                            at 0.5, and falls to zero at BOTH ends, so a barely recovered \
+                            archetype scores as the most stable. Never use it as a \
+                            stability axis on its own. The BCa endpoints are degenerate \
+                            outside roughly [0.03, 0.97] match rate.",
+            },
+            "unconditional_and_safe_to_rank_on": {
+                "columns": ["bootstrap_match_rate", "bootstrap_prob_universal"],
+                "denominator": "all n_boot iterations",
+            },
+        }),
     );
+    m
+}
+
+/// Match rate below which the conditional columns of the bootstrap
+/// summary are reported as unreliable on stderr. Half is not a
+/// distributional threshold. It is the point below which an archetype
+/// is absent from most resamples, so a span measured on the remainder
+/// describes a minority of the runs.
+const MATCH_RATE_WARN: f64 = 0.50;
+
+/// Column order of the bootstrap summary TSV. Shared with
+/// `bootstrap_column_populations` so a new column cannot be added
+/// without classifying which population it is over — see
+/// `tests::every_bootstrap_column_is_classified_by_population`.
+const BOOTSTRAP_SUMMARY_COLUMNS: &[&str] = &[
+    "archetype_id",
+    "observed_n_cohorts",
+    "observed_cohorts",
+    "bootstrap_mean_n_cohorts",
+    "bootstrap_prob_universal",
+    "bootstrap_prob_multi",
+    "ci_lower_n_cohorts",
+    "ci_upper_n_cohorts",
+    "bootstrap_match_rate",
+    "alignment_entropy",
+    "bca_lower_n_cohorts",
+    "bca_upper_n_cohorts",
+    "bca_fallback_to_percentile",
+];
+
+fn write_bootstrap_summary(path: &Path, rows: &[BootstrapRow]) -> Result<()> {
+    let mut out = BOOTSTRAP_SUMMARY_COLUMNS.join("\t");
+    out.push('\n');
     for r in rows {
         out.push_str(&format!(
             "{}\t{}\t{}\t{:.6}\t{:.6}\t{:.6}\t{}\t{}\t{:.6}\t\
@@ -1925,4 +2044,97 @@ fn write_projection_qc(
         ));
     }
     atomic_write(path, buf.as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every column of the bootstrap summary must be classified by the
+    /// population it is computed over.
+    ///
+    /// The sidecar map is the only part of this that reaches a figure
+    /// script reading the TSV later. A new column added to the writer
+    /// without a classification would leave that script with the same
+    /// blind spot the map exists to close, and nothing else would
+    /// catch it.
+    #[test]
+    fn every_bootstrap_column_is_classified_by_population() {
+        let pops = bootstrap_column_populations();
+        let cp = &pops["column_populations"];
+
+        let mut classified: Vec<String> = Vec::new();
+        for group in ["conditional_on_recovery", "over_all_iterations"] {
+            for c in cp[group]["columns"].as_array().expect("columns array") {
+                classified.push(c.as_str().expect("column name").to_string());
+            }
+        }
+
+        // Identity and provenance columns are not statistics over a
+        // resampling population, so they are exempt by name.
+        const NOT_A_STATISTIC: &[&str] = &[
+            "archetype_id",
+            "observed_n_cohorts",
+            "observed_cohorts",
+            "bca_fallback_to_percentile",
+            // The bridge between the two populations. It is the
+            // denominator, so it belongs to neither group.
+            "bootstrap_match_rate",
+        ];
+
+        for col in BOOTSTRAP_SUMMARY_COLUMNS {
+            if NOT_A_STATISTIC.contains(col) {
+                continue;
+            }
+            assert!(
+                classified.iter().any(|c| c == col),
+                "TSV column {col:?} is not classified in the sidecar's \
+                 column_populations. Add it to conditional_on_recovery or \
+                 to over_all_iterations, or to NOT_A_STATISTIC if it is \
+                 not computed over a resampling population."
+            );
+        }
+
+        // And nothing classified may name a column that does not exist.
+        for c in &classified {
+            assert!(
+                BOOTSTRAP_SUMMARY_COLUMNS.contains(&c.as_str()),
+                "column_populations names {c:?}, which is not a column of \
+                 the bootstrap summary TSV"
+            );
+        }
+    }
+
+    /// The columns named as safe to rank on must actually be the
+    /// unconditional ones. This is the advice the map gives a
+    /// downstream script, so it must not drift into naming a
+    /// conditional column.
+    #[test]
+    fn columns_named_safe_to_rank_on_are_not_conditional() {
+        let pops = bootstrap_column_populations();
+        let cp = &pops["column_populations"];
+        let conditional: Vec<&str> = cp["conditional_on_recovery"]["columns"]
+            .as_array()
+            .expect("columns")
+            .iter()
+            .map(|v| v.as_str().expect("str"))
+            .collect();
+
+        for c in cp["unconditional_and_safe_to_rank_on"]["columns"]
+            .as_array()
+            .expect("columns")
+        {
+            let name = c.as_str().expect("str");
+            assert!(
+                !conditional.contains(&name),
+                "{name:?} is advertised as safe to rank on while also \
+                 being listed as conditional on recovery"
+            );
+            assert!(
+                BOOTSTRAP_SUMMARY_COLUMNS.contains(&name),
+                "{name:?} is advertised as safe to rank on but is not a \
+                 column of the TSV"
+            );
+        }
+    }
 }

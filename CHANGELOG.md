@@ -8,6 +8,41 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`align bootstrap` now names the population behind every summary
+  column**, on stderr and in the run sidecar. The percentile CI and
+  `bootstrap_mean_n_cohorts` are computed over matched replicates only,
+  while `bootstrap_prob_universal`, `bootstrap_prob_multi`,
+  `alignment_entropy` and the BCa bounds run over all `n_boot` with each
+  miss entered as zero. Both are correct and neither name said which.
+  Found by the GBM manuscript session: an NMF archetype at
+  `prob_universal` 0.205 and an ICA archetype at 0.805 reported the
+  IDENTICAL interval `[6, 6]` over six cohorts, a four-fold difference
+  in reproducibility the interval could not show. The percentile CI is
+  conditional on recovery, so an archetype matched twice in 200
+  resamples, spanning six cohorts both times, reports `[6, 6]` — which
+  makes a pre-registered `ci_lower >= k` criterion close to untestable.
+  The command now reports the median match rate and warns below 0.50,
+  and the run sidecar carries a `column_populations` block so a figure
+  script reading the TSV months later can assert its sort key is
+  unconditional. Column names and the TSV bytes are unchanged.
+
+- **Two more defects in the same file, found by sweeping the match rate
+  from 0.005 to 1.000.** `alignment_entropy` is NOT monotone in
+  reproducibility: when an archetype spans the same cohorts whenever
+  matched, it reduces to the binary entropy of the match rate, peaks at
+  0.5 and falls to zero at BOTH ends, so a barely recovered archetype
+  scores as the most stable. Measured at `n_boot` 200, a match rate of
+  0.025 gives 0.169 against 0.732 at 0.205. The docstring had claimed
+  low entropy implies stability, which inverts any ranking built on it.
+  Separately, the BCa endpoints are degenerate at both tails: the lower
+  bound reads the conditional value below a match rate of about 0.03,
+  and the interval collapses to `[0, 0]` at 0.99.
+  `bca_fallback_to_percentile` does not fire, because it tests the
+  acceleration denominator. The BCa numerics are deliberately NOT
+  changed — the reporting session declined the fix so its completed
+  figure surface would not move — and are pinned in a test instead, so
+  any future change produces a visible diff.
+
 - **`harmonize apply --center-direction`**, and a warning when it is off
   for a per-sample method. Every per-sample normalisation leaves a
   per-subject term in the harmonised value that a direction with a

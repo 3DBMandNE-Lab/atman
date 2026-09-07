@@ -7,13 +7,29 @@
 //! record — for each point-estimate archetype — which cohorts the
 //! matched bootstrap archetype was recovered in.
 //!
-//! Output per point-estimate archetype: mean cohort count, fraction
-//! of iterations it was recovered in every cohort (`prob_universal`),
-//! fraction in at least two cohorts (`prob_multi`), a percentile CI
-//! over the cohort-count distribution, Shannon entropy over the
-//! bootstrap n_cohorts histogram (`alignment_entropy`, higher = more
-//! uncertain), and a BCa (bias-corrected accelerated) CI whose
-//! acceleration is estimated by pooled subject-level jackknife.
+//! Output per point-estimate archetype, over TWO DIFFERENT
+//! POPULATIONS. Nothing in the column names says which, so it is
+//! stated here and on every field of [`BootstrapRow`].
+//!
+//! Over MATCHED REPLICATES ONLY, meaning the iterations where this
+//! archetype was matched at all: the mean cohort count
+//! (`bootstrap_mean_n_cohorts`) and the percentile CI
+//! (`ci_lower_n_cohorts`, `ci_upper_n_cohorts`).
+//!
+//! Over ALL `n_boot` ITERATIONS, with every miss entered as zero
+//! cohorts: the fraction recovered in every cohort
+//! (`prob_universal`), the fraction in at least two cohorts
+//! (`prob_multi`), the Shannon entropy of the n_cohorts histogram
+//! (`alignment_entropy`, higher = more uncertain), and a BCa
+//! (bias-corrected accelerated) CI whose acceleration is estimated by
+//! pooled subject-level jackknife.
+//!
+//! `bootstrap_match_rate` is the fraction that matched at all, and it
+//! is the bridge between the two. A percentile CI read without it
+//! looks far stronger than the archetype is: one matched twice in 200
+//! resamples, spanning six cohorts both times, reports [6, 6]. Two
+//! archetypes differing four-fold in reproducibility can carry the
+//! identical interval.
 //!
 //! Matching is via representative-program best-cosine; each
 //! point-estimate archetype is represented by the loading vector
@@ -21,8 +37,11 @@
 //! archetype is represented likewise. Match is the archetype whose
 //! representative has maximum absolute cosine similarity against the
 //! point-estimate representative, with a configurable floor
-//! (`match_tau`). Misses contribute zero-cohort observations to the
-//! distribution (they are a valid outcome under resampling noise).
+//! (`match_tau`). A miss is a valid outcome under resampling noise
+//! rather than a missing observation, so it enters `prob_universal`,
+//! `prob_multi`, `alignment_entropy` and the BCa CI as a zero-cohort
+//! observation. It is ABSENT from the mean and the percentile CI,
+//! which is what makes those two conditional on recovery.
 //!
 //! Determinism: bootstrap randomness comes from
 //! [`crate::ica::Xoshiro256pp`] seeded per iteration via a
@@ -97,7 +116,12 @@ pub struct BootstrapParams {
     pub metric: AlignMetric,
     /// Two-sided CI alpha. Both the percentile CI on
     /// `n_cohorts` and the BCa CI use `alpha/2` and `1 - alpha/2`
-    /// quantiles. `0.05` ⇒ 95% CI; must lie in `(0, 1)`.
+    /// quantiles. `0.05` ⇒ 95% CI, and it must lie in `(0, 1)`.
+    ///
+    /// The two intervals are taken over different populations. The
+    /// percentile CI uses matched replicates only. The BCa CI uses all
+    /// `n_boot` iterations, with each miss entered as zero. See
+    /// [`BootstrapRow::ci_lower_n_cohorts`].
     pub ci_alpha: f64,
     /// Worker threads for the bootstrap and jackknife loops; `0` means
     /// one per available core. Output does not depend on this value:
@@ -106,30 +130,88 @@ pub struct BootstrapParams {
     pub threads: usize,
 }
 
+/// One point-estimate archetype's bootstrap summary.
+///
+/// The fields split over two populations and each one says which.
+/// Read `bootstrap_match_rate` before any conditional field.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BootstrapRow {
     pub archetype_id: usize,
     pub observed_n_cohorts: usize,
     pub observed_cohorts: Vec<String>,
+    /// Mean cohort count OVER MATCHED REPLICATES ONLY. This is the
+    /// archetype's mean span given that it was recovered, and it says
+    /// nothing about how often it was recovered.
     pub bootstrap_mean_n_cohorts: f64,
+    /// Fraction of ALL `n_boot` iterations where the matched
+    /// archetype spanned every cohort. Misses count against it.
     pub bootstrap_prob_universal: f64,
+    /// Fraction of ALL `n_boot` iterations where the matched
+    /// archetype spanned at least two cohorts. Misses count against
+    /// it.
     pub bootstrap_prob_multi: f64,
-    /// Percentile CI over the bootstrap `n_cohorts` distribution
-    /// at the `alpha/2` and `1 - alpha/2` quantiles, where `alpha`
-    /// comes from `BootstrapParams::ci_alpha`.
+    /// Percentile CI at the `alpha/2` and `1 - alpha/2` quantiles,
+    /// where `alpha` comes from `BootstrapParams::ci_alpha`,
+    /// OVER MATCHED REPLICATES ONLY.
+    ///
+    /// The interval is CONDITIONAL ON RECOVERY. It gives the span of
+    /// the archetype in the resamples that recovered it, not the
+    /// probability that a resample recovers it. An archetype matched
+    /// twice in 200 resamples, spanning six cohorts both times,
+    /// reports `[6, 6]` — indistinguishable here from one matched in
+    /// every resample.
+    ///
+    /// A criterion of the form `ci_lower_n_cohorts >= k` is therefore
+    /// close to untestable, because a rarely matched archetype passes
+    /// it. Gate on `bootstrap_match_rate` or
+    /// `bootstrap_prob_universal` instead, which are unconditional.
     pub ci_lower_n_cohorts: usize,
+    /// Upper percentile bound. Also OVER MATCHED REPLICATES ONLY —
+    /// see [`BootstrapRow::ci_lower_n_cohorts`].
     pub ci_upper_n_cohorts: usize,
     /// Fraction of bootstrap iterations where **any** archetype was
-    /// matched to this point-estimate archetype at all. When this is
-    /// low the other statistics are noisy.
+    /// matched to this point-estimate archetype at all.
+    ///
+    /// This is the denominator the conditional fields are missing.
+    /// When it is low, `bootstrap_mean_n_cohorts` and the percentile
+    /// CI rest on few replicates and overstate the archetype.
+    /// `align bootstrap` warns on stderr when any archetype falls
+    /// below 0.50.
     pub bootstrap_match_rate: f64,
     /// Shannon entropy (in bits) of the empirical distribution of
-    /// `n_cohorts` across bootstrap iterations, treating each missed
-    /// match as `n_cohorts = 0`. Low entropy ⇒ the archetype's
-    /// cohort coverage is stable under subject resampling.
+    /// `n_cohorts` over ALL `n_boot` ITERATIONS, treating each missed
+    /// match as `n_cohorts = 0`.
+    ///
+    /// NOT MONOTONE IN REPRODUCIBILITY. When an archetype spans the
+    /// same cohorts whenever it is matched, the histogram is two-point
+    /// and this reduces to the binary entropy of
+    /// `bootstrap_match_rate`. It peaks at a match rate of 0.5 and
+    /// falls to zero at BOTH ends. A barely recovered archetype
+    /// therefore scores LOW — measured at `n_boot = 200`, a match rate
+    /// of 0.025 gives 0.169 against 0.732 at 0.205, so the less
+    /// reproducible archetype looks the more stable one.
+    ///
+    /// Low entropy means the cohort count is repeatable. It means the
+    /// archetype is stable only when read together with a high
+    /// `bootstrap_match_rate`. Do not rank on it alone.
     pub alignment_entropy: f64,
     /// BCa (bias-corrected accelerated) bootstrap CI lower bound at
-    /// the level set by `BootstrapParams::ci_alpha`. Acceleration is
+    /// the level set by `BootstrapParams::ci_alpha`, over ALL `n_boot`
+    /// ITERATIONS with each miss entered as zero. Unlike the
+    /// percentile CI it is NOT conditional on recovery, so across the
+    /// middle of the range a low match rate pulls its lower bound to
+    /// zero.
+    ///
+    /// DEGENERATE AT BOTH TAILS. `n_cohorts` is a heavily tied
+    /// two-point vector, so `z0` is driven by the miss fraction alone
+    /// and beyond roughly 0.97 in either direction both endpoints run
+    /// off the same end. Measured at `n_boot = 200`, `ci_alpha = 0.05`:
+    /// the lower bound reads 6.0 at a match rate of 0.025, and the
+    /// interval collapses to [0, 0] at 0.99. `bca_fallback_to_percentile`
+    /// does not fire, because it tests the acceleration denominator and
+    /// not this. See
+    /// `tests::bca_endpoints_are_degenerate_at_extreme_match_rates`.
+    /// Acceleration is
     /// estimated by pooled-subject jackknife. When the BCa
     /// denominator is non-positive (non-monotone tail) the CI falls
     /// back to the percentile CI and `bca_fallback_to_percentile` is
@@ -898,6 +980,141 @@ mod tests {
             label: label.into(),
             data,
             protein_labels: (0..p).map(|j| format!("P{j:03}")).collect(),
+        }
+    }
+
+    /// Builds an accumulator matched in `m` of 200 resamples, always
+    /// spanning all six cohorts when matched. This is the shape the
+    /// GBM manuscript session hit, and it isolates the match rate as
+    /// the only thing that varies.
+    fn acc_matched(m: usize) -> BootstrapRow {
+        let mut acc = BootstrapAcc::new(200);
+        for _ in 0..m {
+            acc.observe(6, 6);
+        }
+        for _ in 0..(200 - m) {
+            acc.observe_miss();
+        }
+        let cohorts: Vec<String> = (1..=6).map(|i| format!("c{i}")).collect();
+        acc.to_row(1, cohorts, &[], 0.05)
+    }
+
+    /// Pins which population each summary field is over.
+    ///
+    /// The percentile CI and the mean use matched replicates only,
+    /// while `prob_universal`, `prob_multi` and the BCa bound use all
+    /// `n_boot`. Reported by the GBM manuscript session: an NMF
+    /// archetype at match rate 0.205 and an ICA archetype at 0.805
+    /// carried identical [6, 6] intervals — a four-fold difference in
+    /// reproducibility that the interval could not show.
+    #[test]
+    fn percentile_ci_conditions_on_recovery_but_prob_universal_does_not() {
+        let nmf = acc_matched(41); // 0.205
+        let ica = acc_matched(161); // 0.805
+
+        // Conditional on recovery: identical, and blind to the gap.
+        assert_eq!(
+            (nmf.ci_lower_n_cohorts, nmf.ci_upper_n_cohorts),
+            (ica.ci_lower_n_cohorts, ica.ci_upper_n_cohorts),
+            "the percentile CI cannot separate a 0.205 from a 0.805 \
+             match rate, which is why it must not be gated on"
+        );
+        assert_eq!((nmf.ci_lower_n_cohorts, nmf.ci_upper_n_cohorts), (6, 6));
+        assert!((nmf.bootstrap_mean_n_cohorts - 6.0).abs() < 1e-12);
+        assert!((ica.bootstrap_mean_n_cohorts - 6.0).abs() < 1e-12);
+
+        // Unconditional: these carry the four-fold difference.
+        assert!((nmf.bootstrap_match_rate - 0.205).abs() < 1e-12);
+        assert!((ica.bootstrap_match_rate - 0.805).abs() < 1e-12);
+        assert!((nmf.bootstrap_prob_universal - 0.205).abs() < 1e-12);
+        assert!((ica.bootstrap_prob_universal - 0.805).abs() < 1e-12);
+    }
+
+    /// An archetype matched in every resample carries the identical
+    /// percentile interval, which is the point: the conditional
+    /// columns cannot tell it from a rarely matched one.
+    #[test]
+    fn an_always_matched_archetype_carries_the_same_percentile_ci() {
+        let rare = acc_matched(5); // 0.025
+        let always = acc_matched(200); // 1.000
+
+        assert_eq!(
+            (rare.ci_lower_n_cohorts, rare.ci_upper_n_cohorts),
+            (always.ci_lower_n_cohorts, always.ci_upper_n_cohorts)
+        );
+        assert!((rare.bootstrap_match_rate - 0.025).abs() < 1e-12);
+        assert!((always.bootstrap_match_rate - 1.0).abs() < 1e-12);
+    }
+
+    /// `alignment_entropy` is NOT monotone in reproducibility.
+    ///
+    /// When an archetype spans every cohort whenever it is matched,
+    /// the n_cohorts histogram is two-point over {0, 6} and the
+    /// entropy is the binary entropy of the match rate. It peaks at
+    /// 0.5 and falls to zero at BOTH ends, so a barely recovered
+    /// archetype scores lower — looks more stable — than a moderately
+    /// recovered one. Never rank on entropy alone.
+    #[test]
+    fn alignment_entropy_is_not_monotone_in_reproducibility() {
+        let barely = acc_matched(5); // 0.025
+        let reported = acc_matched(41); // 0.205
+        let even = acc_matched(100); // 0.500
+        let nearly_always = acc_matched(199); // 0.995
+
+        assert!(even.alignment_entropy > reported.alignment_entropy);
+        assert!(
+            barely.alignment_entropy < reported.alignment_entropy,
+            "an archetype recovered in 2.5% of resamples reports LOWER \
+             entropy ({:.3}) than one recovered in 20.5% ({:.3})",
+            barely.alignment_entropy,
+            reported.alignment_entropy
+        );
+        assert!(nearly_always.alignment_entropy < even.alignment_entropy);
+        // The two ends are indistinguishable by entropy alone.
+        assert!(
+            (barely.alignment_entropy - nearly_always.alignment_entropy).abs() < 0.13,
+            "0.025 and 0.995 match rates give near-identical entropy: \
+             {:.3} vs {:.3}",
+            barely.alignment_entropy,
+            nearly_always.alignment_entropy
+        );
+    }
+
+    /// Pins a KNOWN DEFECT rather than a desired behaviour.
+    ///
+    /// The BCa endpoints are degenerate at both tails of the match
+    /// rate. `n_cohorts` here is a heavily tied two-point vector, so
+    /// the bias correction `z0` is driven by the miss fraction alone.
+    /// Beyond roughly 0.97 in either direction both endpoints run off
+    /// the same end of the sorted vector. Measured at `n_boot = 200`,
+    /// `ci_alpha = 0.05`: the lower bound reads 6.0 at a match rate of
+    /// 0.025, and the interval collapses to [0, 0] at 0.99 — an
+    /// archetype recovered almost every time.
+    ///
+    /// `bca_fallback_to_percentile` does not fire, because it tests
+    /// the acceleration denominator and not this. Recorded so a change
+    /// to the BCa endpoints is a deliberate act with a visible
+    /// diff, not a silent one.
+    #[test]
+    fn bca_endpoints_are_degenerate_at_extreme_match_rates() {
+        let barely = acc_matched(5); // 0.025
+        assert!((barely.bca_lower_n_cohorts - 6.0).abs() < 1e-9);
+        assert!(!barely.bca_fallback_to_percentile);
+
+        let nearly_always = acc_matched(198); // 0.990
+        assert!((nearly_always.bca_lower_n_cohorts - 0.0).abs() < 1e-9);
+        assert!((nearly_always.bca_upper_n_cohorts - 0.0).abs() < 1e-9);
+        assert!(!nearly_always.bca_fallback_to_percentile);
+
+        // In between it behaves: misses drag the lower bound to zero.
+        for m in [10usize, 41, 100, 161, 190] {
+            let r = acc_matched(m);
+            assert!(
+                (r.bca_lower_n_cohorts - 0.0).abs() < 1e-9,
+                "match rate {} gave BCa lower {}",
+                r.bootstrap_match_rate,
+                r.bca_lower_n_cohorts
+            );
         }
     }
 

@@ -558,6 +558,87 @@ bootstrap programs into archetypes. `--match-tau` matches those
 archetypes back to the point estimate. Both gates report their admitted
 fraction.
 
+### atman align bootstrap — which population each column is over
+
+The bootstrap summary mixes two populations. The column names do not
+say which column is which.
+
+These columns use **matched replicates only**. A matched replicate is a
+resample in which the archetype was matched at all.
+
+- `bootstrap_mean_n_cohorts`
+- `ci_lower_n_cohorts`
+- `ci_upper_n_cohorts`
+
+These columns use **all `--n-boot` iterations**. Each miss enters as
+zero cohorts.
+
+- `bootstrap_prob_universal`
+- `bootstrap_prob_multi`
+- `alignment_entropy`
+- `bca_lower_n_cohorts`
+- `bca_upper_n_cohorts`
+
+`bootstrap_match_rate` is the fraction of iterations that matched at
+all. It is the bridge between the two populations. Read it first.
+
+The percentile interval is conditional on recovery. It gives the span
+of an archetype in the resamples that recovered it. It does not give
+how reliably the archetype is recovered. An archetype matched twice in
+200 resamples, and spanning six cohorts both times, reports
+`ci_lower_n_cohorts` 6 and `ci_upper_n_cohorts` 6.
+
+Two archetypes can carry the same interval and differ four-fold in
+reproducibility. Measured on six cohorts at `--n-boot 200` with
+`--metric cosine-centered`: an NMF archetype at match rate 0.205 and an
+ICA archetype at match rate 0.805 both reported `[6, 6]`.
+
+A criterion of the form `ci_lower_n_cohorts >= k` is close to
+untestable for this reason. A rarely matched archetype passes it. To
+call an archetype cross-cohort, gate on `bootstrap_match_rate` or
+`bootstrap_prob_universal`. Read the percentile interval only for the
+span given recovery.
+
+The BCa interval enters each miss as zero, so it is not conditional on
+recovery. Across the middle of the range a low match rate pulls its
+lower bound to zero. A BCa lower bound of 0.000 next to a percentile
+interval of `[6, 6]` is the signature of this difference. It is not a
+contradiction.
+
+The BCa endpoints are degenerate at both tails of the match rate.
+`n_cohorts` is a heavily tied vector, so the bias correction depends on
+the miss fraction alone. Beyond roughly 0.97 in either direction both
+endpoints run off the same end of the sorted vector. Measured at
+`--n-boot 200` and `--ci-alpha 0.05`: the lower bound reads 6.0 at a
+match rate of 0.025, and the interval collapses to `[0, 0]` at 0.99.
+The `bca_fallback_to_percentile` flag does not fire in either case,
+because it tests the acceleration denominator and not this. Do not read
+a BCa interval at an extreme match rate.
+
+`alignment_entropy` is not monotone in reproducibility. When an
+archetype spans the same cohorts whenever it is matched, the entropy
+reduces to the binary entropy of the match rate. It peaks at a match
+rate of 0.5. It falls to zero at both ends. A barely recovered
+archetype therefore scores low. Measured at `--n-boot 200`: a match
+rate of 0.025 gives 0.169, against 0.732 at a match rate of 0.205. The
+less reproducible archetype looks the more stable one. Read entropy
+only together with the match rate. Do not rank on entropy alone.
+
+`align bootstrap` reports the median match rate across archetypes. It
+warns when any archetype falls below 0.50.
+
+The run sidecar records the same split in a `column_populations` block.
+The docstrings and the warning reach the person who runs the command.
+They do not reach a figure script that reads the TSV months later. The
+sidecar travels with the output, so a downstream script can read the
+classification and assert on it. A test refuses a new column in the
+summary until it is classified.
+
+Do not sort on a conditional column. Do not filter on one. Do not
+caption a panel with the word "survive" for a count derived from one. An
+archetype matched twice in 200 resamples sorts to the top of a
+descending `ci_lower_n_cohorts` and passes any threshold on it.
+
 ### atman network differential — bounded edge-pairwise output
 
 `--mode edge-pairwise` streams the leading `--top-rows` rows through a
