@@ -114,8 +114,8 @@ cargo install --path crates/atman
 Or build a container:
 
 ```bash
-docker build -t atman:1.1.0 .
-docker run --rm atman:1.1.0 --help
+docker build -t atman:1.2.0 .
+docker run --rm atman:1.2.0 --help
 ```
 
 ## Commands
@@ -201,6 +201,22 @@ docs/analytical-roadmap.md  implemented analytical capability roadmap
 docs/release-checklist.md   standalone release checklist
 example_data/            Dube et al. 2023 Olink Explore fixture data
 ```
+
+## Determinism and Your Operating System
+
+Atman guarantees that the same binary, on the same input, with the same
+seed, produces the same bytes. Thread count does not change results.
+
+Numeric results DO differ between operating systems. The NMF and ICA
+kernels use Apple's Accelerate BLAS on macOS and a portable scalar
+kernel everywhere else. A blocked kernel sums in a different order, so
+the last bits differ. Measured on a real cohort, the difference is about
+1e-11 relative and does not reach output precision at the 6 decimals the
+TSVs carry.
+
+Do not compare bytes across operating systems. Compare them on one. The
+run sidecar records `target_triple` and `rustc_version` for this reason,
+so two runs that disagree can be told apart.
 
 ## Further Reading
 

@@ -14,8 +14,31 @@ makes at most one outbound network call (see below). Calibrate severity
 accordingly: a panic on malformed input is a robustness bug, not a remote
 exploit.
 
-- **No `unsafe` code.** The workspace contains zero `unsafe` blocks; there is no
-  manual memory management to get wrong.
+- **`unsafe` is confined to three FFI sites, on macOS only.** The workspace
+  contained zero `unsafe` blocks until the NMF and ICA kernels were routed
+  through Accelerate's BLAS. There are now exactly three, all in
+  `crates/atman-core/src/blas.rs`, all behind `#[cfg(target_os = "macos")]`,
+  and all reachable only through `gemm` and `syrk`:
+
+  | Site | What it does | Why it is sound |
+  |---|---|---|
+  | `set_single_threaded_once` | `dlsym` + `transmute` to call `BLASSetThreading` | Null-checked before use; the transmuted signature matches Apple's `vecLib/thread_api.h`; `Once` bounds it to one call per process |
+  | `gemm_accelerate` | `cblas_dgemm` | Private, reachable only via `gemm`, which asserts every slice length against its dimensions |
+  | `syrk` | `cblas_dsyrk` | Same, via `syrk`'s own assertions |
+
+  Each call site carries a `SAFETY` comment naming the invariant it depends
+  on. `assert_fits_c_int` guards the one way those length checks could be
+  defeated: CBLAS takes 32-bit signed dimensions, so a `usize` above
+  `i32::MAX` would truncate and the library would read outside the slices
+  whose lengths were validated in `usize`. atman's matrices are far below
+  that bound, so the assertion never fires in practice; it exists because
+  the alternative to firing is memory unsafety rather than a wrong number.
+
+  No other platform compiles any `unsafe`: every other target uses the pure
+  Rust `gemm_fallback`, which has none. Accelerate is a system framework, so
+  this adds no dependency to the SBOM.
+
+- **No manual memory management** outside those three sites.
 - **Untrusted input (data files).** TSV/CSV/JSON readers are header-indexed and
   reject ragged rows (the `csv` reader runs in strict, non-flexible mode), so a
   malformed file produces a descriptive error rather than a crash or

@@ -192,6 +192,22 @@ mod threading {
     /// than linked directly so that an older system silently keeps
     /// Accelerate's default instead of failing to launch.
     pub fn set_single_threaded_once() {
+        // SAFETY: three things make this sound.
+        //
+        // `dlsym` with RTLD_DEFAULT is safe to call with any C string and
+        // returns null when the symbol is absent, which is checked before
+        // the pointer is used — that null check is the whole reason for
+        // resolving dynamically rather than linking directly.
+        //
+        // The transmuted signature matches Apple's declaration in
+        // `vecLib/thread_api.h`: `int BLASSetThreading(const enum
+        // BLAS_THREADING)`, where the enum's underlying type is spelled
+        // `unsigned int` in that header. So `extern "C" fn(u32) -> c_int`
+        // is the correct ABI, and `SINGLE_THREADED` is a value the enum
+        // defines rather than an arbitrary integer.
+        //
+        // `Once` guarantees the call happens exactly once per process
+        // even under concurrent `gemm` calls from multiple threads.
         INIT.call_once(|| unsafe {
             let sym = dlsym(RTLD_DEFAULT, c"BLASSetThreading".as_ptr());
             if !sym.is_null() {
@@ -199,6 +215,26 @@ mod threading {
                 let _ = f(SINGLE_THREADED);
             }
         });
+    }
+}
+
+/// Every dimension handed to Accelerate must survive the `usize` to
+/// `c_int` cast.
+///
+/// CBLAS takes 32-bit signed dimensions. A value above `i32::MAX` would
+/// truncate — silently, and possibly to a negative — and the library
+/// would then read outside the slices whose lengths were checked in
+/// `usize`. atman's matrices are far below this (tens of thousands of
+/// assays at most), so the check never fires in practice; it exists
+/// because the alternative to firing is memory unsafety rather than a
+/// wrong answer.
+#[cfg(target_os = "macos")]
+fn assert_fits_c_int(dims: [usize; 6]) {
+    for d in dims {
+        assert!(
+            d <= i32::MAX as usize,
+            "dimension {d} exceeds the 32-bit limit of the CBLAS interface"
+        );
     }
 }
 
@@ -219,12 +255,16 @@ fn gemm_accelerate(
 ) {
     use accelerate::*;
     threading::set_single_threaded_once();
+    assert_fits_c_int([m, n, k, lda, ldb, ldc]);
     let ta = if op_a == Op::N { NO_TRANS } else { TRANS };
     let tb = if op_b == Op::N { NO_TRANS } else { TRANS };
-    // SAFETY: every length was asserted against its dimensions in
-    // `gemm` above, and the pointers come from live slices that outlive
-    // the call. cblas_dgemm reads a/b and writes c only within those
-    // bounds.
+    // SAFETY: this function is private and reachable only through
+    // `gemm`, which asserts every slice length against its dimensions
+    // before dispatching. `assert_fits_c_int` above then rules out the
+    // one way those checks could be defeated — a `usize` dimension
+    // truncating in the cast to `c_int`. The pointers come from live
+    // borrows that outlive the call, and `cblas_dgemm` reads `a` and `b`
+    // and writes `c` only within the bounds just validated.
     unsafe {
         cblas_dgemm(
             ROW_MAJOR,
@@ -275,8 +315,13 @@ pub fn syrk(n: usize, k: usize, op: Op, a: &[f64], lda: usize, c: &mut [f64], ld
     {
         use accelerate::*;
         threading::set_single_threaded_once();
+        assert_fits_c_int([n, n, k, lda, ldc, ldc]);
         let tr = if op == Op::N { NO_TRANS } else { TRANS };
-        // SAFETY: lengths asserted above; pointers come from live slices.
+        // SAFETY: `syrk` asserts every slice length against its
+        // dimensions above, and `assert_fits_c_int` rules out truncation
+        // in the cast to `c_int`. The pointers come from live borrows
+        // that outlive the call, and `cblas_dsyrk` reads `a` and writes
+        // the upper triangle of `c` only within those bounds.
         unsafe {
             cblas_dsyrk(
                 ROW_MAJOR,

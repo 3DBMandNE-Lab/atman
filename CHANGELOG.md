@@ -6,6 +6,38 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-09-07
+
+### Performance
+
+- **`decompose nmf` is 24.6x faster and `decompose ica`'s whitening 2.89x.**
+  Both kernels now go through a BLAS. On macOS that is Apple's Accelerate,
+  linked as a system framework, so no Cargo dependency is added. Every
+  other target keeps a portable scalar kernel.
+
+  Measured at 110 x 10000, k=10, 500 iterations, kernel isolated from I/O
+  by the max-iter slope: NMF 16.25 s originally, 10.59 s after fixing the
+  memory access pattern, 1.41 s once the seven matrix products became
+  GEMMs, 0.68 s once Accelerate was put in single-threaded mode, 0.66 s
+  with `dsyrk` for the two symmetric Gram products. scikit-learn's
+  `NMF.fit()` on the same problem is 0.66 s. `pca_whiten` at the same
+  shape went 228.7 ms to 79.2 ms.
+
+  The single-threaded setting is the surprising one and the largest single
+  win. These GEMMs are skinny — one dimension is `k`, typically 10 — so
+  Accelerate's thread dispatch cost more than the work it distributed.
+  Single-threaded is 2.3x faster here, and it also removes any dependence
+  of the result on thread count or machine load.
+
+  The convergence check is unchanged and still runs every iteration.
+  Evaluating it periodically, as scikit-learn does, would change the
+  stopping rule and therefore `W`, `H`, `n_iter`, `converged` and
+  `final_error`.
+
+- **FastICA's iterations were never the cost.** The fixed-point loop runs
+  on the k-dimensional whitened data, so 2000 iterations take the same
+  wall clock as 10. The ICA kernel is the whitening.
+
 ### Added
 
 - **`decompose null` writes an `n_perm` column.** It is the denominator
@@ -369,6 +401,33 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **NMF and ICA results move, and now differ between operating systems.**
+  A blocked BLAS kernel accumulates in a different order than the scalar
+  code it replaces, so low-order bits change. **Regenerate any cached NMF
+  or ICA outputs.**
+
+  Measured on a 93 x 9376 cohort across the two ICA paths: loadings agree
+  at the 6 decimals the TSV carries, and the full-precision
+  `ica_final_tol` differs by 1.08e-11 relative. The change is real and
+  does not reach output precision.
+
+  Because macOS uses Accelerate and other targets use the scalar kernel,
+  **the same version on the same input produces different low-order bits
+  on different operating systems.** The guarantee atman makes is unchanged
+  — same binary, same input, same seed, same bytes, invariant to thread
+  count — and it was always scoped to a build, which is why the run
+  sidecar records `rustc_version` and `target_triple`. Byte-compare
+  outputs produced on one operating system, and name the platform beside
+  the commit in a reproducibility statement. See "What determinism atman
+  guarantees" in `docs/reference.md`.
+
+- **`unsafe` now exists, in three FFI sites on macOS only.** All are in
+  `crates/atman-core/src/blas.rs`, behind `#[cfg(target_os = "macos")]`,
+  each carrying a `SAFETY` comment, and each guarded by
+  `assert_fits_c_int` against a `usize` dimension truncating in the cast
+  to CBLAS's 32-bit `c_int`. No other target compiles any `unsafe`.
+  `SECURITY.md` documents the three sites and their invariants.
+
 - `de_results.tsv` has two new trailing columns `n_a`, `n_b`; readers that
   index by header are unaffected.
 - `plan_manifest.tsv` (`atman run`) has a new trailing column
@@ -407,6 +466,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   under NMF exactly as it already is under ICA.
 
 ### Fixed
+
+- **`decompose ica --weighted-whitening` refuses above 2000 assays.** The
+  weighted path cannot use the sample-space Gram shortcut, because a
+  weighted inner product between two samples is not the weighted
+  covariance between two features. It builds a dense p x p covariance and
+  eigendecomposes it at O(p^3). Measured at n=60, k=5: p=200 0.46 s,
+  p=400 5.22 s, p=800 26.5 s, p=1200 88.0 s, fitted exponent 2.96.
+  Extrapolated to real proteomics widths that is 16 to 19 hours on a
+  covariance of about 1 GB. The command now names the matrix size, the
+  estimated cost and the limit. Gated rather than optimised because the
+  flag had never been used on any real analysis; making it work needs a
+  different algorithm, not a faster loop.
+
+- **`decompose ica --k-selection` was unvalidated when `--k` was set, and
+  failed late otherwise.** `resolve_k` returns early when `--k` is given
+  and never parsed the selection string, so `--k 10 --k-selection
+  fixed=30` ran with k=10, exited 0, and wrote `"k-selection":
+  "fixed=30"` into the sidecar beside `"k_resolved": 10` — a provenance
+  record naming a rule that was never applied. Without `--k`, the same
+  value failed inside `resolve_k`, which runs after the input is read, so
+  an invalid flag cost 3.5 s on a 123 MB cohort and wrote nothing; a
+  failure that expensive is indistinguishable from success in a timing
+  loop, and one was read as a measurement. The flag is now validated
+  before the input is opened (0.01 s, constant in input size), validated
+  even when `--k` overrides it, and the sidecar records
+  `k_selection_applied` so a replay can tell which one set k.
 
 - **`harmonize fit --method quantile` no longer requires a complete
   subject.** It built its reference profile only from training subjects

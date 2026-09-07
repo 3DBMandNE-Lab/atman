@@ -401,6 +401,38 @@ drift on the R side cannot affect CI.
 The parity assertions run on every `cargo test --workspace --release`.
 CI fails if any drifts.
 
+### What determinism atman guarantees
+
+The guarantee is: the same binary, on the same input, with the same
+seed, writes the same bytes. It holds across thread counts, and the test
+suite asserts it.
+
+The guarantee is scoped to a build. The run sidecar records
+`rustc_version` and `target_triple` in `build_env` because results
+belong to the binary that produced them.
+
+Numeric results differ between operating systems. `decompose nmf` and
+`decompose ica` call Apple's Accelerate BLAS on macOS and a portable
+scalar kernel on every other target. A blocked kernel accumulates in a
+different order, so the low bits differ.
+
+Measured on a 93 x 9376 cohort, comparing the two ICA paths: the
+loadings agree at the 6 decimals the TSV carries, and the
+full-precision `ica_final_tol` in the sidecar differs by 1.08e-11
+relative. The difference is real and does not reach output precision.
+
+Two consequences for a reproducibility statement:
+
+- Byte-compare outputs produced on ONE operating system. A cross-OS
+  byte comparison will fail and does not indicate a defect.
+- Name the platform beside the commit. `target_triple` in any sidecar
+  gives it.
+
+On macOS, Accelerate runs single-threaded by choice, set through
+`BLASSetThreading`. That is a speed decision at the skinny shapes these
+kernels use, and it also removes any dependence of the result on thread
+count or machine load.
+
 ### Reproducibility check
 
 Run the package test suite:
