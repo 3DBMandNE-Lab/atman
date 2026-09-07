@@ -14,7 +14,7 @@
 //! that representation; the inner math uses index loops rather than
 //! ndarray to avoid introducing new workspace dependencies.
 
-use crate::blas::{gemm, Op};
+use crate::blas::{gemm, syrk, Op};
 use crate::ica::{jacobi_eigen, Xoshiro256pp};
 
 // ── public types ────────────────────────────────────────────────────────────
@@ -263,7 +263,7 @@ fn frobenius_mu(
         // ── update H ──────────────────────────────────────────────────
         // H <- H * (WᵀX) / (WᵀW H)
         gemm(k, p, n, Op::T, &wf, k, Op::N, &xf, p, &mut wtx, p);
-        gemm(k, k, n, Op::T, &wf, k, Op::N, &wf, k, &mut wtw, k);
+        syrk(k, n, Op::T, &wf, k, &mut wtw, k);
         gemm(k, p, k, Op::N, &wtw, k, Op::N, &hf, p, &mut wtwh, p);
 
         for idx in 0..k * p {
@@ -278,7 +278,7 @@ fn frobenius_mu(
         // ── update W ──────────────────────────────────────────────────
         // W <- W * (X Hᵀ) / (W H Hᵀ)
         gemm(n, k, p, Op::N, &xf, p, Op::T, &hf, p, &mut xht, k);
-        gemm(k, k, p, Op::N, &hf, p, Op::T, &hf, p, &mut hht, k);
+        syrk(k, p, Op::N, &hf, p, &mut hht, k);
         gemm(n, k, k, Op::N, &wf, k, Op::N, &hht, k, &mut whht, k);
 
         for idx in 0..n * k {
@@ -298,7 +298,7 @@ fn frobenius_mu(
         // `xht` and `hht` were both built from the CURRENT H above, and
         // `wf` has just been updated, so the Gram identity is evaluated
         // on exactly the post-update W and H.
-        gemm(k, k, n, Op::T, &wf, k, Op::N, &wf, k, &mut wtw_post, k);
+        syrk(k, n, Op::T, &wf, k, &mut wtw_post, k);
         let error = frobenius_error_gram(x_norm_sq, &wf, &xht, &wtw_post, &hht, n, k);
         if (prev_error - error).abs() < tol {
             converged = true;

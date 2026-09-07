@@ -107,10 +107,25 @@ mod accelerate {
     pub const ROW_MAJOR: c_int = 101;
     pub const NO_TRANS: c_int = 111;
     pub const TRANS: c_int = 112;
+    pub const UPPER: c_int = 121;
 
     #[link(name = "Accelerate", kind = "framework")]
     extern "C" {
         #[allow(clippy::too_many_arguments)]
+        pub fn cblas_dsyrk(
+            order: c_int,
+            uplo: c_int,
+            trans: c_int,
+            n: c_int,
+            k: c_int,
+            alpha: f64,
+            a: *const f64,
+            lda: c_int,
+            beta: f64,
+            c: *mut f64,
+            ldc: c_int,
+        );
+
         pub fn cblas_dgemm(
             order: c_int,
             transa: c_int,
@@ -227,6 +242,75 @@ fn gemm_accelerate(
             c.as_mut_ptr(),
             ldc as _,
         );
+    }
+}
+
+/// Row-major symmetric rank-k update: `C = op(A) · op(A)ᵀ`, `C` being
+/// `n × n` and symmetric.
+///
+/// `Op::N` computes `A Aᵀ` from an `n × k` A; `Op::T` computes `Aᵀ A`
+/// from a `k × n` A. Only about half the multiply-adds of the
+/// equivalent GEMM are performed, because the result is symmetric — the
+/// lower triangle is mirrored from the upper afterwards so callers can
+/// treat `C` as a full dense matrix.
+///
+/// NMF forms two of these per iteration, `H Hᵀ` and `Wᵀ W`. `H Hᵀ` was
+/// 0.19 ms of a 0.93 ms iteration at n=110, p=10000, k=10 when computed
+/// as a general GEMM.
+///
+/// # Panics
+///
+/// Panics if a slice is shorter than its dimensions require.
+pub fn syrk(n: usize, k: usize, op: Op, a: &[f64], lda: usize, c: &mut [f64], ldc: usize) {
+    let a_rows = if op == Op::N { n } else { k };
+    assert!(lda >= if op == Op::N { k } else { n }, "lda too small");
+    assert!(ldc >= n, "ldc too small");
+    assert!(a.len() >= a_rows.saturating_mul(lda), "a too short");
+    assert!(c.len() >= n.saturating_mul(ldc), "c too short");
+    if n == 0 {
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use accelerate::*;
+        threading::set_single_threaded_once();
+        let tr = if op == Op::N { NO_TRANS } else { TRANS };
+        // SAFETY: lengths asserted above; pointers come from live slices.
+        unsafe {
+            cblas_dsyrk(
+                ROW_MAJOR,
+                UPPER,
+                tr,
+                n as _,
+                k as _,
+                1.0,
+                a.as_ptr(),
+                lda as _,
+                0.0,
+                c.as_mut_ptr(),
+                ldc as _,
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let (op_b, ldb) = if op == Op::N {
+            (Op::T, lda)
+        } else {
+            (Op::N, lda)
+        };
+        gemm_fallback(n, n, k, op, a, lda, op_b, a, ldb, c, ldc);
+        return;
+    }
+
+    // Mirror the upper triangle into the lower so callers see a full
+    // dense symmetric matrix.
+    #[cfg(target_os = "macos")]
+    for i in 0..n {
+        for j in 0..i {
+            c[i * ldc + j] = c[j * ldc + i];
+        }
     }
 }
 
@@ -356,6 +440,45 @@ mod tests {
                             fb[idx],
                             want[idx]
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// `syrk` must agree with the equivalent GEMM, and must fill BOTH
+    /// triangles — callers read `C` as a full dense matrix, so a syrk
+    /// that left the lower half untouched would silently zero half of
+    /// every Gram matrix in the solve.
+    #[test]
+    fn syrk_matches_the_equivalent_gemm_and_fills_both_triangles() {
+        for &(n, k) in &[(5usize, 7usize), (10, 10000), (10, 110), (1, 3)] {
+            for &op in &[Op::N, Op::T] {
+                let (rows, lda) = if op == Op::N { (n, k) } else { (k, n) };
+                let a = seeded(rows * lda, 5);
+                let op_b = if op == Op::N { Op::T } else { Op::N };
+
+                let mut want = vec![0.0; n * n];
+                gemm(n, n, k, op, &a, lda, op_b, &a, lda, &mut want, n);
+                let mut got = vec![0.0; n * n];
+                syrk(n, k, op, &a, lda, &mut got, n);
+
+                for i in 0..n {
+                    for j in 0..n {
+                        let idx = i * n + j;
+                        let scale = want[idx].abs().max(1.0);
+                        assert!(
+                            (got[idx] - want[idx]).abs() / scale < 1e-10,
+                            "syrk n={n} k={k} {op:?} at ({i},{j}): {} vs {}",
+                            got[idx],
+                            want[idx]
+                        );
+                    }
+                }
+                // Symmetry, explicitly.
+                for i in 0..n {
+                    for j in 0..n {
+                        assert_eq!(got[i * n + j], got[j * n + i], "not symmetric");
                     }
                 }
             }
