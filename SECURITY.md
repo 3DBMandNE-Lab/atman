@@ -79,12 +79,26 @@ the same trust you would a shell script:
 
 ## Dependencies & supply chain
 
-- **Licenses:** all 179 transitive dependencies are permissively licensed
+- **Licenses:** all transitive dependencies are permissively licensed
   (MIT / Apache-2.0 / BSD / ISC / Zlib / Unicode-3.0 and equivalents), compatible
-  with atman's `MIT OR Apache-2.0`. No copyleft-only dependencies. A CycloneDX
-  SBOM is generated per release at `docs/sbom-1.1.0.cdx.json`.
+  with atman's `MIT OR Apache-2.0`. No copyleft-only dependencies.
+  - The lockfile holds **187** packages at 1.2.0, against 179 when the SBOM was
+    generated. Six arrived with `rayon` in `align bootstrap --threads`
+    (`rayon`, `rayon-core`, `crossbeam-deque`, `crossbeam-epoch`,
+    `crossbeam-utils`, `either`); each is `MIT OR Apache-2.0`, verified against
+    its vendored manifest, so the licence claim holds for the current set.
+  - **`docs/sbom-1.1.0.cdx.json` is stale**: it describes the 1.1.0 dependency
+    set and does not list those six. Regenerating it needs `cargo-cyclonedx`,
+    which is not installed here. Regenerate before publishing rather than
+    shipping an SBOM that under-reports the tree.
 - **Advisories (`cargo audit`):** `cargo audit` runs in CI (the `audit` job) and
   scans `Cargo.lock` against the RustSec database on every build.
+  - **Fixed in 1.2.0:** `RUSTSEC-2026-0190` (unsoundness in
+    `anyhow::Error::downcast_mut()`) — resolved by updating `anyhow` from
+    1.0.102 to 1.0.104, which is past the advisory's `>= 1.0.103` fix. atman
+    never calls `downcast_mut` (it calls `downcast_ref` once, in
+    `axes/contrast.rs`), so the advisory was not reachable — but a patch
+    existed, and taking it is better than carrying a reachability argument.
   - **Fixed in 1.1.0:** `RUSTSEC-2026-0104` (reachable panic in
     `rustls-webpki` CRL parsing, on the `enrich gprofiler` TLS path) — resolved
     by updating `rustls-webpki` to 0.103.13.
@@ -96,6 +110,11 @@ the same trust you would a shell script:
       deterministic `atman_core::rng`); `rand` is pulled in only by `statrs`'s
       distribution machinery, which atman uses for scalar CDFs/quantiles only.
     - `RUSTSEC-2024-0436` — `paste` unmaintained (transitive via `nalgebra`).
+    - Both are **currently inert**: `rand 0.8.5` and `paste 1.0.15` are still in
+      the lockfile, but neither advisory fires as of 1.2.0 and `cargo audit`
+      reports zero warnings even under `--deny warnings`. The entries are kept
+      rather than deleted, because a suppression that stops matching is not
+      evidence the risk is gone. Re-check at each release.
   The ignores are scoped to those specific IDs, so any **new** advisory still
   fails CI. They stem from the unused `statrs → nalgebra/rand` weight documented
   under "Dependency notes" in `docs/analytical-roadmap.md`; dropping/replacing
