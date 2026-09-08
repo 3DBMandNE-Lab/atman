@@ -643,6 +643,30 @@ cohorts on a shared 4,375-gene universe: the median cross-cohort cosine
 was −0.004 for ICA and +0.813 for NMF, so `--tau 0.30` admitted 7.7% of
 ICA pairs and 99.9% of NMF pairs.
 
+What a saturated gate costs, measured on the same archetype with one
+flag changed:
+
+| Metric | `bootstrap_prob_universal` |
+|---|---|
+| `cosine` (default) | 0.885 |
+| `cosine-centered` | 0.205 |
+
+Same cohort, same k, same archetype, two independent builds. The centred
+value reproduced exactly across both, so the difference is the metric and
+nothing else.
+
+The 0.885 is the more useful half. It is a recurrence figure that reads
+as a strong universal program, it was produced by a gate admitting 99.9%
+of pairs, and a manuscript headline was written on it before the metric
+was available on this subcommand. A gate that admits almost everything
+does not fail. It returns a number, and the number is four times too
+large.
+
+Read `bootstrap_prob_universal` for recurrence. The percentile interval
+beside it is over matched replicates only, so a rarely matched archetype
+shows a full-width interval — 0.205 recurrence with `ci_lower` and
+`ci_upper` both 6 is the expected pairing, not a contradiction.
+
 `align programs` and `align bootstrap` report what fraction of
 cross-cohort pairs the supplied tau admits. They warn above 90%. Above
 that fraction the threshold is not thresholding, and reciprocal-best
