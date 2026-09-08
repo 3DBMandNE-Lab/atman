@@ -425,6 +425,30 @@ output must not assert a tolerance tighter than about 1e-6, and must
 allow more when it sums several values, because the rounding
 accumulates.
 
+### Which binary ran
+
+Every invocation prints one line to stderr before it does anything:
+
+```
+atman 1.2.0 (961d0b4f47f8655eed8331044380a4d7577e1640, release, aarch64-apple-darwin)
+```
+
+`--version` prints the same string. A `-dirty` suffix on the commit
+means the binary was built from a modified working tree.
+
+The line exists because a version number alone cannot tell two builds
+apart. A script that calls bare `atman` resolves through `PATH` and runs
+whichever build is first there, which may be months old. That build
+reproduces its own numbers exactly and stamps its own commit, so the
+provenance record is correct and the binary is wrong. Nothing about the
+output looks unusual.
+
+The run sidecar has always recorded `atman_version` and `atman_git_sha`,
+and that is what a reviewer checks afterwards. The banner is for the
+operator, at the moment the run happens. Pin the binary by absolute path
+in a pipeline, and compare the banner against the commit you meant to
+run.
+
 ### What determinism atman guarantees
 
 The guarantee is: the same binary, on the same input, with the same

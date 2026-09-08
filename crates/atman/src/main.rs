@@ -11,10 +11,30 @@ use clap::{Parser, Subcommand};
 
 use atman::commands;
 
+/// Version string carrying the build's identity, not just its number.
+///
+/// A bare `1.2.0` cannot distinguish two binaries built from different
+/// commits, and PATH resolution makes that a routine hazard rather than
+/// a corner case: a pipeline calling bare `atman` picks up whatever
+/// build is first on PATH, which may be months old. The CSF session hit
+/// exactly that — a full rebuild silently reproduced the previous
+/// numbers and stamped the previous commit, and only the run sidecar
+/// revealed it.
+const VERSION_LONG: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("ATMAN_GIT_SHA"),
+    ", ",
+    env!("ATMAN_PROFILE"),
+    ", ",
+    env!("ATMAN_TARGET"),
+    ")"
+);
+
 #[derive(Parser, Debug)]
 #[command(
     name = "atman",
-    version,
+    version = VERSION_LONG,
     about = "Deterministic proteomics analysis in Rust — Olink, SomaScan, DIA-NN, Spectronaut, MaxQuant"
 )]
 struct Cli {
@@ -99,6 +119,19 @@ enum Command {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Which binary is running, on every run, before anything else.
+    //
+    // The sidecar has recorded `atman_version` and `atman_git_sha` since
+    // 1.0.0, and that is what a reviewer checks afterwards. It is not
+    // what an operator sees while a pipeline runs. A script calling bare
+    // `atman` resolves through PATH, so a rebuild can silently execute a
+    // months-old build, reproduce its numbers exactly, and stamp its
+    // commit — correct provenance for the wrong binary, and invisible
+    // until someone opens a sidecar.
+    //
+    // One line on stderr makes the binary visible at the moment it
+    // matters. stderr, so it never contaminates a TSV or a pipe.
+    eprintln!("atman {VERSION_LONG}");
     match cli.command {
         Command::Harmonize(a) => commands::harmonize::run(a),
         Command::IngestMatrix(args) => commands::ingest_matrix::run(*args),
