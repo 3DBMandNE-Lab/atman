@@ -126,8 +126,8 @@ The container is a Debian build, so it is one of those targets. It uses
 the portable scalar kernel instead of Accelerate. Expect the
 decomposition commands to be roughly an order of magnitude slower, and
 expect the low-order digits to differ from a macOS run. Neither affects
-a result — see "Determinism and Your Operating System" below — but do
-not byte-compare container output against native output.
+a result. See "What determinism atman guarantees" in `docs/reference.md`.
+Do not byte-compare container output against native output.
 
 ## Commands
 

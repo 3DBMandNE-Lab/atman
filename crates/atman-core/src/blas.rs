@@ -338,6 +338,15 @@ pub fn syrk(n: usize, k: usize, op: Op, a: &[f64], lda: usize, c: &mut [f64], ld
             );
         }
     }
+    // Mirror the upper triangle into the lower so callers see a full
+    // dense symmetric matrix. The fallback below computes the full
+    // product directly, so it needs no mirror and is the last statement.
+    #[cfg(target_os = "macos")]
+    for i in 0..n {
+        for j in 0..i {
+            c[i * ldc + j] = c[j * ldc + i];
+        }
+    }
     #[cfg(not(target_os = "macos"))]
     {
         let (op_b, ldb) = if op == Op::N {
@@ -346,16 +355,6 @@ pub fn syrk(n: usize, k: usize, op: Op, a: &[f64], lda: usize, c: &mut [f64], ld
             (Op::N, lda)
         };
         gemm_fallback(n, n, k, op, a, lda, op_b, a, ldb, c, ldc);
-        return;
-    }
-
-    // Mirror the upper triangle into the lower so callers see a full
-    // dense symmetric matrix.
-    #[cfg(target_os = "macos")]
-    for i in 0..n {
-        for j in 0..i {
-            c[i * ldc + j] = c[j * ldc + i];
-        }
     }
 }
 
