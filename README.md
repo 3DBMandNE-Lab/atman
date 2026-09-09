@@ -1,114 +1,25 @@
 # Atman
 
 [![CI](https://github.com/3DBMandNE-Lab/atman/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/3DBMandNE-Lab/atman/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/3DBMandNE-Lab/atman)](https://github.com/3DBMandNE-Lab/atman/releases/latest)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
 
-Cross-platform proteomics CLI. One tool for Olink Explore, SomaScan,
-MaxQuant/LFQ, DIA-NN, and Spectronaut — same commands, same output
-schema, same reproducibility guarantees regardless of assay source.
-It ships differential abundance with paired, Welch, OLS, mixed, limma,
-DEqMS, msqrob and ensemble methods. It also ships decomposition (ICA,
-VCA+FCLS unmixing, variance partition), module testing, enrichment,
-bootstrap intervals, null calibration, and meta-analysis. Every invocation writes a
-SHA-256 provenance sidecar so the run is auditable end-to-end.
-
-Each statistical path is validated against R reference implementations
-on published fixtures:
-
-| Test path | R reference | Fixture | Agreement |
-|---|---|---|---|
-| `de --test limma --peptide-metadata` (DEqMS trend) | `DEqMS::spectraCounteBayes` | CPTAC Study 6 UPS1 spike-in | median Δ = **0.000 log₂** (three-decimal match) |
-| `de --test msqrob` | `msqrob2::msqrob(~condition)` | CPTAC Study 6 UPS1 | **100% sign agreement** on all 11 signal proteins. 9/9 UPS1 spike-ins recover expected direction ([details](docs/reference.md#msqrob2-parity-note)) |
-| `de --test limma` (parametric eBayes) | `limma::eBayes` | 100-feature × 20-sample regression | Δ < **1e-4** on `t`, `p_value`, `df_total`, `s2_post` |
-| `de --post-hoc sidak --test ols` | `lm()` + `pairwise.t.test` | Planted 3-level fixture | max Δ < **1e-6** on `estimate`, `posthoc_p`, `posthoc_adj_p` |
-| `decompose variance --omnibus-factor` (Type III F) | `car::Anova(type = 3)` | Planted variance fixture | max Δ p < **1e-6** |
-| `enrich gsea` (weighted KS, fgseaSimple formulation) | `fgsea::fgseaSimple` | Planted ranked-list fixture (top / bottom / scattered sets) | max ES Δ < **1e-12** ([details](docs/reference.md#fgsea-parity-note)) |
-| `score signatures --method singscore` (centered TotalScore) | `singscore::simpleScore` | Planted 4-sample × 30-gene fixture (up / down / scattered sets) | max score Δ < **1e-12** on all 12 (set × sample) rows |
-| Olink Explore NPX reproduction | Dube et al. 2023 published tables | Dube heat-stress cohort | filtered NPX **byte-exact**, log2-FC Δ = 1.05e-15 |
-
-Parity assertions run on every `cargo test --workspace --release`. CI
-fails if any drifts. See [docs/reference.md](docs/reference.md) for
-validation details, reference scripts, and the msqrob2 estimator note.
-
-## Supported Platforms
-
-All platforms land on the same canonical TSV schema. Use `ingest-matrix`
-for stock wide-format exports, or run a Python adapter from `adapters/`
-for vendor-specific long formats:
-
-| Platform | Ingest path | Notes |
-|---|---|---|
-| Olink Explore NGS | `python3 adapters/generic/olink_explore_to_atman.py` | Long-format NPX CSV adapter |
-| DIA-NN | `ingest-matrix --platform diann_report` | Protein-group matrix |
-| MaxQuant/LFQ | `ingest-matrix --platform maxquant_lfq` | proteinGroups.txt or LFQ matrix |
-| Spectronaut | `ingest-matrix --platform spectronaut_report` | Protein-group quantity table |
-| SomaScan | `ingest-matrix --platform somascan` | RFU or log2-RFU matrix |
-| Any wide matrix | `ingest-matrix` | Any log2 protein×sample table with metadata |
-
-## Quick Start: MS Matrix (DIA-NN, MaxQuant, SomaScan, ...)
-
-Three commands from a protein matrix to differential abundance results:
-
-```bash
-# 1. Ingest: wide matrix + sample metadata → canonical TSVs
-atman ingest-matrix \
-    --matrix protein_matrix.tsv \
-    --samples sample_metadata.tsv \
-    --orientation proteins-rows \
-    --platform diann_report \
-    --abundance-unit log2_diann_pg_quantity \
-    --assay-id-col Protein.Group --gene-col Genes \
-    --condition-col diagnosis \
-    --normalize median \
-    --output-dir out
-
-# 2. Validate: check schema, keys, sample support
-atman validate --input-dir out --groups "Case-Control" --min-pairs 5
-
-# 3. DE: covariate-adjusted OLS with limma eBayes shrinkage
-atman de \
-    --input-dir out --output-dir out \
-    --test limma --groups "Case-Control" \
-    --design "~ condition + age + sex" \
-    --contrast conditionCase \
-    --min-pairs 5
-```
-
-Outputs: `de_results.tsv`, `de_report.tsv`, `de_results.tsv.run.json`
-(SHA-256 provenance sidecar). See [docs/recipes.md](docs/recipes.md)
-for OLS formulas, mixed models, DEqMS, msqrob, TREAT, post-hoc
-corrections, ensemble consensus, bootstrap, null calibration, and more.
-
-## Quick Start: Olink Explore
-
-For the bundled Dube et al. 2023 fixture:
-
-```bash
-python3 adapters/generic/olink_explore_to_atman.py \
-    --output-dir out \
-    example_data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
-    example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
-
-atman validate --input-dir out --groups "PT1-PR1,PR2-PR1" --min-pairs 5
-atman qc --input-dir out --output-dir out
-
-atman de \
-    --input-dir out --output-dir out \
-    --test paired-t \
-    --groups "PT1-PR1,PR2-PR1,PT2-PT1,PT2-PR2" \
-    --min-pairs 5
-```
-
-See [docs/tutorial.md](docs/tutorial.md) for the full Dube walkthrough.
+Atman is a command-line toolkit for proteomics analysis. It takes a
+protein matrix from Olink Explore, SomaScan, MaxQuant, DIA-NN or
+Spectronaut and runs the same commands on all of them. Every command
+writes a sidecar that records the binary, the inputs and the outputs by
+SHA-256. Any result can be traced to its source and rerun.
 
 ## Install
 
-From source with stable Rust 1.94 or newer:
+Atman is a single binary built from source with Rust 1.94 or newer.
+Get Rust from [rustup.rs](https://rustup.rs) if you do not have it.
 
 ```bash
 git clone https://github.com/3DBMandNE-Lab/atman.git
 cd atman
 cargo install --path crates/atman
+atman --version
 ```
 
 Or build a container:
@@ -118,112 +29,207 @@ docker build --build-arg ATMAN_GIT_SHA=$(git rev-parse HEAD) -t atman:1.2.0 .
 docker run --rm atman:1.2.0 --help
 ```
 
-**macOS is the supported platform.** It is where Atman is built,
-validated and released. Other targets compile and pass the full test
-suite, and nobody has run them on real hardware.
+**macOS is the supported operating system.** Atman is built, validated
+and released there. Linux builds and passes the test suite in CI, and
+the container is a Linux build. On Linux the decompositions use a
+portable kernel instead of Accelerate. They run slower, and the
+low-order digits differ from a macOS run. Neither changes a result. See
+"What determinism atman guarantees" in [docs/reference.md](docs/reference.md).
 
-The container is a Debian build, so it is one of those targets. It uses
-the portable scalar kernel instead of Accelerate. Expect the
-decomposition commands to be roughly an order of magnitude slower, and
-expect the low-order digits to differ from a macOS run. Neither affects
-a result. See "What determinism atman guarantees" in `docs/reference.md`.
-Do not byte-compare container output against native output.
+## Quick start
+
+Atman needs two files: a protein matrix and a sample metadata table.
+The metadata needs a sample ID, a subject ID and a condition per sample.
+
+```text
+sample_id	subject_id	condition
+DIA_C1	DIA_C1	Control
+DIA_C2	DIA_C2	Control
+DIA_K1	DIA_K1	Case
+DIA_K2	DIA_K2	Case
+```
+
+Three commands take a DIA-NN protein-group matrix to differential
+abundance results:
+
+```bash
+# 1. Ingest: matrix + metadata -> canonical TSVs (measurements, samples, proteins)
+atman ingest-matrix \
+    --matrix protein_groups.tsv --samples sample_metadata.tsv \
+    --orientation proteins-rows --log2-transform \
+    --platform diann_report --abundance-unit log2_diann_pg_quantity \
+    --assay-id-col Protein.Group --gene-col Genes --uniprot-col Protein.Ids \
+    --subject-id-col subject_id --condition-col condition --panel diann \
+    --output-dir out
+
+# 2. Validate: schema, keys, and sample support for the comparison
+atman validate --input-dir out --groups Case-Control --min-pairs 2
+
+# 3. Differential abundance: Welch t-test, Case versus Control
+atman de --input-dir out --output-dir out --test welch-t --groups Case-Control --min-pairs 2
+```
+
+This writes `de_results.tsv`, `de_report.tsv` and the sidecar
+`de_results.tsv.run.json`, shown here abridged:
+
+```json
+{
+  "command": "de",
+  "atman_version": "1.2.0",
+  "atman_git_sha": "bee7653b22838129142de89c7cb08caca08372e9",
+  "inputs_sha256": {
+    "measurements.tsv": "sha256:6bb8e5b8…",
+    "proteins.tsv": "sha256:c7913e94…",
+    "samples.tsv": "sha256:c64f0458…"
+  },
+  "output_files": {
+    "out/de_report.tsv": "sha256:e8fc981f…",
+    "out/de_results.tsv": "sha256:5e2cac94…"
+  },
+  "reinvoke": "atman de --groups Case-Control --input-dir out --min-pairs 2 --output-dir out --test welch-t …",
+  "build_env": {
+    "rustc_version": "rustc 1.94.1 (e408947bf 2026-03-25) (Homebrew)",
+    "target_triple": "aarch64-apple-darwin",
+    "profile": "release"
+  }
+}
+```
+
+The bundled example runs the same steps with
+`bash adapters/examples/diann/run.sh`. MaxQuant, Spectronaut and SomaScan
+matrices use the same command with their own `--platform` tag and column
+names. See [adapters/examples](adapters/examples) and "Input Support" in
+the [reference](docs/reference.md#input-support).
+
+For covariate-adjusted DE, use `--test limma --design "~ condition + age + sex"`.
+Extra design terms are read from the metadata table. The
+[recipes](docs/recipes.md) cover every test: paired, Welch, OLS, mixed,
+limma, DEqMS, msqrob and ensemble.
+
+### Olink Explore
+
+Olink NPX exports are long-format. A Python adapter converts them, and
+it needs Python 3 and nothing else:
+
+```bash
+python3 adapters/generic/olink_explore_to_atman.py \
+    --output-dir out \
+    example_data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
+    example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
+
+atman qc --input-dir out --output-dir out
+atman validate --input-dir out --groups "PT1-PR1,PR2-PR1" --min-pairs 5
+atman de --input-dir out --output-dir out --test paired-t --groups "PT1-PR1,PR2-PR1" --min-pairs 5
+```
+
+The [tutorial](docs/tutorial.md) walks through this dataset end to end.
 
 ## Commands
 
-```text
-atman ingest-matrix      wide protein matrix + metadata → canonical TSVs
-atman validate           check canonical TSV schema, keys, and sample support
-atman qc                 apply QC masking rules
-atman report qc          summarize QC, missingness, and condition support
-atman matrix             canonical long TSV → per-panel wide NPX CSVs
-atman fold-change        compute per-panel log2 fold-change tables
-atman de                 paired, Welch, OLS, mixed, limma, msqrob, or ensemble DE
-                         (--include-controls, --condition-col, --subset, --collapse-others,
-                          --max-missing-fraction, expression terms, continuous --contrast)
-atman detectability      model detected/not-detected proteins alongside abundance
-atman robust-paired      leave-one-subject-out sign-stability for paired DE
-atman absence-topology   cluster proteins that go missing together (co-absence)
-atman recover-plex       recover acquisition plexes / pairs from co-detection
-atman bootstrap protein  subject-level bootstrap intervals for protein effects
-atman bootstrap module   subject-level bootstrap intervals for module effects
-atman null               permutation/sign-flip null calibration for DE effects
-atman asymmetry          compare matched contrast pairs
-atman robustness         summarize rerun/LOO rank and sign stability
-atman module-trajectory  score user-defined modules from per-subject deltas
-atman module-de          aggregate proteins into modules and test at module level
-atman modules discover   data-driven module discovery (WGCNA soft-threshold + UPGMA)
-atman score modules      score modules per sample from canonical measurements
-atman score signatures   per-sample gene-set signature scoring (singscore)
-atman score weighted     signed-weight signature transfer with an optional two-group summary
-atman programs filter    flag ICA programs by annotation, loading, and contamination signature
-atman enrich ora         over-representation analysis from DE hits
-atman enrich gsea        pre-ranked gene-set enrichment (fgseaSimple-equivalent)
-atman enrich gprofiler   live g:Profiler REST wrapper with cached responses
-atman meta               combine DE results across cohorts
-atman concordance        Spearman / sign / Jaccard agreement of effect tables, stage deltas
-atman coupling           subject-level program coupling with sign-consistency reporting
-atman ratio              test subject-level log-ratios between two protein or module classes
-atman residuals          nuisance-covariate residuals (+ R² tables, canonical residual dir)
-atman network influence  feature-covariance hub scoring
-atman network differential  cross-cohort differential coexpression (edge-pairwise / edge-summary / module)
-atman decompose ica      multi-seed FastICA with seed-stability reporting
-atman decompose nmf      Brunet 2004 NMF with multi-seed stability + k-selection
-atman decompose null     permutation-null calibration of archetype stability
-atman decompose variance mixed-model variance partition per archetype
-atman decompose unmix    VCA + FCLS compartmental unmixing
-atman decompose counterfactual  per-archetype counterfactual ablation
-atman align programs     cross-cohort program alignment + sensitivity sweep
-atman align bootstrap    subject-level bootstrap of alignment
-atman axes build         representative archetypes → axes, within-cohort orthogonalization, global z
-atman axes contrast      score-level disease modulation: Cohen d, Welch, AUC, adjusted OLS, BH, bootstrap
-atman axes groups        per-group score summaries, Kruskal–Wallis, reference-vs-group effects
-atman axes anchor        Spearman anchoring of scores to clinical covariates (bootstrap CI, partial)
-atman axes displacement  case-minus-control displacement vectors and pairwise cosines
-atman axes loco          leave-one-cohort-out stability of group centroids
-atman axes icc           ICC(1) trait stability of scores across repeated samples
-atman axes tree          average-linkage tree of contrasts with bootstrap clade support (Newick)
-atman scale absolute     per-sample total-protein rescaling for Reiber-style exponents
-atman within-cohort-rank rank-transform measurements within each cohort / input directory
-atman harmonize fit      fit a cross-cohort harmonisation model on training cohorts
-atman harmonize apply    apply that model to one held-out cohort (refuses a training cohort)
-atman bench decompose    cross-tool benchmark harness for decomposition methods
-atman run                execute a plan YAML/JSON and emit a hash manifest (vars, --dry-run, sidecar hashes)
-```
+`atman <command> --help` documents every flag. The
+[reference](docs/reference.md#commands) describes every command and its
+outputs. The stages, in the order a study runs them:
 
-**Data flow**
+**Ingest and QC**
 
-```
-Input                  Atman stage                 Output
--------------------------------------------------------------------
-raw NPX / matrix  ──▶  ingest / ingest-matrix  ──▶ canonical TSV
-canonical TSV     ──▶  qc / validate / report  ──▶ QC'd TSV + report
-QC'd TSV          ──▶  de / decompose / bench  ──▶ results.tsv
-any stage         ──▶  (every command)         ──▶ <output>.run.json
-                                                   (SHA-256 manifest)
-```
+| Command | What it does |
+|---|---|
+| `ingest-matrix` | wide protein matrix + metadata to canonical TSVs |
+| `validate` | check schema, keys, and sample support for a comparison |
+| `qc` | apply QC masking rules |
+| `report qc` | summarize QC, missingness, and condition support |
 
-## Layout
+Also `matrix` (per-panel wide pivot) and `fold-change` (per-panel log2 fold-change tables).
 
-```text
-crates/atman-core/       core data model and algorithms
-crates/atman/            CLI, command orchestration, and file IO
-adapters/                canonical TSV adapter helpers and templates
-adapters/examples/       tiny synthetic matrix examples (DIA-NN, MaxQuant, SomaScan)
-CITATION.cff             citation metadata for release archives
-docs/tutorial.md         package tutorial using the bundled Dube fixture
-docs/recipes.md          DE cookbook: every test path with examples
-docs/reference.md        data model, sidecar schema, validation details, non-goals
-example_data/            Dube et al. 2023 Olink Explore fixture data
-```
+**Differential abundance**
 
-## Further Reading
+| Command | What it does |
+|---|---|
+| `de` | paired, Welch, OLS, mixed, limma, msqrob or ensemble DE |
+| `bootstrap protein` | subject-level bootstrap intervals for protein effects |
+| `null` | permutation and sign-flip null calibration of DE effects |
+| `meta` | combine DE results across cohorts |
+| `robust-paired` | leave-one-subject-out sign stability for paired DE |
 
-- **[Tutorial](docs/tutorial.md)** — end-to-end Dube fixture walkthrough
-- **[DE Recipes](docs/recipes.md)** — OLS, mixed, limma, DEqMS, msqrob, TREAT, post-hoc, ensemble, bootstrap, null, modules, ORA, meta-analysis, decomposition, and `atman run`
-- **[Reference](docs/reference.md)** — data model, sidecar schema, adapter responsibilities, validation details, non-goals
+Also `detectability`, `asymmetry`, `robustness`, `ratio`, `residuals` and `absence-topology`.
 
-## Reference Dataset
+**Modules, signatures and enrichment**
+
+| Command | What it does |
+|---|---|
+| `modules discover` | WGCNA-style module discovery |
+| `module-de` | aggregate proteins into modules and test at module level |
+| `score modules`, `score signatures`, `score weighted` | per-sample module, singscore and signed-weight scores |
+| `enrich ora`, `enrich gsea` | over-representation and pre-ranked enrichment |
+| `bootstrap module` | subject-level bootstrap intervals for module effects |
+
+Also `module-trajectory` and `enrich gprofiler`.
+
+**Decomposition and programs**
+
+| Command | What it does |
+|---|---|
+| `decompose ica`, `decompose nmf` | multi-seed FastICA and NMF with stability reporting |
+| `decompose null` | permutation-null calibration of archetype stability |
+| `decompose variance` | mixed-model variance partition per archetype |
+| `decompose unmix` | VCA + FCLS compartmental unmixing |
+| `align programs`, `align bootstrap`, `align project` | cross-cohort alignment, its bootstrap, and projection of a new cohort |
+| `programs filter` | flag ICA programs by annotation, loading and contamination |
+
+Also `decompose counterfactual`, `bootstrap program`, `coupling` and `bench decompose`.
+
+**Cross-cohort scores and harmonisation**
+
+| Command | What it does |
+|---|---|
+| `axes build` | representative archetypes to axes, orthogonalised within cohort |
+| `axes contrast`, `axes groups`, `axes anchor` | disease modulation, group summaries, clinical anchoring |
+| `axes displacement`, `axes loco`, `axes icc`, `axes tree` | displacement vectors, cohort leave-out, trait stability, contrast tree |
+| `harmonize fit`, `harmonize apply` | fit a cross-cohort model, then apply it to a held-out cohort |
+| `concordance` | Spearman, sign and Jaccard agreement of effect tables |
+| `network influence`, `network differential` | hub scoring and differential coexpression |
+
+Also `within-cohort-rank`, `scale absolute` and `recover-plex`.
+
+**Pipelines**
+
+`atman run` executes a plan file (YAML or JSON) and emits a hash manifest
+of every stage. Every command writes a `.run.json` sidecar next to its
+primary output.
+
+## Validation
+
+Each statistical path is checked against an R reference implementation
+on a published or planted fixture. These checks run in every CI build.
+
+| Atman | R reference | Agreement |
+|---|---|---|
+| `de --test limma --peptide-metadata` | `DEqMS::spectraCounteBayes` | median Δ 0.000 log₂ on CPTAC UPS1 |
+| `de --test msqrob` | `msqrob2::msqrob` | 100% sign agreement on CPTAC UPS1 |
+| `de --test limma` | `limma::eBayes` | Δ < 1e-4 on t, p, df and s2_post |
+| `de --post-hoc sidak` | `lm()` + `pairwise.t.test` | Δ < 1e-6 |
+| `decompose variance --omnibus-factor` | `car::Anova(type = 3)` | Δ p < 1e-6 |
+| `enrich gsea` | `fgsea::fgseaSimple` | ES Δ < 1e-12 |
+| `score signatures` | `singscore::simpleScore` | Δ < 1e-12 |
+| Olink NPX reproduction | Dube et al. 2023 tables | byte-exact filtered NPX |
+
+Fixtures, reference scripts and the estimator notes are under
+"Validation Details" in [docs/reference.md](docs/reference.md#validation-details).
+
+## Documentation
+
+- [Tutorial](docs/tutorial.md): the Dube Olink dataset from raw export to results
+- [Recipes](docs/recipes.md): every DE test with worked examples, plus modules, enrichment, decomposition and `atman run`
+- [Reference](docs/reference.md): commands, data model, sidecar schema, input support, validation, non-goals
+- [Adapters](adapters/README.md): bringing other formats to the canonical TSVs
+- [SECURITY.md](SECURITY.md): dependency policy, SBOM and the `unsafe` sites
+
+## Citing
+
+Cite the release you used. [CITATION.cff](CITATION.cff) carries the
+metadata, and each release page records the commit and a source digest.
+
+The bundled reference dataset:
 
 Gagnon D, Barry H, Barhdadi A, Oussaid E, Mongrain I, Lemieux Perreault LP,
 Dubé MP. *A dataset of proteomic changes during human heat stress and heat
@@ -232,5 +238,5 @@ acclimation.* Scientific Data (2023).
 
 ## License
 
-Atman is licensed under either [MIT](./LICENSE-MIT) or
-[Apache-2.0](./LICENSE-APACHE), at your option.
+MIT or Apache-2.0, at your option. See [LICENSE-MIT](./LICENSE-MIT) and
+[LICENSE-APACHE](./LICENSE-APACHE).
