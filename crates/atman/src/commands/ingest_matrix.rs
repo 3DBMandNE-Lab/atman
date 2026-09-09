@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use atman_core::Platform;
 use clap::{Args as ClapArgs, ValueEnum};
 use serde_json::json;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -747,7 +747,11 @@ fn apply_median_normalization(rows: &mut [MeasurementRow]) {
     if by_sample.is_empty() {
         return;
     }
-    let mut sample_medians: HashMap<String, f64> = HashMap::new();
+    // Keyed by sample id so the grand mean below is summed in a fixed order.
+    // A HashMap here is seeded afresh per process, and floating-point
+    // addition is not associative, so the grand mean (and every normalized
+    // cell) would differ in the last bits between two runs on the same input.
+    let mut sample_medians: BTreeMap<String, f64> = BTreeMap::new();
     for (sid, mut vs) in by_sample.into_iter() {
         let m = median_in_place(&mut vs);
         if m.is_finite() {

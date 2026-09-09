@@ -514,3 +514,90 @@ A1\tGENE1\t1\n",
         String::from_utf8_lossy(&output.stderr).contains("no matrix columns matched sample IDs")
     );
 }
+
+/// `--normalize median` must be bit-reproducible across invocations of the
+/// same binary on the same input. Every cell of `abundance` carries the grand
+/// mean of the per-sample medians, so the order in which those medians are
+/// summed must not depend on anything that varies between processes.
+///
+/// Sixty-four samples with log2-transformed linear intensities give medians
+/// whose low bits differ, so a summation order that varies between runs
+/// changes the grand mean in the last place and shows up as a different file.
+#[test]
+fn ingest_matrix_median_normalization_is_bit_reproducible_across_invocations() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path();
+    let n_samples = 64;
+    let n_assays = 40;
+
+    let mut samples = String::from("sample_id\tcondition\n");
+    for s in 0..n_samples {
+        samples.push_str(&format!(
+            "S{s:03}\t{}\n",
+            if s % 2 == 0 { "Control" } else { "Case" }
+        ));
+    }
+    std::fs::write(input.join("samples.tsv"), samples).unwrap();
+
+    // Deterministic pseudo-random linear intensities (LCG); no external RNG.
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let unit = ((state >> 11) as f64) / ((1u64 << 53) as f64);
+        1000.0 + unit * 2.0e6
+    };
+    let mut matrix = String::from("assay");
+    for s in 0..n_samples {
+        matrix.push_str(&format!("\tS{s:03}"));
+    }
+    matrix.push('\n');
+    for a in 0..n_assays {
+        matrix.push_str(&format!("P{a:05}"));
+        for _ in 0..n_samples {
+            matrix.push_str(&format!("\t{:.6}", next()));
+        }
+        matrix.push('\n');
+    }
+    std::fs::write(input.join("matrix.tsv"), matrix).unwrap();
+
+    let mut outputs: Vec<Vec<u8>> = Vec::new();
+    for run in 0..6 {
+        let out = input.join(format!("run{run}"));
+        let output = run_atman(&[
+            "ingest-matrix",
+            "--matrix",
+            input.join("matrix.tsv").to_str().unwrap(),
+            "--samples",
+            input.join("samples.tsv").to_str().unwrap(),
+            "--output-dir",
+            out.to_str().unwrap(),
+            "--platform",
+            "diann_report",
+            "--abundance-unit",
+            "linear_pg_quantity",
+            "--condition-col",
+            "condition",
+            "--assay-id-col",
+            "assay",
+            "--log2-transform",
+            "--normalize",
+            "median",
+        ]);
+        assert!(
+            output.status.success(),
+            "run {run} stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        outputs.push(std::fs::read(out.join("measurements.tsv")).unwrap());
+    }
+
+    for (run, bytes) in outputs.iter().enumerate().skip(1) {
+        assert!(
+            bytes == &outputs[0],
+            "measurements.tsv from run {run} differs from run 0: \
+median normalization is not reproducible across invocations"
+        );
+    }
+}

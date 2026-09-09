@@ -8,6 +8,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`ingest-matrix --normalize median` was not reproducible across
+  invocations.** The grand mean of the per-sample medians was summed in the
+  iteration order of a hash map, which Rust seeds afresh for every process.
+  Floating-point addition is not associative, so the grand mean, and with it
+  every normalized `abundance` cell, could differ in the last bits (about
+  1e-14 on log2 intensities) between two runs of the same binary on the same
+  input. `abundance_raw` was unaffected, as were `--normalize none` and
+  `--normalize quantile`. The medians are now summed in sample-id order and
+  the output is byte-identical across runs; a test runs the command six times
+  on a 64-sample matrix and asserts that. Reported by the CSF cross-disease
+  manuscript analysis, where the last-bit differences were amplified by
+  `decompose ica`: on a 601-sample cohort only 23 of 71 programs matched
+  between two ingests of the same matrix, and the cross-cohort alignment
+  found five archetypes on one draw and seven on the other.
+
 - **`modules discover` kept the evidence for its refusal off disk.** When
   every feature lands in the grey catch-all the command refuses, which is
   right, but it also discarded the soft-power sweep that shows why the
