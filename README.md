@@ -114,7 +114,7 @@ cargo install --path crates/atman
 Or build a container:
 
 ```bash
-docker build -t atman:1.2.0 .
+docker build --build-arg ATMAN_GIT_SHA=$(git rev-parse HEAD) -t atman:1.2.0 .
 docker run --rm atman:1.2.0 --help
 ```
 

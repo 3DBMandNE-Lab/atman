@@ -6,7 +6,12 @@
 //! - `ATMAN_GIT_SHA` — `git rev-parse HEAD`, or `"unknown"` when built
 //!   outside a git checkout. A `-dirty` suffix is appended when the
 //!   working tree has uncommitted tracked changes at build time, so a
-//!   binary built from a dirty tree never claims a clean commit.
+//!   binary built from a dirty tree never claims a clean commit. When
+//!   git yields `"unknown"` and the builder sets `ATMAN_GIT_SHA` in the
+//!   environment (the Dockerfile does, from a build arg), that value is
+//!   recorded verbatim: the builder asserts it. A real checkout always
+//!   wins over the environment, so a stale shell variable cannot relabel
+//!   a build made from git.
 //! - `ATMAN_TARGET` — Cargo `TARGET` triple (e.g. `aarch64-apple-darwin`).
 //! - `ATMAN_RUSTC_VERSION` — `rustc --version` verbatim, or `"unknown"`.
 //! - `ATMAN_CARGO_LOCK_SHA256` — SHA-256 of the workspace `Cargo.lock`,
@@ -20,7 +25,17 @@ use std::{
 };
 
 fn main() {
-    let sha = git_sha_with_dirty();
+    let mut sha = git_sha_with_dirty();
+    println!("cargo:rerun-if-env-changed=ATMAN_GIT_SHA");
+    if sha == "unknown" {
+        if let Some(given) = std::env::var("ATMAN_GIT_SHA")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            sha = given;
+        }
+    }
     println!("cargo:rustc-env=ATMAN_GIT_SHA={sha}");
 
     let target = std::env::var("TARGET").unwrap_or_default();

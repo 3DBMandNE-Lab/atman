@@ -434,7 +434,11 @@ atman 1.2.0 (b663da7c12333a0db5098496e3d23e377fabdb77, release, aarch64-apple-da
 ```
 
 `--version` prints the same string. A `-dirty` suffix on the commit
-means the binary was built from a modified working tree.
+means the binary was built from a modified working tree. A commit of
+`unknown` means the binary was built outside a git checkout, for
+example in a container without the build argument the Dockerfile
+documents. Such a binary cannot say which source it came from, and
+neither can its sidecars.
 
 The line exists because a version number alone cannot tell two builds
 apart. A script that calls bare `atman` resolves through `PATH` and runs

@@ -38,8 +38,14 @@ checks above and by the Docker build below.
 4. Build the container image:
 
    ```bash
-   docker build -t atman:1.2.0 .
+   docker build --build-arg ATMAN_GIT_SHA=$(git rev-parse HEAD) -t atman:1.2.0 .
+   docker run --rm atman:1.2.0 --version
    ```
+
+   The build context excludes `.git`, so without the build arg the image
+   reports its commit as `unknown`, and so does every sidecar it writes.
+   The second line shows what the image will record. Check that it is
+   the commit you are tagging and does not say `unknown`.
 
 5. Run the bundled Dube reproduction path. Atman has no native NPX
    ingest; the Olink Explore adapter is a Python script in `adapters/`.

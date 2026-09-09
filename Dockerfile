@@ -32,6 +32,11 @@ RUN mkdir -p crates/atman-core/src crates/atman/src \
     && rm -rf crates/atman-core/src crates/atman/src
 
 COPY crates crates
+# `.git` is excluded from the build context, so the binary cannot read its
+# own commit. Pass it in: --build-arg ATMAN_GIT_SHA=$(git rev-parse HEAD).
+# Left unset, the binary and every sidecar it writes record "unknown".
+ARG ATMAN_GIT_SHA=unknown
+ENV ATMAN_GIT_SHA=${ATMAN_GIT_SHA}
 RUN rm -rf target/release/.fingerprint/atman* \
     && rm -f target/release/atman target/release/libatman* \
     && rm -f target/release/deps/atman* target/release/deps/libatman* \
