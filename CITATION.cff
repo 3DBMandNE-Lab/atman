@@ -6,6 +6,7 @@ date-released: 2026-09-09
 authors:
   - family-names: Joseph
     given-names: Kevin
+    affiliation: "Medical Center – University of Freiburg"
 repository-code: "https://github.com/3DBMandNE-Lab/atman"
 license: "MIT OR Apache-2.0"
 keywords:
