@@ -440,6 +440,43 @@ example in a container without the build argument the Dockerfile
 documents. Such a binary cannot say which source it came from, and
 neither can its sidecars.
 
+### Source identity of a release
+
+A sidecar names a commit. To check that a tree you hold builds the same
+numerics as that commit, compute this digest on a clean checkout of each
+and compare:
+
+```bash
+{ find crates -name '*.rs' -type f; ls Cargo.toml Cargo.lock rust-toolchain.toml; \
+  find crates -name 'Cargo.toml'; } | sort -u | xargs shasum -a 256 | shasum -a 256
+```
+
+It covers the sources, the manifests, the lockfile and the toolchain.
+Each of those changes the numbers, so a digest that omits any of them is
+narrower than the claim it is cited for. A sources-only digest is listed
+below only so that a reader who computed one can tell which they have.
+Do not cite it as evidence of identical numerics. The digest is
+path-sensitive and excludes `target/`, so the tree must keep the same
+layout for the comparison to mean anything.
+
+Recorded for `v1.2.0`, commit `f04940d`:
+
+| Scope | Digest |
+|---|---|
+| sources + manifests + lockfile + toolchain | `00f8a54fe0f83c78ebf23555b60fa82486f70da72397ae90fa45d4bd65193a0d` |
+| sources only, do not cite | `a08305d7238a23b299c705834bd606333c44a811a103eb46a91e7d360a32a38e` |
+
+Two earlier 1.2.0 commits are cited by analyses. At `e186310`, before
+the repository URL in `Cargo.toml` moved, the wide digest was
+`f92ee97da4d0475d5793724134db37cfee26034c188cfd17d49f4c50543d8663`. At
+`b663da7` it was
+`adcbad75e7850197967cdd4d20bf41a87b3f8d891c8a3a56580bd7832cd54269`.
+Between `b663da7` and the tag, the code changes are the `Cargo.lock`
+bump for RUSTSEC-2026-0190, the `--version` string, the stderr banner
+and the repository URL. No numerical path changed. An analysis that
+cites `b663da7` with its digest is internally consistent, but it cites
+a commit that is not the release. State both commits and what differs.
+
 The line exists because a version number alone cannot tell two builds
 apart. A script that calls bare `atman` resolves through `PATH` and runs
 whichever build is first there, which may be months old. That build

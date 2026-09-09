@@ -214,8 +214,6 @@ CITATION.cff             citation metadata for release archives
 docs/tutorial.md         package tutorial using the bundled Dube fixture
 docs/recipes.md          DE cookbook: every test path with examples
 docs/reference.md        data model, sidecar schema, validation details, non-goals
-docs/analytical-roadmap.md  implemented analytical capability roadmap
-docs/release-checklist.md   standalone release checklist
 example_data/            Dube et al. 2023 Olink Explore fixture data
 ```
 

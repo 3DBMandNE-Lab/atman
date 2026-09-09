@@ -122,7 +122,9 @@ the same trust you would a shell script:
       rather than deleted, because a suppression that stops matching is not
       evidence the risk is gone. Re-check at each release.
   The ignores are scoped to those specific IDs, so any **new** advisory still
-  fails CI. They stem from the unused `statrs → nalgebra/rand` weight documented
-  under "Dependency notes" in `docs/analytical-roadmap.md`; dropping/replacing
+  fails CI. They stem from the unused `statrs → nalgebra/rand` weight. `statrs`
+  is used only for closed-form CDFs, quantiles and special functions, never
+  for matrix algebra or sampling, so the `nalgebra` and `rand` it pulls in
+  serve no code path here (symbol audit, 2026-05-29). Dropping or replacing
   `statrs` would let us remove both ignores.
 - **Per release:** regenerate the CycloneDX SBOM (`docs/sbom-<version>.cdx.json`).

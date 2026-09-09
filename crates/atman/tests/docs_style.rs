@@ -1,6 +1,6 @@
 //! A ratchet on documentation readability.
 //!
-//! `docs/style.md` states the rules. This measures the two of them a
+//! The rules are short sentences and no semicolons in prose. This measures the two of them a
 //! counter can check without judgement: how many sentences run past 25
 //! words, and how many semicolons appear. Both correlate with technical
 //! prose a reader has to re-read, and both drift upward silently as
@@ -24,7 +24,6 @@ const BUDGETS: &[(&str, usize, usize)] = &[
     ("docs/reference.md", 7, 0),
     ("docs/recipes.md", 17, 14),
     ("docs/tutorial.md", 2, 8),
-    ("docs/style.md", 0, 0),
 ];
 
 const LONG_SENTENCE_WORDS: usize = 25;
@@ -195,7 +194,7 @@ fn documentation_readability_does_not_regress() {
 
     if !failures.is_empty() {
         panic!(
-            "documentation readability regressed against docs/style.md:\n{}\n\nmeasured:\n{}",
+            "documentation readability regressed:\n{}\n\nmeasured:\n{}",
             failures.join("\n"),
             report.join("\n")
         );
