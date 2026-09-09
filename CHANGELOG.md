@@ -52,8 +52,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not open the sidecar. `n_perm` is NOT the denominator of `null_q`,
   which is BH across programs and bounded by the row count, and the
   reference says so. The column is appended last so a positional reader
-  of the original seven keeps working. Found by applying the meningioma
-  session's percentile-of-few-draws shape to atman's own estimators.
+  of the original seven keeps working. Found by applying a
+  percentile-of-few-draws check, first raised in the meningioma-programs
+  analysis, to atman's own estimators.
 
 - **`enrich gsea` reports `n_same_sign_perms`**, the number of
   permutation draws the NES denominator was averaged over, as a new
@@ -75,8 +76,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   keeps working. Extreme sign asymmetry turns out to be rare with real
   rankings (a perfectly top-loaded fixture still had 353 same-sign draws
   of 500), so the common cause is a low `--n-permutations`, which caps
-  the denominator directly. Found by applying the CSF session's null
-  calibration rule to atman's own estimators.
+  the denominator directly. Found by applying the null-calibration
+  rule from the CSF cross-disease analysis to atman's own estimators.
 
 - **`harmonize apply` now reads the model file strictly**, and the
   CLI layer has tests. Every field the fit/apply contract rests on was
@@ -113,7 +114,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   while `bootstrap_prob_universal`, `bootstrap_prob_multi`,
   `alignment_entropy` and the BCa bounds run over all `n_boot` with each
   miss entered as zero. Both are correct and neither name said which.
-  Found by the GBM manuscript session: an NMF archetype at
+  Found in the GBM cohort analysis: an NMF archetype at
   `prob_universal` 0.205 and an ICA archetype at 0.805 reported the
   IDENTICAL interval `[6, 6]` over six cohorts, a four-fold difference
   in reproducibility the interval could not show. The percentile CI is
@@ -138,7 +139,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the interval collapses to `[0, 0]` at 0.99.
   `bca_fallback_to_percentile` does not fire, because it tests the
   acceleration denominator. The BCa numerics are deliberately NOT
-  changed — the reporting session declined the fix so its completed
+  changed — the reporting analysis declined the fix so its completed
   figure surface would not move — and are pinned in a test instead, so
   any future change produces a visible diff.
 
@@ -149,13 +150,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exact — the score carries `−anchor × mean(direction)` — so if the
   anchor differs between arms in the held-out cohort, ANY direction
   separates them, including one learned from shuffled labels.
-  Found by the CSF session's permuted arm on real data: holding out one
+  Found by the CSF cross-disease analysis's permuted arm on real data: holding out one
   cohort, reference-protein gave a real effect of +0.611 at p = 1.5e-05
   and AUC 0.70, while its permuted null ran +0.542 to +0.698 with mean
   AUC 0.73 — the shuffled arm separated cases *better* than the real
   one, and standardised against its own null the result was z = −0.66.
   That z is weakly determined and should be read as a direction rather
-  than a magnitude. The reporting session has since measured its null
+  than a magnitude. The reporting analysis has since measured its null
   spread: the reference-protein arm on that fold has a null standard
   deviation of 0.048 across eight permuted seeds, an order narrower than
   the widest cell in the same sweep at 0.399. A denominator estimated
@@ -520,7 +521,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **Manifest schema change**: `plan_manifest.tsv` gains
   `n_empty_outputs` as its final column. Readers keying on column name
   are unaffected; anything parsing positionally should be checked.
-  Prompted by the karna manuscript session, whose own coverage audit
+  Prompted by the karna analysis, whose own coverage audit
   reported a layer at "100%" by counting files rather than rows, while
   279 of 886 units in it were empty — the check intended to catch this
   class reproducing the class one level up.
@@ -539,7 +540,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   named, and a replicate that cannot be computed is skipped, warned
   about, and excluded from the support denominator, which previously
   used the requested replicate count rather than the usable one.
-  The shape was contributed by the karna manuscript session, which found
+  The shape was contributed by the karna analysis, which found
   it in an unrelated pipeline: an empty unit is silently recoded as a
   negative observation by almost every aggregation, and no parameter is
   involved.

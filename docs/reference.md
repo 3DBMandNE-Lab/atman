@@ -430,7 +430,7 @@ accumulates.
 Every invocation prints one line to stderr before it does anything:
 
 ```
-atman 1.2.0 (961d0b4f47f8655eed8331044380a4d7577e1640, release, aarch64-apple-darwin)
+atman 1.2.0 (b663da7c12333a0db5098496e3d23e377fabdb77, release, aarch64-apple-darwin)
 ```
 
 `--version` prints the same string. A `-dirty` suffix on the commit

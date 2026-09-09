@@ -110,8 +110,8 @@ Two measurements in this project were invalid because the command under
 test did not do what the timing implied, and in both cases the number
 looked right.
 
-One compared a release binary against itself. Another session had edited
-the source in the same working tree, `cargo build` reported
+One compared a release binary against itself. The source had been edited
+in the same working tree between builds, `cargo build` reported
 `Finished in 0.15s` — no recompilation — and a golden-output comparison
 across that build returned BYTE-IDENTICAL on every file. It was one
 binary compared to itself.
