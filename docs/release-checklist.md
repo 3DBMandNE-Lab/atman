@@ -95,12 +95,25 @@ carry features and profile settings that change codegen, and
 `rust-toolchain.toml` pins the compiler. A digest narrower than the claim
 it is cited for is the failure this project spent a release removing.
 
-Recorded for commit `a92f380` (version 1.2.0):
+Recorded for commit `b663da7` (version 1.2.0 — was `a92f380` before the
+2026-09-09 message-trailer rewrite; the rewrite changed the commit name,
+not the tree, so both digests below reproduce identically at `b663da7`):
 
 | Scope | Digest | Use |
 |---|---|---|
 | sources only | `952cb1a7243060ec83c72bf78bb4460b5b651845994f36aa5fa2986c08c8f2b0` | **INSUFFICIENT — do not cite** |
 | sources + manifests + lockfile + toolchain | `adcbad75e7850197967cdd4d20bf41a87b3f8d891c8a3a56580bd7832cd54269` | **Use this one** |
+
+**This digest is for `b663da7` specifically, not for "the tree".** `main`
+has moved on since — the `anyhow` bump for RUSTSEC-2026-0190 alone changes
+`Cargo.lock`, so any later commit has a different digest (measured: HEAD
+gives `f92ee97d…`, not `adcbad75…`). If the release is cut from a commit
+later than `b663da7`, recompute the digest at that commit and record the
+new value; do NOT assume the recorded one still holds. The GBM
+manuscript's Code availability cites `b663da7` and its digest together —
+if the release commit differs, that citation and this record must move to
+the release commit in step, or a reader checking one against the other
+finds a mismatch that is real but harmless.
 
 The narrow digest is kept only so a reader who computes it can tell which
 of the two they have. It must not be cited as evidence of identical
