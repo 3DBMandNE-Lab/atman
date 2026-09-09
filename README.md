@@ -75,8 +75,8 @@ This writes `de_results.tsv`, `de_report.tsv` and the sidecar
 ```json
 {
   "command": "de",
-  "atman_version": "1.2.0",
-  "atman_git_sha": "bee7653b22838129142de89c7cb08caca08372e9",
+  "atman_version": "1.2.1",
+  "atman_git_sha": "1aad18e5a489562688d4fbf134935ffdb2270bf4",
   "inputs_sha256": {
     "measurements.tsv": "sha256:6bb8e5b8…",
     "proteins.tsv": "sha256:c7913e94…",
