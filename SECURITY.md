@@ -82,15 +82,21 @@ the same trust you would a shell script:
 - **Licenses:** all transitive dependencies are permissively licensed
   (MIT / Apache-2.0 / BSD / ISC / Zlib / Unicode-3.0 and equivalents), compatible
   with atman's `MIT OR Apache-2.0`. No copyleft-only dependencies.
-  - The lockfile holds **187** packages at 1.2.0, against 179 when the SBOM was
-    generated. Six arrived with `rayon` in `align bootstrap --threads`
-    (`rayon`, `rayon-core`, `crossbeam-deque`, `crossbeam-epoch`,
-    `crossbeam-utils`, `either`); each is `MIT OR Apache-2.0`, verified against
-    its vendored manifest, so the licence claim holds for the current set.
-  - **`docs/sbom-1.1.0.cdx.json` is stale**: it describes the 1.1.0 dependency
-    set and does not list those six. Regenerating it needs `cargo-cyclonedx`,
-    which is not installed here. Regenerate before publishing rather than
-    shipping an SBOM that under-reports the tree.
+  - **`docs/sbom-1.2.0.cdx.json`** (CycloneDX 1.5, `cargo-cyclonedx` 0.5.9)
+  describes the released `aarch64-apple-darwin` binary: its normal and build
+  dependencies, **129** crates. The lockfile holds **187** entries. The
+  **57** it lists and the SBOM does not fall into three classes, each
+  checked with `cargo tree`: **21** other-platform crates (`windows-*`,
+  `wasi*`, `linux-raw-sys` and their pins), **14** dev-only crates
+  (`proptest` and its tree), and **22** optional dependencies of
+  transitive crates that no feature in this workspace turns on
+  (`wasm-bindgen`, `wit-bindgen` and their trees). Cargo locks optional
+  dependencies whether or not they are activated. None of the 57 is
+  compiled into the released binary. The two workspace crates carry the
+  public git source as their identity, not the build machine's path.
+- `docs/sbom-1.1.0.cdx.json` is the previous release's record. It listed
+  every lockfile entry, including the three classes above, so the two
+  files are not comparable by count.
 - **Advisories (`cargo audit`):** `cargo audit` runs in CI (the `audit` job) and
   scans `Cargo.lock` against the RustSec database on every build.
   - **Fixed in 1.2.0:** `RUSTSEC-2026-0190` (unsoundness in
