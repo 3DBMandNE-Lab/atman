@@ -410,7 +410,9 @@ atman modules discover \
 Outputs: `modules_discovered.tsv` (gene → module assignment),
 `module_discovery_report.tsv` (size, hub feature, eigengene PC1
 variance per module), and `soft_power_diagnostics.tsv` for the
-auto-β sweep.
+auto-β sweep. When every feature lands in the grey catch-all, the command
+refuses and writes only the sweep and its sidecar, so the refusal stays
+checkable.
 
 ## Module scoring → module-level DE
 

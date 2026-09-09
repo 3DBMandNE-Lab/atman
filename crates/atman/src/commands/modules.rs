@@ -257,7 +257,98 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
             );
         }
     }
+    // Everything the sidecar records is known before the degenerate-result
+    // decision, so it is built once here and used by both outcomes.
+    let inputs_sha256 = hash_canonical_inputs(
+        &args.input_dir,
+        &[
+            "measurements.tsv",
+            "measurements.tsv",
+            "samples.tsv",
+            "proteins.tsv",
+        ],
+    )?;
+    let sidecar_args = json!({
+        "input-dir": args.input_dir.display().to_string(),
+        "similarity": args.similarity,
+        "method": args.method,
+        "soft-power": args.soft_power,
+        "r2-target": args.r2_target,
+        "max-beta": args.max_beta,
+        "n-bins": args.n_bins,
+        "threshold": args.threshold,
+        "min-module-size": args.min_module_size,
+        "cut-height": args.cut_height,
+        "chosen-beta": result.soft_power_chosen,
+        // `chosen-beta` alone cannot distinguish a β that met the
+        // scale-free criterion from one the fallback supplied.
+        "scale-free-fit-achieved": result
+            .soft_power_selection
+            .as_ref()
+            .map(|s| s.criterion_met),
+        "scale-free-best-r-squared": result
+            .soft_power_selection
+            .as_ref()
+            .map(|s| s.best_r_squared),
+        "scale-free-best-r-squared-beta": result
+            .soft_power_selection
+            .as_ref()
+            .map(|s| s.best_r_squared_beta),
+        "soft-power-fallback-rule": result
+            .soft_power_selection
+            .as_ref()
+            .and_then(|s| s.fallback_rule),
+        "n-features-retained": kept_features.len(),
+        "similarity_audit": {
+            "n_pairs_total": result.similarity_audit.n_pairs_total,
+            "n_pairs_undefined_metric": result.similarity_audit.n_pairs_undefined_metric,
+        },
+    });
+
+    // The beta sweep is evidence, not a result. Nothing downstream reads it
+    // as input, so writing it before the decision does not create the
+    // consumable file the refusal below exists to keep off disk. A refusal
+    // that discarded it would leave a reader with a message and no data,
+    // when the sweep is exactly what makes the refusal checkable.
+    let diag_path = if result.soft_power_sweep.is_empty() {
+        None
+    } else {
+        std::fs::create_dir_all(&args.output_dir)
+            .with_context(|| format!("creating {:?}", args.output_dir))?;
+        let p = args.output_dir.join("soft_power_diagnostics.tsv");
+        write_soft_power_diagnostics(&p, &result.soft_power_sweep)?;
+        Some(p)
+    };
+
     if non_grey == 0 {
+        let evidence = match &diag_path {
+            Some(p) => {
+                let sidecar = sidecar_path_for(p);
+                let extras = json!({
+                    "outcome": "refused",
+                    "refusal_reason": "all features in the grey catch-all",
+                })
+                .as_object()
+                .cloned();
+                write_run_sidecar(
+                    &sidecar,
+                    "modules discover",
+                    sidecar_args.clone(),
+                    &inputs_sha256,
+                    std::slice::from_ref(p),
+                    started_at,
+                    SystemTime::now(),
+                    extras,
+                )?;
+                format!(
+                    " The soft-power sweep behind this refusal was written to {} with a \
+                     sidecar ({}); it is the evidence, and the only file written.",
+                    p.display(),
+                    sidecar.display()
+                )
+            }
+            None => String::new(),
+        };
         let cause = match &result.soft_power_selection {
             Some(sel) if !sel.criterion_met => format!(
                 " The scale-free criterion also failed (best R2 = {:.3} at beta = {}; used beta \
@@ -268,12 +359,13 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
         };
         bail!(
             "modules discover: all {} features landed in the grey catch-all, so no module was \
-             discovered.{} Nothing was written: a downstream command would treat this as a \
-             single K=1 \"module\" holding every feature and compute statistics on it that \
-             look well-formed and mean nothing. Try a lower --cut-height, a smaller \
+             discovered.{} No module file was written: a downstream command would treat this \
+             as a single K=1 \"module\" holding every feature and compute statistics on it \
+             that look well-formed and mean nothing.{} Try a lower --cut-height, a smaller \
              --min-module-size, or an explicit --soft-power.",
             kept_features.len(),
             cause,
+            evidence,
         );
     }
 
@@ -285,10 +377,8 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
     let report_path = args.output_dir.join("module_discovery_report.tsv");
     write_report(&report_path, &result.report)?;
     let mut outputs = vec![modules_path.clone(), report_path.clone()];
-    if !result.soft_power_sweep.is_empty() {
-        let diag_path = args.output_dir.join("soft_power_diagnostics.tsv");
-        write_soft_power_diagnostics(&diag_path, &result.soft_power_sweep)?;
-        outputs.push(diag_path);
+    if let Some(p) = diag_path {
+        outputs.push(p);
     }
 
     eprintln!(
@@ -306,55 +396,11 @@ fn run_discover(args: DiscoverArgs) -> Result<()> {
     }
 
     let finished_at = SystemTime::now();
-    let inputs_sha256 = hash_canonical_inputs(
-        &args.input_dir,
-        &[
-            "measurements.tsv",
-            "measurements.tsv",
-            "samples.tsv",
-            "proteins.tsv",
-        ],
-    )?;
     let sidecar = sidecar_path_for(&modules_path);
     write_run_sidecar(
         &sidecar,
         "modules discover",
-        json!({
-            "input-dir": args.input_dir.display().to_string(),
-            "similarity": args.similarity,
-            "method": args.method,
-            "soft-power": args.soft_power,
-            "r2-target": args.r2_target,
-            "max-beta": args.max_beta,
-            "n-bins": args.n_bins,
-            "threshold": args.threshold,
-            "min-module-size": args.min_module_size,
-            "cut-height": args.cut_height,
-            "chosen-beta": result.soft_power_chosen,
-            // `chosen-beta` alone cannot distinguish a β that met the
-            // scale-free criterion from one the fallback supplied.
-            "scale-free-fit-achieved": result
-                .soft_power_selection
-                .as_ref()
-                .map(|s| s.criterion_met),
-            "scale-free-best-r-squared": result
-                .soft_power_selection
-                .as_ref()
-                .map(|s| s.best_r_squared),
-            "scale-free-best-r-squared-beta": result
-                .soft_power_selection
-                .as_ref()
-                .map(|s| s.best_r_squared_beta),
-            "soft-power-fallback-rule": result
-                .soft_power_selection
-                .as_ref()
-                .and_then(|s| s.fallback_rule),
-            "n-features-retained": kept_features.len(),
-            "similarity_audit": {
-                "n_pairs_total": result.similarity_audit.n_pairs_total,
-                "n_pairs_undefined_metric": result.similarity_audit.n_pairs_undefined_metric,
-            },
-        }),
+        sidecar_args,
         &inputs_sha256,
         &outputs,
         started_at,

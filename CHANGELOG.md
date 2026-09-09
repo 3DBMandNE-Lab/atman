@@ -6,6 +6,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`modules discover` kept the evidence for its refusal off disk.** When
+  every feature lands in the grey catch-all the command refuses, which is
+  right, but it also discarded the soft-power sweep that shows why the
+  scale-free criterion could not be met. The sweep is now written to
+  `soft_power_diagnostics.tsv` with its own sidecar (`outcome: refused`)
+  before the decision, and the refusal names the file. Nothing downstream
+  reads the sweep as input, so the module file the refusal exists to keep
+  off disk is still not written. Reported by the GBM manuscript analysis,
+  whose supplementary sweep panel could otherwise only cite a run made
+  before the refusal existed.
+
 ## [1.2.0] — 2026-09-09
 
 ### Performance

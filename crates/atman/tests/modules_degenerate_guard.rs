@@ -102,6 +102,55 @@ fn modules_discover_refuses_to_emit_an_all_grey_module_set() {
         !output.join("modules_discovered.tsv").exists(),
         "no module file should be written when the result is degenerate"
     );
+    assert!(
+        !output.join("module_discovery_report.tsv").exists(),
+        "no report should be written when the result is degenerate"
+    );
+
+    // The refusal must leave its evidence behind: the beta sweep that
+    // shows the criterion could not be met, with a sidecar saying so.
+    let diag = output.join("soft_power_diagnostics.tsv");
+    assert!(
+        diag.exists(),
+        "the soft-power sweep must survive the refusal"
+    );
+    let body = std::fs::read_to_string(&diag).unwrap();
+    let n_rows = body.lines().count().saturating_sub(1);
+    assert_eq!(n_rows, 20, "one sweep row per beta in 1..=20; got:\n{body}");
+    assert!(
+        stderr.contains("soft_power_diagnostics.tsv"),
+        "the refusal must name the evidence file; got:\n{stderr}"
+    );
+    let sidecar = output.join("soft_power_diagnostics.tsv.run.json");
+    assert!(sidecar.exists(), "the sweep needs a sidecar to be citable");
+    let sc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sidecar).unwrap()).unwrap();
+    assert_eq!(sc["outcome"], "refused");
+    assert_eq!(sc["command"], "modules discover");
+    assert_eq!(sc["args"]["scale-free-fit-achieved"], false);
+    assert!(
+        sc["output_files"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .any(|k| k.ends_with("soft_power_diagnostics.tsv")),
+        "the sidecar must hash the sweep it describes; got {}",
+        sc["output_files"]
+    );
+    let written: Vec<String> = std::fs::read_dir(&output)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    let mut sorted = written.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        vec![
+            "soft_power_diagnostics.tsv".to_string(),
+            "soft_power_diagnostics.tsv.run.json".to_string()
+        ],
+        "the refusal writes the evidence and nothing else"
+    );
 }
 
 #[test]
