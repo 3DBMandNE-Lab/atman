@@ -95,21 +95,25 @@ carry features and profile settings that change codegen, and
 `rust-toolchain.toml` pins the compiler. A digest narrower than the claim
 it is cited for is the failure this project spent a release removing.
 
-Recorded for the commit tagged `v1.2.0`. The digest is the same for
-every commit from `2b0c88f` to the tag. The commits between them change
-only documentation and tests, and the digest does not cover those files.
+Recorded for the commit tagged `v1.2.0`. The wide digest changed once
+after `2b0c88f`, at `f77f644`, where the repository URL in `Cargo.toml`
+moved to the lab organisation. No `.rs` file, no dependency and no
+toolchain changed there, so the sources-only digest is the same at every
+commit from `2b0c88f` to the tag, and so are the numerics. At `e186310`,
+the commit before the URL change, the wide digest was `f92ee97d…`.
 
 | Scope | Digest | Use |
 |---|---|---|
 | sources only | `a08305d7238a23b299c705834bd606333c44a811a103eb46a91e7d360a32a38e` | **INSUFFICIENT — do not cite** |
-| sources + manifests + lockfile + toolchain | `f92ee97da4d0475d5793724134db37cfee26034c188cfd17d49f4c50543d8663` | **Use this one** |
+| sources + manifests + lockfile + toolchain | `00f8a54fe0f83c78ebf23555b60fa82486f70da72397ae90fa45d4bd65193a0d` | **Use this one** |
 
 **This digest is for the tagged tree, not for "the tree".** An earlier
 record in this file gave `adcbad75…` for `b663da7`. That commit pins
 `anyhow` 1.0.102, which RUSTSEC-2026-0190 flags, so the release moved to
 a later commit with the patched lockfile. Between `b663da7` and the tag,
-the code changes are the `Cargo.lock` bump, the `--version` string and
-the stderr banner. No numerical path changed. An analysis that cites
+the code changes are the `Cargo.lock` bump, the `--version` string, the
+stderr banner and the repository URL in `Cargo.toml`. No numerical path
+changed. An analysis that cites
 `b663da7` with `adcbad75…` is internally consistent, but it cites a
 commit that is not the release. Move the citation to the tag, or state
 both commits and what differs between them. Do not assume a recorded
