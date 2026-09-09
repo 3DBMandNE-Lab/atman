@@ -459,6 +459,20 @@ Do not cite it as evidence of identical numerics. The digest is
 path-sensitive and excludes `target/`, so the tree must keep the same
 layout for the comparison to mean anything.
 
+Recorded for `v1.2.1`:
+
+| Scope | Digest |
+|---|---|
+| sources + manifests + lockfile + toolchain | `96183b52748799ebfb58f7ebb132d4261a4bcb8714319ff5aa842d0263470e93` |
+| sources only, do not cite | `f4c7cd40c3b24d6d9e8da613845afb78145d03a4c0429a04d54dea95037e3f8c` |
+
+The fix this release exists for is commit `707c142`, which the reporting
+analysis ran before the tag existed. Its wide digest is
+`cdfb76fa57e67804496c04096f8f910ecaac8828d33ec275478166137c368e1c`. It
+differs from the release only in the version strings in `Cargo.toml` and
+`Cargo.lock`. No `.rs` file differs, and the sources-only digest is the
+same at both. Cite the tag.
+
 Recorded for `v1.2.0`, commit `f04940d`:
 
 | Scope | Digest |

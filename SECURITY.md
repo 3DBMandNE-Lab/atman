@@ -82,7 +82,7 @@ the same trust you would a shell script:
 - **Licenses:** all transitive dependencies are permissively licensed
   (MIT / Apache-2.0 / BSD / ISC / Zlib / Unicode-3.0 and equivalents), compatible
   with atman's `MIT OR Apache-2.0`. No copyleft-only dependencies.
-  - **`docs/sbom-1.2.0.cdx.json`** (CycloneDX 1.5, `cargo-cyclonedx` 0.5.9)
+  - **`docs/sbom-1.2.1.cdx.json`** (CycloneDX 1.5, `cargo-cyclonedx` 0.5.9)
   describes the released `aarch64-apple-darwin` binary: its normal and build
   dependencies, **129** crates. The lockfile holds **187** entries. The
   **57** it lists and the SBOM does not fall into three classes, each
@@ -94,9 +94,11 @@ the same trust you would a shell script:
   dependencies whether or not they are activated. None of the 57 is
   compiled into the released binary. The two workspace crates carry the
   public git source as their identity, not the build machine's path.
-- `docs/sbom-1.1.0.cdx.json` is the previous release's record. It listed
-  every lockfile entry, including the three classes above, so the two
-  files are not comparable by count.
+- `docs/sbom-1.2.0.cdx.json` is the 1.2.0 record. Its dependency set is the
+  same as 1.2.1's: the lockfile changed only in the two workspace crate
+  versions, so the classification above was checked once and holds for both.
+  `docs/sbom-1.1.0.cdx.json` listed every lockfile entry, including the three
+  classes above, so it is not comparable to either by count.
 - **Advisories (`cargo audit`):** `cargo audit` runs in CI (the `audit` job) and
   scans `Cargo.lock` against the RustSec database on every build.
   - **Fixed in 1.2.0:** `RUSTSEC-2026-0190` (unsoundness in
@@ -117,7 +119,7 @@ the same trust you would a shell script:
       distribution machinery, which atman uses for scalar CDFs/quantiles only.
     - `RUSTSEC-2024-0436` — `paste` unmaintained (transitive via `nalgebra`).
     - Both are **currently inert**: `rand 0.8.5` and `paste 1.0.15` are still in
-      the lockfile, but neither advisory fires as of 1.2.0 and `cargo audit`
+      the lockfile, but neither advisory fires as of 1.2.1 and `cargo audit`
       reports zero warnings even under `--deny warnings`. The entries are kept
       rather than deleted, because a suppression that stops matching is not
       evidence the risk is gone. Re-check at each release.

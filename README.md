@@ -25,8 +25,8 @@ atman --version
 Or build a container:
 
 ```bash
-docker build --build-arg ATMAN_GIT_SHA=$(git rev-parse HEAD) -t atman:1.2.0 .
-docker run --rm atman:1.2.0 --help
+docker build --build-arg ATMAN_GIT_SHA=$(git rev-parse HEAD) -t atman:1.2.1 .
+docker run --rm atman:1.2.1 --help
 ```
 
 **macOS is the supported operating system.** Atman is built, validated

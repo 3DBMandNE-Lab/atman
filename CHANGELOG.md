@@ -4,7 +4,7 @@ All notable changes to Atman are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.1] — 2026-09-09
 
 ### Fixed
 
@@ -1651,6 +1651,7 @@ exposed by the Rust binary.
   test that diffs every output against the published Dube reference files.
 - No Python runtime is required for the Atman CLI.
 
+[1.2.1]: https://github.com/3DBMandNE-Lab/atman/releases/tag/v1.2.1
 [1.2.0]: https://github.com/3DBMandNE-Lab/atman/releases/tag/v1.2.0
 [1.1.0]: https://github.com/3DBMandNE-Lab/atman/releases/tag/v1.1.0
 [1.0.0]: https://github.com/3DBMandNE-Lab/atman/releases/tag/v1.0.0
