@@ -6,10 +6,10 @@
 Cross-platform proteomics CLI. One tool for Olink Explore, SomaScan,
 MaxQuant/LFQ, DIA-NN, and Spectronaut — same commands, same output
 schema, same reproducibility guarantees regardless of assay source.
-Ships differential abundance (paired, Welch, OLS, mixed, limma,
-DEqMS, msqrob, ensemble), decomposition (ICA, VCA+FCLS unmixing,
-variance partition), module testing, enrichment, bootstrap intervals,
-null calibration, and meta-analysis. Every invocation writes a
+It ships differential abundance with paired, Welch, OLS, mixed, limma,
+DEqMS, msqrob and ensemble methods. It also ships decomposition (ICA,
+VCA+FCLS unmixing, variance partition), module testing, enrichment,
+bootstrap intervals, null calibration, and meta-analysis. Every invocation writes a
 SHA-256 provenance sidecar so the run is auditable end-to-end.
 
 Each statistical path is validated against R reference implementations
