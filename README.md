@@ -240,3 +240,18 @@ acclimation.* Scientific Data (2023).
 
 MIT or Apache-2.0, at your option. See [LICENSE-MIT](./LICENSE-MIT) and
 [LICENSE-APACHE](./LICENSE-APACHE).
+
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion in Atman is dual licensed as above. No additional terms or
+conditions apply.
+
+### Data
+
+The code licence does not cover the bundled data. The files under
+`example_data/dube_heat_2023/` are the five items of Figshare project
+163291, deposited by the authors of the dataset under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Attribute them
+to Gagnon D et al., *Scientific Data* (2023),
+[10.1038/s41597-023-02809-5](https://doi.org/10.1038/s41597-023-02809-5).
+The `cptac_*` test fixtures derive from the NCI CPTAC program's public
+data releases and are used for validation only.

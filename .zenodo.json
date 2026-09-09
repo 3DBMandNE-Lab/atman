@@ -1,6 +1,6 @@
 {
-    "title": "Atman: a standalone Rust CLI for reproducible proteomics analysis",
-    "description": "Atman is a standalone Rust command-line tool for proteomics analysis. A single local binary exposes `ingest`, `ingest-matrix`, `validate`, `qc`, `report`, `matrix`, `fold-change`, `de`, `bootstrap`, `asymmetry`, `robustness`, `module-trajectory`, and `module-de` subcommands. The built-in ingest path supports Olink Explore NPX long CSV files, while downstream commands operate on Atman's canonical TSV schema so adapters and `ingest-matrix` can provide data from other proteomics sources such as LFQ/intensity matrices, Spectronaut exports, DIA-NN protein-group matrices, SomaScan-style log2 abundance matrices, or already-normalized protein tables. Version 1.0.0 reproduces the Dube et al. 2023 Olink Explore heat-acclimation dataset's published filtered NPX files cell-exactly and log2 fold-change tables to floating-point precision using the bundled fixture data.",
+    "title": "Atman: a Rust command-line toolkit for reproducible proteomics analysis",
+    "description": "Atman is a command-line toolkit for proteomics analysis, written in Rust. It ingests protein matrices from Olink Explore, SomaScan, MaxQuant, DIA-NN and Spectronaut into one canonical TSV schema and runs the same commands on all of them: QC, differential abundance (paired, Welch, OLS, mixed, limma, DEqMS, msqrob, ensemble), module discovery and testing, enrichment, decomposition (ICA, NMF, unmixing, variance partition), cross-cohort alignment, harmonisation, and subject-level bootstrap and null calibration. Every command writes a run sidecar that records the binary, the build environment, and SHA-256 digests of inputs and outputs. Statistical paths are validated against R reference implementations in CI. The code is dual licensed MIT OR Apache-2.0 at the user's option. Zenodo records a single identifier, so MIT is given here. The bundled Dube et al. 2023 Olink Explore fixture data are redistributed under CC BY 4.0 from Figshare project 163291.",
     "creators": [
         {
             "name": "Joseph, Kevin",
@@ -10,14 +10,14 @@
     "keywords": [
         "proteomics",
         "Olink",
-        "NPX",
+        "SomaScan",
+        "mass spectrometry",
         "differential abundance",
-        "heterogeneity",
+        "decomposition",
         "reproducibility",
+        "provenance",
         "Rust",
-        "bioinformatics",
-        "heat acclimation",
-        "Dube 2023"
+        "bioinformatics"
     ],
     "license": "MIT",
     "upload_type": "software",
@@ -25,6 +25,12 @@
     "related_identifiers": [
         {
             "identifier": "10.1038/s41597-023-02809-5",
+            "relation": "cites",
+            "resource_type": "publication-article",
+            "scheme": "doi"
+        },
+        {
+            "identifier": "10.6084/m9.figshare.22811915",
             "relation": "isDerivedFrom",
             "resource_type": "dataset",
             "scheme": "doi"
