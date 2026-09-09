@@ -6,7 +6,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [1.2.0] — 2026-09-07
+## [1.2.0] — 2026-09-09
 
 ### Performance
 
@@ -1623,5 +1623,6 @@ exposed by the Rust binary.
   test that diffs every output against the published Dube reference files.
 - No Python runtime is required for the Atman CLI.
 
+[1.2.0]: https://github.com/kevinj24fr/atman/releases/tag/v1.2.0
 [1.1.0]: https://github.com/kevinj24fr/atman/releases/tag/v1.1.0
 [1.0.0]: https://github.com/kevinj24fr/atman/releases/tag/v1.0.0

@@ -12,7 +12,7 @@ cargo package -p atman-core
 ```
 
 `cargo package -p atman` requires `atman-core` to already exist in the registry
-because the CLI crate depends on `atman-core = 1.0.0`. For crates.io releases,
+because the CLI crate depends on `atman-core = 1.2.0`. For crates.io releases,
 publish and verify in this order:
 
 ```bash
@@ -38,7 +38,7 @@ checks above and by the Docker build below.
 4. Build the container image:
 
    ```bash
-   docker build -t atman:1.0.0 .
+   docker build -t atman:1.2.0 .
    ```
 
 5. Run the bundled Dube reproduction path. Atman has no native NPX
@@ -52,14 +52,14 @@ checks above and by the Docker build below.
        example_data/dube_heat_2023/20212016_Dube_NPX_2021-11-30.csv \
        example_data/dube_heat_2023/20212017_Dube_NPX_2021-12-13_OID30253_corrected.csv
 
-   docker run --rm -v "$(pwd)/out:/out" atman:1.0.0 \
+   docker run --rm -v "$(pwd)/out:/out" atman:1.2.0 \
      qc --input-dir /out --output-dir /out
    ```
 
 6. Tag the release commit:
 
    ```bash
-   git tag -a v1.0.0 -m "Atman v1.0.0"
+   git tag -a v1.2.0 -m "Atman v1.2.0"
    ```
 
 ## Publishing a polished tree, and the provenance join
@@ -95,25 +95,25 @@ carry features and profile settings that change codegen, and
 `rust-toolchain.toml` pins the compiler. A digest narrower than the claim
 it is cited for is the failure this project spent a release removing.
 
-Recorded for commit `b663da7` (version 1.2.0 — was `a92f380` before the
-2026-09-09 message-trailer rewrite; the rewrite changed the commit name,
-not the tree, so both digests below reproduce identically at `b663da7`):
+Recorded for the commit tagged `v1.2.0`. The digest is the same for
+every commit from `2b0c88f` to the tag. The commits between them change
+only documentation and tests, and the digest does not cover those files.
 
 | Scope | Digest | Use |
 |---|---|---|
-| sources only | `952cb1a7243060ec83c72bf78bb4460b5b651845994f36aa5fa2986c08c8f2b0` | **INSUFFICIENT — do not cite** |
-| sources + manifests + lockfile + toolchain | `adcbad75e7850197967cdd4d20bf41a87b3f8d891c8a3a56580bd7832cd54269` | **Use this one** |
+| sources only | `a08305d7238a23b299c705834bd606333c44a811a103eb46a91e7d360a32a38e` | **INSUFFICIENT — do not cite** |
+| sources + manifests + lockfile + toolchain | `f92ee97da4d0475d5793724134db37cfee26034c188cfd17d49f4c50543d8663` | **Use this one** |
 
-**This digest is for `b663da7` specifically, not for "the tree".** `main`
-has moved on since — the `anyhow` bump for RUSTSEC-2026-0190 alone changes
-`Cargo.lock`, so any later commit has a different digest (measured: HEAD
-gives `f92ee97d…`, not `adcbad75…`). If the release is cut from a commit
-later than `b663da7`, recompute the digest at that commit and record the
-new value; do NOT assume the recorded one still holds. The GBM
-manuscript's Code availability cites `b663da7` and its digest together —
-if the release commit differs, that citation and this record must move to
-the release commit in step, or a reader checking one against the other
-finds a mismatch that is real but harmless.
+**This digest is for the tagged tree, not for "the tree".** An earlier
+record in this file gave `adcbad75…` for `b663da7`. That commit pins
+`anyhow` 1.0.102, which RUSTSEC-2026-0190 flags, so the release moved to
+a later commit with the patched lockfile. Between `b663da7` and the tag,
+the code changes are the `Cargo.lock` bump, the `--version` string and
+the stderr banner. No numerical path changed. An analysis that cites
+`b663da7` with `adcbad75…` is internally consistent, but it cites a
+commit that is not the release. Move the citation to the tag, or state
+both commits and what differs between them. Do not assume a recorded
+digest holds at a different commit. Recompute it.
 
 The narrow digest is kept only so a reader who computes it can tell which
 of the two they have. It must not be cited as evidence of identical
