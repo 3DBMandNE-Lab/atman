@@ -11,7 +11,7 @@ wide-format exports.
 ## 0. Install and verify
 
 ```bash
-git clone https://github.com/kevinj24fr/atman.git
+git clone https://github.com/3DBMandNE-Lab/atman.git
 cd atman
 cargo install --path crates/atman
 atman --help

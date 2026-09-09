@@ -1,6 +1,6 @@
 # Atman
 
-[![CI](https://github.com/kevinj24fr/atman/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kevinj24fr/atman/actions/workflows/ci.yml)
+[![CI](https://github.com/3DBMandNE-Lab/atman/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/3DBMandNE-Lab/atman/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
 
 Cross-platform proteomics CLI. One tool for Olink Explore, SomaScan,
@@ -106,7 +106,7 @@ See [docs/tutorial.md](docs/tutorial.md) for the full Dube walkthrough.
 From source with stable Rust 1.94 or newer:
 
 ```bash
-git clone https://github.com/kevinj24fr/atman.git
+git clone https://github.com/3DBMandNE-Lab/atman.git
 cd atman
 cargo install --path crates/atman
 ```

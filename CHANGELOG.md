@@ -1623,6 +1623,6 @@ exposed by the Rust binary.
   test that diffs every output against the published Dube reference files.
 - No Python runtime is required for the Atman CLI.
 
-[1.2.0]: https://github.com/kevinj24fr/atman/releases/tag/v1.2.0
-[1.1.0]: https://github.com/kevinj24fr/atman/releases/tag/v1.1.0
-[1.0.0]: https://github.com/kevinj24fr/atman/releases/tag/v1.0.0
+[1.2.0]: https://github.com/3DBMandNE-Lab/atman/releases/tag/v1.2.0
+[1.1.0]: https://github.com/3DBMandNE-Lab/atman/releases/tag/v1.1.0
+[1.0.0]: https://github.com/3DBMandNE-Lab/atman/releases/tag/v1.0.0
